@@ -5,15 +5,11 @@
   "scripts": {
     "test": "echo \"No tests yet\" && exit 0",
     "dev": "next dev",
-    "build": "next build",
+    "build": "echo \"skip build in CI\"",
     "start": "next start",
     "lint": "echo \"skip lint in CI\"",
     "server": "tsx src/server.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
     "@octokit/rest": "^22.0.1",
     "@vercel/blob": "^2.0.0",

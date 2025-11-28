@@ -17,15 +17,16 @@ interface AssistantResult {
 }
 
 /**
- * Запускает ассистента с поддержкой tools (GitHub + Vercel).
- * На вход: массив сообщений { role, content } как из клиента.
+ * Ассистент с поддержкой tools (GitHub + Vercel).
+ * На вход: массив сообщений { role, content } (с system-сообщением уже включённым выше по стеку).
  */
 export async function runAssistant(
   rawMessages: AnyMessage[],
 ): Promise<AssistantResult> {
-  const maxToolLoops = 4;
+  const maxToolLoops = 10;
   let messages: AnyMessage[] = rawMessages.slice();
   const toolCallsLog: AssistantResult['toolCalls'] = [];
+  let lastCompletion: any = null;
 
   for (let i = 0; i < maxToolLoops; i += 1) {
     const completion = await openai.chat.completions.create({
@@ -35,20 +36,22 @@ export async function runAssistant(
       tool_choice: 'auto',
     });
 
+    lastCompletion = completion;
+
     const choice = completion.choices?.[0];
     if (!choice) {
-      return { completion: null, toolCalls: toolCallsLog };
+      break;
     }
 
     const message: AnyMessage = choice.message as any;
 
-    // Нет tool_calls — значит это финальный ответ пользователю
     const toolCalls = (message as any).tool_calls;
     if (!toolCalls || toolCalls.length === 0) {
+      // Модель дала финальный ответ без tool_calls — возвращаем его.
       return { completion, toolCalls: toolCallsLog };
     }
 
-    // Есть tool calls — выполняем их и добавляем ответы как messages role=tool
+    // Есть tool_calls — выполняем их и добавляем ответы как сообщения role=tool.
     const toolResultMessages: AnyMessage[] = [];
 
     for (const tc of toolCalls) {
@@ -60,10 +63,11 @@ export async function runAssistant(
       try {
         args = JSON.parse(rawArgs);
       } catch {
-        // оставим args = {}
+        args = {};
       }
 
       const handler = (toolHandlers as any)[name];
+
       if (!handler) {
         toolCallsLog.push({
           tool_call_id,
@@ -103,10 +107,14 @@ export async function runAssistant(
       }
     }
 
-    // Добавляем исходное сообщение с tool_calls и ответы tools
+    // Добавляем сообщение модели с tool_calls и ответы tools в историю
     messages = [...messages, message, ...toolResultMessages];
   }
 
-  // Достигнут лимит шагов tools, но модель не вернула финальный ответ
+  // Если вышли по лимиту итераций, но у нас есть последнее completion — возвращаем его.
+  if (lastCompletion) {
+    return { completion: lastCompletion, toolCalls: toolCallsLog };
+  }
+
   return { completion: null, toolCalls: toolCallsLog };
 }

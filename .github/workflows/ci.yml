@@ -10,6 +10,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT_BOTCOW: dummy_ci_pat
+      BOTCOW_DEFAULT_REPO: fairyplace-mailer/botcow_assistance
+      OPENAI_API_KEY: dummy_ci_openai_key
+      BLOB_READ_WRITE_TOKEN: dummy_ci_blob_token
 
     steps:
       - uses: actions/checkout@v4

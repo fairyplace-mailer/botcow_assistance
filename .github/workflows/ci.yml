@@ -15,6 +15,7 @@ jobs:
       BOTCOW_DEFAULT_REPO: fairyplace-mailer/botcow_assistance
       OPENAI_API_KEY: dummy_ci_openai_key
       BLOB_READ_WRITE_TOKEN: dummy_ci_blob_token
+      VERCEL_TOKEN: dummy_ci_vercel_token
 
     steps:
       - uses: actions/checkout@v4

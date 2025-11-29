@@ -140,14 +140,18 @@ export async function createPullRequest(options: {
   const repoName = options.repo ?? (defaultRepo as string);
   const { owner, repo } = parseRepo(repoName);
 
-  const params: Parameters<typeof github.pulls.create>[0] = {
+  const baseParams: Parameters<typeof github.pulls.create>[0] = {
     owner,
     repo,
     title,
     head,
     base,
-    body: options.body,
   };
+
+  const params: Parameters<typeof github.pulls.create>[0] =
+    options.body !== undefined
+      ? { ...baseParams, body: options.body }
+      : baseParams;
 
   const pr = await github.pulls.create(params);
   return pr.data;

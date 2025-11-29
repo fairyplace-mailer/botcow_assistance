@@ -11,9 +11,11 @@ export async function POST(req: Request) {
   try {
     const content = await getFile(path, repo);
     return NextResponse.json({ content });
-  } catch (error: any) {
+    } catch (error: unknown) {
+    const err = error instanceof Error ? error : new Error('GitHub read failed');
+
     return NextResponse.json(
-      { error: error?.message || 'GitHub read failed' },
+      { error: err.message },
       { status: 500 },
     );
   }

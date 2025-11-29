@@ -21,9 +21,11 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ pr });
-  } catch (error: any) {
+    } catch (error: unknown) {
+    const err = error instanceof Error ? error : new Error('Create PR failed');
+
     return NextResponse.json(
-      { error: error?.message || 'Create PR failed' },
+      { error: err.message },
       { status: 500 },
     );
   }

@@ -11,9 +11,11 @@ export async function POST(req: Request) {
   try {
     const result = await getWorkflowStatus({ run_id, repo });
     return NextResponse.json({ result });
-  } catch (error: any) {
+    } catch (error: unknown) {
+    const err = error instanceof Error ? error : new Error('Get workflow status failed');
+
     return NextResponse.json(
-      { error: error?.message || 'Get workflow status failed' },
+      { error: err.message },
       { status: 500 }
     );
   }

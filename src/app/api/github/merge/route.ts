@@ -11,9 +11,11 @@ export async function POST(req: Request) {
   try {
     const result = await mergePullRequest({ pull_number, repo });
     return NextResponse.json({ result });
-  } catch (error: any) {
+    } catch (error: unknown) {
+    const err = error instanceof Error ? error : new Error('Merge PR failed');
+
     return NextResponse.json(
-      { error: error?.message || 'Merge PR failed' },
+      { error: err.message },
       { status: 500 },
     );
   }

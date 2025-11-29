@@ -71,7 +71,18 @@ export async function triggerDeploy(projectIdOverride?: string, gitSha?: string)
   const url = new URL('/v13/deployments', VERCEL_API_BASE);
   withTeam(url);
 
-  const body: any = {
+    type TriggerDeployBody = {
+    name: string;
+    project: string;
+    target: 'production' | 'preview';
+    gitSource?: {
+      type: 'github';
+      ref: string;
+      sha: string;
+    };
+  };
+
+  const body: TriggerDeployBody = {
     name: pid,
     project: pid,
     target: 'production',

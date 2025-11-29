@@ -24,9 +24,11 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ result });
-  } catch (error: any) {
+    } catch (error: unknown) {
+    const err = error instanceof Error ? error : new Error('Commit failed');
+
     return NextResponse.json(
-      { error: error?.message || 'Commit failed' },
+      { error: err.message },
       { status: 500 },
     );
   }

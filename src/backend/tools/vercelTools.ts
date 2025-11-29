@@ -123,10 +123,19 @@ export const vercelToolHandlers = {
         : ('production' as const);
 
     const data = await getLatestDeployments(env);
-    if (Array.isArray((data as any).deployments)) {
-      (data as any).deployments = (data as any).deployments.slice(0, limit);
+
+    const result = {
+      ...data,
+    } as {
+      deployments?: unknown[];
+      [key: string]: unknown;
+    };
+
+    if (Array.isArray(result.deployments)) {
+      result.deployments = result.deployments.slice(0, limit);
     }
-    return data;
+
+    return result;
   },
 
   async vercel_get_deployment_status(args: VercelGetDeploymentStatusArgs) {

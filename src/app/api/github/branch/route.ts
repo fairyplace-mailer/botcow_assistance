@@ -11,9 +11,11 @@ export async function POST(req: Request) {
   try {
     const result = await createBranch(branchName, baseBranch, repo);
     return NextResponse.json({ result });
-  } catch (error: any) {
+    } catch (error: unknown) {
+    const err = error instanceof Error ? error : new Error('Create branch failed');
+
     return NextResponse.json(
-      { error: error?.message || 'Create branch failed' },
+      { error: err.message },
       { status: 500 },
     );
   }

@@ -7,9 +7,11 @@ export async function POST(req: Request) {
   try {
     const result = await runWorkflow({ workflow_id, ref, repo, inputs });
     return NextResponse.json({ result });
-  } catch (error: any) {
+    } catch (error: unknown) {
+    const err = error instanceof Error ? error : new Error('Run workflow failed');
+
     return NextResponse.json(
-      { error: error?.message || 'Run workflow failed' },
+      { error: err.message },
       { status: 500 },
     );
   }

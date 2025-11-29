@@ -42,43 +42,44 @@ export default function Page() {
   const [workflowError, setWorkflowError] = useState<string | null>(null);
 
   async function handleChatSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!input.trim() || chatLoading) return;
+  e.preventDefault();
+  if (!input.trim() || chatLoading) return;
 
-    const newMessage: Message = { role: 'user', content: input.trim() };
-    const nextMessages = [...messages, newMessage];
+  const newMessage: Message = { role: 'user', content: input.trim() };
+  const nextMessages = [...messages, newMessage];
 
-    setMessages(nextMessages);
-    setInput('');
-    setChatLoading(true);
-    setChatError(null);
+  setMessages(nextMessages);
+  setInput('');
+  setChatLoading(true);
+  setChatError(null);
 
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: nextMessages }),
-      });
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: nextMessages }),
+    });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      const choice = data.choices?.[0]?.message;
-      const reply: Message = {
-        role: (choice?.role as Role) || 'assistant',
-        content: choice?.content || '',
-      };
-
-      setMessages((prev) => [...prev, reply]);
-    } catch (err: any) {
-      setChatError(err?.message || 'Chat request failed');
-    } finally {
-      setChatLoading(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
     }
+
+    const data = await res.json();
+    const choice = data.choices?.[0]?.message;
+    const reply: Message = {
+      role: (choice?.role as Role) || 'assistant',
+      content: choice?.content || '',
+    };
+
+    setMessages((prev) => [...prev, reply]);
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error('Chat request failed');
+    setChatError(error.message);
+  } finally {
+    setChatLoading(false);
   }
+}
 
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] ?? null;
@@ -88,148 +89,153 @@ export default function Page() {
   }
 
   async function handleCommitFile() {
-    if (!selectedFile) {
-      setCommitError('Файл не выбран');
-      return;
-    }
-    if (!filePath.trim()) {
-      setCommitError('Укажите путь в репо (path)');
-      return;
-    }
-    if (!commitMessage.trim()) {
-      setCommitError('Укажите commit message');
-      return;
-    }
-    if (!branchName.trim()) {
-      setCommitError('Укажите ветку');
-      return;
-    }
-
-    setCommitLoading(true);
-    setCommitResult(null);
-    setCommitError(null);
-
-    try {
-      const text = await selectedFile.text();
-
-      const res = await fetch('/api/github/commit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: filePath.trim(),
-          content: text,
-          message: commitMessage.trim(),
-          branch: branchName.trim(),
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-
-      setCommitResult('Commit успешно отправлен в GitHub');
-    } catch (err: any) {
-      setCommitError(err?.message || 'Commit failed');
-    } finally {
-      setCommitLoading(false);
-    }
+  if (!selectedFile) {
+    setCommitError('Файл не выбран');
+    return;
   }
+  if (!filePath.trim()) {
+    setCommitError('Укажите путь в репо (path)');
+    return;
+  }
+  if (!commitMessage.trim()) {
+    setCommitError('Укажите commit message');
+    return;
+  }
+  if (!branchName.trim()) {
+    setCommitError('Укажите ветку');
+    return;
+  }
+
+  setCommitLoading(true);
+  setCommitResult(null);
+  setCommitError(null);
+
+  try {
+    const text = await selectedFile.text();
+
+    const res = await fetch('/api/github/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: filePath.trim(),
+        content: text,
+        message: commitMessage.trim(),
+        branch: branchName.trim(),
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+
+    setCommitResult('Commit успешно отправлен в GitHub');
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error('Commit failed');
+    setCommitError(error.message);
+  } finally {
+    setCommitLoading(false);
+  }
+}
 
   async function handleViewFile() {
-    if (!viewPath.trim()) {
-      setViewError('Укажите путь файла');
-      return;
-    }
-
-    setViewLoading(true);
-    setViewError(null);
-    setViewContent(null);
-
-    try {
-      const res = await fetch('/api/github/file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: viewPath.trim() }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-
-      setViewContent(String(data.content ?? ''));
-    } catch (err: any) {
-      setViewError(err?.message || 'Read file failed');
-    } finally {
-      setViewLoading(false);
-    }
+  if (!viewPath.trim()) {
+    setViewError('Укажите путь файла');
+    return;
   }
+
+  setViewLoading(true);
+  setViewError(null);
+  setViewContent(null);
+
+  try {
+    const res = await fetch('/api/github/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: viewPath.trim() }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+
+    setViewContent(String(data.content ?? ''));
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error('GitHub read failed');
+    setViewError(error.message);
+  } finally {
+    setViewLoading(false);
+  }
+}
 
   async function handleRunWorkflow() {
-    setWorkflowLoading(true);
-    setWorkflowMessage(null);
-    setWorkflowError(null);
+  setWorkflowLoading(true);
+  setWorkflowMessage(null);
+  setWorkflowError(null);
 
-    try {
-      const res = await fetch('/api/github/workflow/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workflow_id: workflowId.trim() || undefined,
-          ref: workflowRef.trim() || undefined,
-        }),
-      });
+  try {
+    const res = await fetch('/api/github/workflow/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workflow_id: workflowId.trim() || undefined,
+        ref: workflowRef.trim() || undefined,
+      }),
+    });
 
-      const data = await res.json();
+    const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-
-      setWorkflowMessage(
-        `Workflow запущен (id=${data.result?.workflow_id ?? workflowId}, ref=${data.result?.ref ?? workflowRef})`,
-      );
-    } catch (err: any) {
-      setWorkflowError(err?.message || 'Run workflow failed');
-    } finally {
-      setWorkflowLoading(false);
+    if (!res.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
     }
+
+    const id = data.result?.workflow_id ?? workflowId;
+    const ref = data.result?.ref ?? workflowRef;
+
+    setWorkflowMessage(`Workflow запущен (id=${id}, ref=${ref})`);
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error('Run workflow failed');
+    setWorkflowError(error.message);
+  } finally {
+    setWorkflowLoading(false);
   }
+}
 
   async function handleCheckWorkflowStatus() {
-    const id = Number(workflowRunId);
-    if (!Number.isFinite(id)) {
-      setWorkflowError('run_id должен быть числом');
-      return;
-    }
-
-    setWorkflowStatusLoading(true);
-    setWorkflowError(null);
-
-    try {
-      const res = await fetch('/api/github/workflow/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ run_id: id }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-
-      const status = data.result?.status ?? data.result?.conclusion ?? 'unknown';
-      setWorkflowMessage(`Статус workflow (run_id=${id}): ${status}`);
-    } catch (err: any) {
-      setWorkflowError(err?.message || 'Get workflow status failed');
-    } finally {
-      setWorkflowStatusLoading(false);
-    }
+  const id = Number(workflowRunId);
+  if (!Number.isFinite(id)) {
+    setWorkflowError('run_id должен быть числом');
+    return;
   }
+
+  setWorkflowStatusLoading(true);
+  setWorkflowError(null);
+
+  try {
+    const res = await fetch('/api/github/workflow/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: id }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+
+    const status = data.result?.status ?? data.result?.conclusion ?? 'unknown';
+    setWorkflowMessage(`Статус workflow (run_id=${id}): ${status}`);
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error('Get workflow status failed');
+    setWorkflowError(error.message);
+  } finally {
+    setWorkflowStatusLoading(false);
+  }
+}
 
   return (
     <main

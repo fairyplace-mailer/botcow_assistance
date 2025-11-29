@@ -58,14 +58,16 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json(result.completion);
-  } catch (error: any) {
+    } catch (error: unknown) {
     const ms = Date.now() - startedAt;
+
+    const err = error instanceof Error ? error : new Error('Unknown error');
 
     await logEvent('chat-error', {
       messages,
       error: {
-        message: error?.message,
-        name: error?.name,
+        message: err.message,
+        name: err.name,
       },
       durationMs: ms,
     });

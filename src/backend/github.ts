@@ -25,6 +25,7 @@ export function parseRepo(repo: string = defaultRepo as string) {
 
 export async function getFile(path: string, repo: string = defaultRepo as string) {
   const { owner, repo: repoName } = parseRepo(repo);
+
   const res = await github.repos.getContent({
     owner,
     repo: repoName,
@@ -61,9 +62,11 @@ export async function createBranch(
       ref: `refs/heads/${branchName}`,
       sha,
     });
+
     return ref.data;
-  } catch (error: any) {
-    if (error?.status === 422) {
+  } catch (error) {
+    const err = error as { status?: number };
+    if (err.status === 422) {
       return { error: 'branch-already-exists', branch: branchName, baseSha: sha };
     }
     throw error;
@@ -91,11 +94,17 @@ export async function commitFile(options: {
       ref: branch,
     });
 
-    if ('sha' in res.data) {
-      sha = (res.data as any).sha;
+    const data = res.data;
+
+    if (
+      !Array.isArray(data) &&
+      typeof (data as { sha?: string }).sha === 'string'
+    ) {
+      sha = (data as { sha: string }).sha;
     }
-  } catch (error: any) {
-    if (error?.status !== 404) {
+  } catch (error) {
+    const err = error as { status?: number };
+    if (err.status !== 404) {
       throw error;
     }
   }
@@ -112,7 +121,7 @@ export async function commitFile(options: {
   };
 
   if (sha) {
-    (params as any).sha = sha;
+    (params as { sha?: string }).sha = sha;
   }
 
   const result = await github.repos.createOrUpdateFileContents(params);
@@ -137,11 +146,8 @@ export async function createPullRequest(options: {
     title,
     head,
     base,
+    body: options.body,
   };
-
-  if (options.body) {
-    (params as any).body = options.body;
-  }
 
   const pr = await github.pulls.create(params);
   return pr.data;
@@ -180,11 +186,8 @@ export async function runWorkflow(options: {
     repo,
     workflow_id,
     ref,
+    ...(options.inputs ? { inputs: options.inputs } : {}),
   };
-
-  if (options.inputs) {
-    (params as any).inputs = options.inputs as { [key: string]: unknown };
-  }
 
   await github.actions.createWorkflowDispatch(params);
 

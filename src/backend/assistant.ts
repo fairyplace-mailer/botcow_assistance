@@ -1,13 +1,23 @@
 import { openai } from './openai';
 import { toolSchemas, toolHandlers } from './tools';
+import type {
+  ChatCompletion,
+  ChatCompletionMessage,
+  ChatCompletionMessageParam,
+  ChatCompletionMessageToolCall,
+  ChatCompletionTool,
+} from 'openai/resources/chat/completions';
 
-type AnyMessage = {
-  role: string;
-  [key: string]: any;
-};
+/**
+ * Сообщение для ассистента (совместимо с ChatCompletionMessageParam).
+ */
+type AssistantMessage = ChatCompletionMessageParam;
 
+/**
+ * Результат работы ассистента с tool calls.
+ */
 interface AssistantResult {
-  completion: any | null;
+  completion: ChatCompletion | null;
   toolCalls: Array<{
     tool_call_id: string;
     name: string;
@@ -21,18 +31,19 @@ interface AssistantResult {
  * На вход: массив сообщений { role, content } (с system-сообщением уже включённым выше по стеку).
  */
 export async function runAssistant(
-  rawMessages: AnyMessage[],
+  rawMessages: AssistantMessage[],
 ): Promise<AssistantResult> {
   const maxToolLoops = 10;
-  let messages: AnyMessage[] = rawMessages.slice();
+
+  let messages: AssistantMessage[] = rawMessages.slice();
   const toolCallsLog: AssistantResult['toolCalls'] = [];
-  let lastCompletion: any = null;
+  let lastCompletion: ChatCompletion | null = null;
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const completion = await openai.chat.completions.create({
+    const completion: ChatCompletion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: messages as any,
-      tools: toolSchemas as any,
+      messages,
+      tools: toolSchemas as ChatCompletionTool[],
       tool_choice: 'auto',
     });
 
@@ -43,30 +54,33 @@ export async function runAssistant(
       break;
     }
 
-    const message: AnyMessage = choice.message as any;
+    const message = choice.message as ChatCompletionMessage;
+    const toolCalls =
+      (message.tool_calls as ChatCompletionMessageToolCall[] | null | undefined) ??
+      [];
 
-    const toolCalls = (message as any).tool_calls;
-    if (!toolCalls || toolCalls.length === 0) {
+    if (toolCalls.length === 0) {
       // Модель дала финальный ответ без tool_calls — возвращаем его.
       return { completion, toolCalls: toolCallsLog };
     }
 
     // Есть tool_calls — выполняем их и добавляем ответы как сообщения role=tool.
-    const toolResultMessages: AnyMessage[] = [];
+    const toolResultMessages: AssistantMessage[] = [];
 
     for (const tc of toolCalls) {
-      const name = tc.function?.name as string;
-      const tool_call_id = tc.id as string;
+      const name = tc.function?.name ?? '';
+      const tool_call_id = tc.id;
+
       const rawArgs = tc.function?.arguments ?? '{}';
 
-      let args: any = {};
+      let args: unknown;
       try {
         args = JSON.parse(rawArgs);
       } catch {
         args = {};
       }
 
-      const handler = (toolHandlers as any)[name];
+      const handler = toolHandlers[name as keyof typeof toolHandlers];
 
       if (!handler) {
         toolCallsLog.push({
@@ -75,17 +89,20 @@ export async function runAssistant(
           ok: false,
           error: 'Unknown tool',
         });
+
         toolResultMessages.push({
           role: 'tool',
           tool_call_id,
           name,
           content: JSON.stringify({ error: 'Unknown tool' }),
-        });
+        } as AssistantMessage);
+
         continue;
       }
 
       try {
-        const result = await handler(args);
+        const result = await handler(args as Record<string, unknown>);
+
         toolCallsLog.push({ tool_call_id, name, ok: true });
 
         toolResultMessages.push({
@@ -93,22 +110,33 @@ export async function runAssistant(
           tool_call_id,
           name,
           content: JSON.stringify(result),
+        } as AssistantMessage);
+      } catch (error) {
+        const err = error as Error;
+        const msg = err.message || String(error);
+
+        toolCallsLog.push({
+          tool_call_id,
+          name,
+          ok: false,
+          error: msg,
         });
-      } catch (error: any) {
-        const msg = error?.message || String(error);
-        toolCallsLog.push({ tool_call_id, name, ok: false, error: msg });
 
         toolResultMessages.push({
           role: 'tool',
           tool_call_id,
           name,
           content: JSON.stringify({ error: msg }),
-        });
+        } as AssistantMessage);
       }
     }
 
     // Добавляем сообщение модели с tool_calls и ответы tools в историю
-    messages = [...messages, message, ...toolResultMessages];
+    messages = [
+      ...messages,
+      message as unknown as AssistantMessage,
+      ...toolResultMessages,
+    ];
   }
 
   // Если вышли по лимиту итераций, но у нас есть последнее completion — возвращаем его.

@@ -43,7 +43,7 @@ export async function runAssistant(
     const completion: ChatCompletion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages,
-      tools: toolSchemas as ChatCompletionTool[],
+      tools: toolSchemas as unknown as ChatCompletionTool[],
       tool_choice: 'auto',
     });
 
@@ -68,10 +68,14 @@ export async function runAssistant(
     const toolResultMessages: AssistantMessage[] = [];
 
     for (const tc of toolCalls) {
-      const name = tc.function?.name ?? '';
-      const tool_call_id = tc.id;
+      // В union-е ChatCompletionMessageToolCall поле function есть только у type="function"
+      if (tc.type !== 'function' || !tc.function) {
+        continue;
+      }
 
-      const rawArgs = tc.function?.arguments ?? '{}';
+      const tool_call_id = tc.id;
+      const name = tc.function.name;
+      const rawArgs = tc.function.arguments ?? '{}';
 
       let args: unknown;
       try {
@@ -80,7 +84,9 @@ export async function runAssistant(
         args = {};
       }
 
-      const handler = toolHandlers[name as keyof typeof toolHandlers];
+      type GenericToolHandler = (args: unknown) => Promise<unknown> | unknown;
+
+      const handler = toolHandlers[name as keyof typeof toolHandlers] as GenericToolHandler;
 
       if (!handler) {
         toolCallsLog.push({
@@ -101,7 +107,7 @@ export async function runAssistant(
       }
 
       try {
-        const result = await handler(args as Record<string, unknown>);
+        const result = await handler(args);
 
         toolCallsLog.push({ tool_call_id, name, ok: true });
 

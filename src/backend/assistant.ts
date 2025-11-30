@@ -120,7 +120,7 @@ export async function runAssistant(
       }
 
       try {
-        const result = await handler(args as Record<string, unknown>);
+        const result = await (handler as (a: unknown) => Promise<unknown> | unknown)(args as unknown);
 
         toolCallsLog.push({ tool_call_id, name, ok: true });
 

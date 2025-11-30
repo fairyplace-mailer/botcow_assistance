@@ -190,12 +190,17 @@ export async function getRecentCommits(options?: {
   const branch = options?.branch;
   const limit = options?.limit ?? 20;
 
-  const res = await github.repos.listCommits({
+  const params: Parameters<typeof github.repos.listCommits>[0] = {
     owner,
     repo,
-    sha: branch,
     per_page: limit,
-  });
+  };
+
+  if (branch) {
+    (params as any).sha = branch;
+  }
+
+  const res = await github.repos.listCommits(params);
 
   return res.data.map((commit) => ({
     sha: commit.sha,

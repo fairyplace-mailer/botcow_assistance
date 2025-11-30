@@ -33,12 +33,17 @@ export async function getFile(
 ) {
   const { owner, repo: repoName } = parseRepo(repo);
 
-  const res = await github.repos.getContent({
+  const params: Parameters<typeof github.repos.getContent>[0] = {
     owner,
     repo: repoName,
     path,
-    ref,
-  });
+  };
+
+  if (ref) {
+    (params as any).ref = ref;
+  }
+
+  const res = await github.repos.getContent(params);
 
   if (!('content' in res.data)) {
     throw new Error(`Not a file: ${path}`);
@@ -106,14 +111,18 @@ export async function listFiles(options?: {
   const repoName = options?.repo ?? (defaultRepo as string);
   const { owner, repo } = parseRepo(repoName);
   const path = options?.path ?? '';
-  const ref = options?.ref;
 
-  const res = await github.repos.getContent({
+  const params: Parameters<typeof github.repos.getContent>[0] = {
     owner,
     repo,
     path,
-    ref,
-  });
+  };
+
+  if (options?.ref) {
+    (params as any).ref = options.ref;
+  }
+
+  const res = await github.repos.getContent(params);
 
   if (Array.isArray(res.data)) {
     return res.data.map((item) => ({
@@ -218,10 +227,10 @@ export async function createBranch(
 
   try {
     const ref = await github.git.createRef({
-      owner,
-      repo: repoName,
-      ref: `refs/heads/${branchName}`,
-      sha,
+    owner,
+    repo: repoName,
+    ref: `refs/heads/${branchName}`,
+    sha,
     });
     return ref.data;
   } catch (error: any) {
@@ -544,9 +553,9 @@ export async function listIssues(options?: {
     number: issue.number,
     title: issue.title,
     state: issue.state,
-    labels: issue.labels?.map((l) => (typeof l === 'string' ? l : l.name)).filter(
-      Boolean,
-    ),
+    labels: issue.labels
+      ?.map((l) => (typeof l === 'string' ? l : l.name))
+      .filter(Boolean),
     url: issue.html_url,
   }));
 }

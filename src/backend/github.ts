@@ -493,15 +493,23 @@ export async function createIssue(options: {
   const repoName = options.repo ?? (defaultRepo as string);
   const { owner, repo } = parseRepo(repoName);
 
-  const res = await github.issues.create({
+  const params: any = {
     owner,
     repo,
     title: options.title,
-    body: options.body,
-    labels: options.labels,
-    assignees: options.assignees,
-  });
+  };
 
+  if (options.body !== undefined) {
+    params.body = options.body;
+  }
+  if (options.labels !== undefined) {
+    params.labels = options.labels;
+  }
+  if (options.assignees !== undefined) {
+    params.assignees = options.assignees;
+  }
+
+  const res = await github.issues.create(params);
   return res.data;
 }
 
@@ -520,17 +528,29 @@ export async function updateIssue(options: {
   const repoName = options.repo ?? (defaultRepo as string);
   const { owner, repo } = parseRepo(repoName);
 
-  const res = await github.issues.update({
+  const params: any = {
     owner,
     repo,
     issue_number: options.issue_number,
-    title: options.title,
-    body: options.body,
-    state: options.state,
-    labels: options.labels,
-    assignees: options.assignees,
-  });
+  };
 
+  if (options.title !== undefined) {
+    params.title = options.title;
+  }
+  if (options.body !== undefined) {
+    params.body = options.body;
+  }
+  if (options.state !== undefined) {
+    params.state = options.state;
+  }
+  if (options.labels !== undefined) {
+    params.labels = options.labels;
+  }
+  if (options.assignees !== undefined) {
+    params.assignees = options.assignees;
+  }
+
+  const res = await github.issues.update(params);
   return res.data;
 }
 
@@ -546,13 +566,18 @@ export async function listIssues(options?: {
   const repoName = options?.repo ?? (defaultRepo as string);
   const { owner, repo } = parseRepo(repoName);
 
-  const res = await github.issues.listForRepo({
+  const params: any = {
     owner,
     repo,
     state: options?.state ?? 'open',
-    labels: options?.labels?.join(','),
     per_page: options?.per_page ?? 30,
-  });
+  };
+
+  if (options?.labels !== undefined) {
+    params.labels = options.labels;
+  }
+
+  const res = await github.issues.listForRepo(params);
 
   return res.data.map((issue) => ({
     number: issue.number,

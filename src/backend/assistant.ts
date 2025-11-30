@@ -43,7 +43,7 @@ export async function runAssistant(
     const completion: ChatCompletion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages,
-      tools: toolSchemas as ChatCompletionTool[],
+      tools: [...toolSchemas] as ChatCompletionTool[],
       tool_choice: 'auto',
     });
 

@@ -13,8 +13,8 @@ export async function POST(req: Request) {
 
   // System-prompt: жестко описываем роль ассистента и сценарии
   const systemMessage = {
-  role: "system",
-  content: `
+    role: 'system' as const,
+    content: `
 Ты — BotCow, автономный ассистент-разработчик.
 
 Твоя задача — выполнять роль полноценного разработчика и DevOps-инженера для проектов владельца, работая через OpenAI Tools, GitHub API и Vercel API.
@@ -65,11 +65,12 @@ TODO.md,
 удаление кода, изменение архитектуры, продакшн-деплой.
 
 Если данных не хватает — честно говоришь об этом и запрашиваешь их через tools.
-`
-};
+`,
+  };
 
   const fullMessages = [systemMessage, ...messages];
 
+  // выбор модели
   const routing = chooseModel(fullMessages);
 
   try {
@@ -81,6 +82,8 @@ TODO.md,
       toolCalls: result.toolCalls,
       hasCompletion: !!result.completion,
       durationMs: ms,
+      model: routing.model,
+      modelReason: routing.reason,
     });
 
     if (!result.completion) {
@@ -90,17 +93,18 @@ TODO.md,
       );
     }
 
+    // Этап 4 пока не трогаем: возвращаем сырое completion, как было
     return NextResponse.json(result.completion);
   } catch (error: any) {
     const ms = Date.now() - startedAt;
 
-    await logEvent('chat', {
+    await logEvent('chat-error', {
       messages,
-      toolCalls: result.toolCalls,
-      hasCompletion: !!result.completion,
+      error: {
+        message: error?.message,
+        name: error?.name,
+      },
       durationMs: ms,
-      model: routing.model,
-      modelReason: routing.reason,
     });
 
     return NextResponse.json(

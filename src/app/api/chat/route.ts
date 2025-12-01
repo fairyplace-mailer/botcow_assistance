@@ -77,25 +77,48 @@ TODO.md,
     const result = await runAssistant(fullMessages, routing.model);
     const ms = Date.now() - startedAt;
 
+    const completion = result.completion;
+
     await logEvent('chat', {
       messages,
       toolCalls: result.toolCalls,
-      hasCompletion: !!result.completion,
+      hasCompletion: !!completion,
       durationMs: ms,
       model: routing.model,
       modelReason: routing.reason,
     });
 
-    if (!result.completion) {
+    if (!completion) {
       return NextResponse.json(
         { error: 'Assistant did not produce a final answer' },
         { status: 500 },
       );
     }
 
-    // Этап 4 пока не трогаем: возвращаем сырое completion, как было
-    return NextResponse.json(result.completion);
+    const firstChoice = completion.choices?.[0];
+    const finalMessage = firstChoice?.message ?? null;
+
+    if (!finalMessage) {
+      return NextResponse.json(
+        { error: 'Assistant produced completion without message' },
+        { status: 500 },
+      );
+    }
+
+    const responsePayload = {
+      ok: true,
+      model: routing.model,
+      modelReason: routing.reason,
+      message: finalMessage,
+      toolCalls: result.toolCalls,
+      usage: completion.usage ?? null,
+      // оставляем полный completion, чтобы фронт мог при желании использовать старый формат
+      completion,
+    };
+
+    return NextResponse.json(responsePayload);
   } catch (error: any) {
+  
     const ms = Date.now() - startedAt;
 
     await logEvent('chat-error', {

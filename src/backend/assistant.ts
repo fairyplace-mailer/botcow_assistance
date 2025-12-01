@@ -32,6 +32,7 @@ interface AssistantResult {
  */
 export async function runAssistant(
   rawMessages: AssistantMessage[],
+  model: string,
 ): Promise<AssistantResult> {
   const maxToolLoops = 10;
 
@@ -40,12 +41,12 @@ export async function runAssistant(
   let lastCompletion: ChatCompletion | null = null;
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const completion: ChatCompletion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages,
-      tools: [...toolSchemas] as ChatCompletionTool[],
-      tool_choice: 'auto',
-    });
+const completion: ChatCompletion = await openai.chat.completions.create({
+  model,
+  messages,
+  tools: [...toolSchemas] as ChatCompletionTool[],
+  tool_choice: 'auto',
+});
 
     lastCompletion = completion;
 

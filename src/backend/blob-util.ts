@@ -8,26 +8,17 @@ if (!token) {
 
 /**
  * Append data to a blob file (JSON Lines).
- * If blob doesn't exist — it will be created.
+ * Сейчас: храним только последнее событие (overwrite).
+ * Если захотим хранить историю — сделаем настоящий append отдельно.
  */
 export async function appendToBlob(path: string, content: string) {
-  // Read existing blob (if exists)
-  let existing = "";
-  try {
-    const res = await fetch(
-      `https://api.vercel.com/v2/blobs/${encodeURIComponent(path)}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (res.ok) {
-      existing = await res.text();
-    }
-  } catch (_) {}
-
-  const newContent = existing + content + "\n";
+  const newContent = content + "\n";
 
   await put(path, newContent, {
     access: "public",
     token,
+    addRandomSuffix: false,
+    allowOverwrite: true, // <-- КЛЮЧЕВОЕ
   });
 }
 

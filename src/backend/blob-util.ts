@@ -26,7 +26,7 @@ export async function appendToBlob(path: string, content: string) {
   const newContent = existing + content + "\n";
 
   await put(path, newContent, {
-    access: "private",
+    access: "public",
     token,
   });
 }

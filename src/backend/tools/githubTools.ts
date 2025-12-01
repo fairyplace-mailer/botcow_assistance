@@ -6,6 +6,7 @@ import {
   mergePullRequest,
   runWorkflow,
   getWorkflowStatus,
+  commentOnPullRequest,
 } from '../github';
 
 export const githubToolsSchemas = [
@@ -129,8 +130,8 @@ export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
-      name: 'github_merge_pull_request',
-      description: 'Смерджить Pull Request по номеру.',
+      name: 'github_comment_on_pull_request',
+      description: 'Оставить комментарий в Pull Request по номеру.',
       parameters: {
         type: 'object',
         properties: {
@@ -138,11 +139,28 @@ export const githubToolsSchemas = [
             type: 'number',
             description: 'Номер PR.',
           },
+          body: {
+            type: 'string',
+            description: 'Текст комментария (markdown).',
+          },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
+        required: ['pull_number', 'body'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_merge_pull_request',
+      description: 'Смерджить Pull Request по номеру.',
+      ...
+    },
+  },
         required: ['pull_number'],
       },
     },
@@ -238,6 +256,14 @@ export const githubToolHandlers = {
     repo?: string;
   }) {
     return createPullRequest(args);
+  },
+
+  async github_comment_on_pull_request(args: {
+    pull_number: number;
+    body: string;
+    repo?: string;
+  }) {
+    return commentOnPullRequest(args);
   },
 
   async github_merge_pull_request(args: {

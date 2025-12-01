@@ -23,7 +23,10 @@ function withTeam(url: URL) {
   }
 }
 
-export async function getLatestDeployments(env: 'production' | 'preview' | 'all' = 'production') {
+export async function getLatestDeployments(
+  env: VercelTarget | 'all' = 'production',
+) {
+
   const url = new URL('/v6/deployments', VERCEL_API_BASE);
 
   if (projectId) {

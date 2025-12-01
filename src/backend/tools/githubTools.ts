@@ -52,7 +52,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['branchName'],
@@ -86,7 +87,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['path', 'content', 'message', 'branch'],
@@ -120,7 +122,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['title', 'head'],
@@ -158,9 +161,19 @@ export const githubToolsSchemas = [
     function: {
       name: 'github_merge_pull_request',
       description: 'Смерджить Pull Request по номеру.',
-      ...
-    },
-  },
+      parameters: {
+        type: 'object',
+        properties: {
+          pull_number: {
+            type: 'number',
+            description: 'Номер PR.',
+          },
+          repo: {
+            type: 'string',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+          },
+        },
         required: ['pull_number'],
       },
     },
@@ -184,7 +197,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REПО.',
           },
           inputs: {
             type: 'object',
@@ -209,7 +223,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['run_id'],

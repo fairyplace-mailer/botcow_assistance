@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { runAssistant } from '../../../backend/assistant';
 import { logEvent } from '../../../backend/log';
+import { chooseModel } from '../../../backend/modelRouter';
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -69,8 +70,10 @@ TODO.md,
 
   const fullMessages = [systemMessage, ...messages];
 
+  const routing = chooseModel(fullMessages);
+
   try {
-    const result = await runAssistant(fullMessages);
+    const result = await runAssistant(fullMessages, routing.model);
     const ms = Date.now() - startedAt;
 
     await logEvent('chat', {
@@ -91,13 +94,13 @@ TODO.md,
   } catch (error: any) {
     const ms = Date.now() - startedAt;
 
-    await logEvent('chat-error', {
+    await logEvent('chat', {
       messages,
-      error: {
-        message: error?.message,
-        name: error?.name,
-      },
+      toolCalls: result.toolCalls,
+      hasCompletion: !!result.completion,
       durationMs: ms,
+      model: routing.model,
+      modelReason: routing.reason,
     });
 
     return NextResponse.json(

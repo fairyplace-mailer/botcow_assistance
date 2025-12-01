@@ -1,4 +1,8 @@
-import { getLatestDeployments, getDeploymentStatus, type VercelTarget } from '../vercel';
+import {
+  getLatestDeployments,
+  getDeploymentStatus,
+  type VercelTarget,
+} from '../vercel';
 import { commentOnPullRequest } from '../github';
 
 export interface DeploymentWaitForPreviewArgs {
@@ -107,7 +111,6 @@ function matchesGitSha(raw: any, gitSha: string): boolean {
   if (!raw || !gitSha) return false;
   const needle = gitSha.toLowerCase();
 
-  // gitSource.sha, если есть
   if (raw.gitSource && typeof raw.gitSource === 'object') {
     const sha = (raw.gitSource as any).sha;
     if (typeof sha === 'string' && sha.toLowerCase() === needle) {
@@ -115,7 +118,6 @@ function matchesGitSha(raw: any, gitSha: string): boolean {
     }
   }
 
-  // meta.*
   if (raw.meta && typeof raw.meta === 'object') {
     const meta = raw.meta as Record<string, unknown>;
     for (const [key, value] of Object.entries(meta)) {
@@ -123,7 +125,6 @@ function matchesGitSha(raw: any, gitSha: string): boolean {
         return true;
       }
 
-      // отдельная проверка по типичным ключам, если они присутствуют
       if (
         typeof value === 'string' &&
         ['githubCommitSha', 'gitCommitSha', 'commitSha', 'commit'].includes(
@@ -139,9 +140,6 @@ function matchesGitSha(raw: any, gitSha: string): boolean {
   return false;
 }
 
-/**
- * JSON-схема high-level tool для OpenAI.
- */
 export const deploymentToolsSchemas = [
   {
     type: 'function',
@@ -237,7 +235,6 @@ export const deploymentToolHandlers = {
             stateRaw === 'completed' ||
             stateRaw === 'success'
           ) {
-            // Успешный деплой — пишем комментарий в PR
             const url = normalized.url
               ? `https://${normalized.url}`
               : null;
@@ -248,17 +245,28 @@ export const deploymentToolHandlers = {
               `Vercel ${envLabel} deployment is ready.`,
               '',
               url ? `- URL: ${url}` : '- URL: (not available)',
-              `- Status: ${normalized.readyState ?? normalized.state ?? 'unknown'}`,
+              `- Status: ${
+                normalized.readyState ?? normalized.state ?? 'unknown'
+              }`,
               `- Commit: \`${gitSha}\``,
             ];
 
             const body = lines.join('\n');
 
-            const comment = await commentOnPullRequest({
+            const commentOptions: {
+              pull_number: number;
+              body: string;
+              repo?: string;
+            } = {
               pull_number: pullNumber,
               body,
-              repo: args.repo,
-            });
+            };
+
+            if (args.repo) {
+              commentOptions.repo = args.repo;
+            }
+
+            const comment = await commentOnPullRequest(commentOptions);
 
             return {
               status: 'success',

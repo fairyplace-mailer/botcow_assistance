@@ -4,6 +4,8 @@ const token = process.env.VERCEL_TOKEN;
 const projectId = process.env.VERCEL_PROJECT_ID;
 const teamId = process.env.VERCEL_TEAM_ID;
 
+export type VercelTarget = 'production' | 'preview';
+
 if (!token) {
   throw new Error('VERCEL_TOKEN is not set');
 }

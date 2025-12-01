@@ -66,7 +66,11 @@ export async function getDeploymentStatus(deploymentId: string) {
   return res.json();
 }
 
-export async function triggerDeploy(projectIdOverride?: string, gitSha?: string) {
+export async function triggerDeploy(
+  projectIdOverride?: string,
+  gitSha?: string,
+  target: VercelTarget = 'production',
+) {
   const pid = projectIdOverride ?? projectId;
 
   if (!pid) {
@@ -79,7 +83,7 @@ export async function triggerDeploy(projectIdOverride?: string, gitSha?: string)
   const body: any = {
     name: pid,
     project: pid,
-    target: 'production',
+    target,
   };
 
   if (gitSha) {
@@ -104,7 +108,10 @@ export async function triggerDeploy(projectIdOverride?: string, gitSha?: string)
   return res.json();
 }
 
-export async function redeploy(deploymentId: string) {
+export async function redeploy(
+  deploymentId: string,
+  target: VercelTarget = 'production',
+) {
   if (!projectId) {
     throw new Error('VERCEL_PROJECT_ID is not set');
   }
@@ -118,7 +125,7 @@ export async function redeploy(deploymentId: string) {
     body: JSON.stringify({
       name: projectId,
       project: projectId,
-      target: 'production',
+      target,
       deploymentId,
     }),
   });

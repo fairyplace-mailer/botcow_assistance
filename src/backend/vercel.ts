@@ -34,7 +34,7 @@ export async function getLatestDeployments(env: 'production' | 'preview' | 'all'
   if (env === 'production') {
     url.searchParams.set('target', 'production');
   } else if (env === 'preview') {
-    url.searchParams.set('target', 'staging');
+    url.searchParams.set('target', 'preview');
   }
 
   const res = await fetch(url, { headers: buildHeaders() });

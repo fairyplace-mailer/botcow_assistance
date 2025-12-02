@@ -10,8 +10,20 @@ export function SwRegister() {
     const onLoad = () => {
       navigator.serviceWorker
         .register('/sw.js')
+        .then((registration) => {
+          console.log('SW registration successful with scope:', registration.scope);
+
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            if (newWorker) {
+              newWorker.addEventListener('statechange', () => {
+                console.log('SW state changed to:', newWorker.state);
+              });
+            }
+          });
+        })
         .catch((err) => {
-          console.error('SW registration failed', err);
+          console.error('SW registration failed:', err);
         });
     };
 

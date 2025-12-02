@@ -154,11 +154,24 @@ docs/spec.md в репозитории fairyplace-mailer/botcow_assistance.
     } catch (error: any) {
     const ms = Date.now() - startedAt;
 
+    // Попробуем вытащить максимум инфы из ошибки OpenAI
+    const errorDetails =
+      error && typeof error === 'object'
+        ? {
+            status: error.status,
+            name: error.name,
+            // иногда библиотека кладёт тело ответа сюда
+            error: (error as any).error ?? (error as any).body ?? undefined,
+          }
+        : undefined;
+
     await logEvent('chat-error', {
       messages,
       error: {
         message: error?.message,
         name: error?.name,
+        status: error?.status,
+        raw: errorDetails,
       },
       durationMs: ms,
     });
@@ -172,6 +185,7 @@ docs/spec.md в репозитории fairyplace-mailer/botcow_assistance.
       {
         ok: false,
         error: message,
+        errorDetails,
       },
       { status: 500 },
     );

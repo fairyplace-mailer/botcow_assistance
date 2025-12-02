@@ -1,57 +1,27 @@
-# Архитектура BotCow Code Assistant
+# Архитектура проекта
 
-Проект — серверное приложение на Next.js 16 с API-маршрутами, GitHub-интеграцией и логированием в Vercel Blob. UI — чат-интерфейс (позже расширенный).
+Проект построен на Next.js 16 с использованием App Router, API-роутов и архитектуры serverless.
 
-## Компоненты
+## Ключевые компоненты
 
-### 1. Frontend (Next.js App Router)
-- `/app/page.tsx` — UI чата.
-- Клиентские компоненты: ввод, вывод, загрузка файлов (будет добавлено).
-- PWA-манифест + сервис-воркер (будет добавлено).
+- UI (src/app) — React-компоненты и страницы
+- Backend (src/backend) — API маршруты, интеграции с GitHub, Vercel и OpenAI
+- Service Worker (public/sw.js) — обеспечивает кеширование ресурсов для PWA и offline поддержку
 
-### 2. Backend (API Routes)
-Каждый маршрут — отдельная серверная функция:
+## Service Worker и PWA
 
-- `/api/chat` — прокси к OpenAI.
-- `/api/logs` — запись логов в Blob.
-- `/api/github/*` — операции с GitHub:
-  - branch create/delete
-  - commit file
-  - get file
-  - create PR
-  - merge PR
-  - run workflow
-  - get workflow status
+- Service Worker регистрируется в приложении в src/app/SwRegister.tsx
+- Кеширует критичные статические ресурсы и страницу offline.html при установке
+- Обрабатывает запросы fetch:
+  - API-запросы обслуживаются стратегией Network First с кешированием ответов
+  - Остальные запросы статических ресурсов — Cache First
+- При отсутствии сети и отсутствии кешированных данных отображается offline.html
 
-### 3. GitHub backend (src/backend/github.ts)
-Реализует:
-- получение/обновление файлов
-- создание веток
-- коммиты
-- PR
-- workflow
+## Offline fallback
 
-Работает через `@octokit/rest`.
+- В public/offline.html описана страница с информацией о невозможности работы в офлайне
 
-### 4. OpenAI backend
-`src/backend/openai.ts` — инициализация OpenAI API.
+## Мониторинг и логирование
 
-### 5. Vercel Blob
-`src/backend/blob.ts` — добавление логов и файлов.
-
-### 6. Express server (локально)
-`src/server.ts` — минимальный Express-сервер (тест/локальные инструменты).
-
-### 7. Vercel Deploy
-- Автоматические билды из GitHub.
-- ENV хранятся в Production:
-
-OPENAI_API_KEY
-BLOB_READ_WRITE_TOKEN
-GITHUB_PAT_BOTCOW
-BOTCOW_DEFAULT_REPO
-VERCEL_TOKEN
-VERCEL_PROJECT_ID
-VERCEL_TEAM_ID
-DATABASE_URL
+- Расширенное логирование регистрации service worker и обновлений осуществляется в консоли браузера
 

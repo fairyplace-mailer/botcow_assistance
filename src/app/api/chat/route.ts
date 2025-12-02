@@ -106,14 +106,17 @@ TODO.md,
     }
 
     const responsePayload = {
-      ok: true,
-      model: routing.model,
-      modelReason: routing.reason,
-      message: finalMessage,
-      toolCalls: result.toolCalls,
-      usage: completion.usage ?? null,
-      // оставляем полный completion, чтобы фронт мог при желании использовать старый формат
-      completion,
+      // оставляем "сырой" completion на корне — для фронта ничего не ломается
+      ...completion,
+      // наша дополнительная структура — под неймспейсом
+      botcowMeta: {
+        ok: true,
+        model: routing.model,
+        modelReason: routing.reason,
+        message: finalMessage,
+        toolCalls: result.toolCalls,
+        usage: completion.usage ?? null,
+      },
     };
 
     return NextResponse.json(responsePayload);

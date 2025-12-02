@@ -1,7 +1,7 @@
 # BotCow Code Assistant
 
 Продакшн-сервис для автоматизации CI/CD и GitHub-операций через чат-интерфейс.  
-Проект развёрнут на Vercel, использует Next.js 16, API-роуты, GitHub API, Vercel Blob и OpenAI.
+Проект развивается на Vercel, использует Next.js 16, API-роуты, GitHub API, Vercel Blob и OpenAI.
 
 ## Возможности
 
@@ -21,55 +21,30 @@
 - GitHub REST API (@octokit/rest)
 - OpenAI API
 - TypeScript
-- PWA (будет добавлено)
+- PWA (Progressive Web App) с offline поддержкой
 
-## API-роуты
-
-/api/chat
-/api/health
-/api/logs
-/api/github/branch
-/api/github/commit
-/api/github/delete-branch
-/api/github/file
-/api/github/merge
-/api/github/pr
-/api/github/workflow/run
-/api/github/workflow/status
-
-## ENV переменные
-
-Все переменные хранятся в Vercel → Production.
-
-OPENAI_API_KEY
-BLOB_READ_WRITE_TOKEN
-GITHUB_PAT_BOTCOW
-BOTCOW_DEFAULT_REPO
-VERCEL_TOKEN
-VERCEL_PROJECT_ID
-VERCEL_TEAM_ID
-DATABASE_URL
-
-## Локальный запуск
+## Установка и запуск
 
 ```bash
 npm install
 npm run dev
+```
 
-Build
+## PWA и Offline поддержка
 
-npm run build
+Проект поддерживает Progressive Web App с сервис-воркером, который обеспечивает кеширование ресурсов и fallback при offline состоянии.
 
-Deploy (production)
+### Кэширование и fallback
 
-vercel --prod
+- Основные статические файлы и страница offline.html кешируются во время установки service worker.
+- Запросы к API обслуживаются стратегией Network First с fallback на кешированные данные и страницу offline.
+- Приложение отображает страницу /offline.html, если нет подключения к сети и нет кешированных данных.
 
-Структура проекта
-src/
-  app/            — UI + API маршруты Next.js
-  backend/        — GitHub, Vercel, OpenAI, логика
-  server.ts       — Express server (локальные задачи)
-docs/             — документация (будет расширена)
+### Тестирование
 
-Документация дополняется.
+Для проверки offline-функционала рекомендуем использовать инструменты браузера (DevTools) с эмуляцией offline.
+
+### Регистрация service worker
+
+Сервис-воркер регистрируется автоматически при загрузке страницы. В консоли выводятся логи регистрации и состояния обновлений.
 

@@ -151,8 +151,7 @@ docs/spec.md в репозитории fairyplace-mailer/botcow_assistance.
     };
 
     return NextResponse.json(responsePayload);
-  } catch (error: any) {
-  
+    } catch (error: any) {
     const ms = Date.now() - startedAt;
 
     await logEvent('chat-error', {
@@ -164,8 +163,16 @@ docs/spec.md в репозитории fairyplace-mailer/botcow_assistance.
       durationMs: ms,
     });
 
+    const message =
+      typeof error?.message === 'string'
+        ? error.message
+        : JSON.stringify(error, null, 2);
+
     return NextResponse.json(
-      { error: 'Chat request failed' },
+      {
+        ok: false,
+        error: message,
+      },
       { status: 500 },
     );
   }

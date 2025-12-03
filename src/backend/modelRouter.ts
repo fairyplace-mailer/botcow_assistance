@@ -1,4 +1,4 @@
-export type ModelId = 'gpt-4.1' | 'gpt-4.1-mini' | 'gpt-o3-mini';
+export type ModelId = 'gpt-4.1' | 'gpt-4.1-mini' | 'o3-mini';
 
 export interface ModelRoutingDecision {
   model: ModelId;

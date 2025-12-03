@@ -54,7 +54,7 @@ export function chooseModel(
   // 2) Точный reasoning / код / ошибки / стэктрейсы → gpt-o3-mini
   if (hasCodeFence || hasTsKeywords || hasStackTrace || hasRefactorWords) {
     return {
-      model: 'gpt-o3-mini',
+      model: 'o3-mini',
       reason: 'code-or-error-or-refactor',
     };
   }

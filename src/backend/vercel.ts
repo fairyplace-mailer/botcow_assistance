@@ -4,6 +4,8 @@ const token = process.env.VERCEL_TOKEN;
 const projectId = process.env.VERCEL_PROJECT_ID;
 const teamId = process.env.VERCEL_TEAM_ID;
 
+export type VercelTarget = 'production' | 'preview';
+
 if (!token) {
   throw new Error('VERCEL_TOKEN is not set');
 }
@@ -21,7 +23,10 @@ function withTeam(url: URL) {
   }
 }
 
-export async function getLatestDeployments(env: 'production' | 'preview' | 'all' = 'production') {
+export async function getLatestDeployments(
+  env: VercelTarget | 'all' = 'production',
+) {
+
   const url = new URL('/v6/deployments', VERCEL_API_BASE);
 
   if (projectId) {
@@ -34,7 +39,7 @@ export async function getLatestDeployments(env: 'production' | 'preview' | 'all'
   if (env === 'production') {
     url.searchParams.set('target', 'production');
   } else if (env === 'preview') {
-    url.searchParams.set('target', 'staging');
+    url.searchParams.set('target', 'preview');
   }
 
   const res = await fetch(url, { headers: buildHeaders() });
@@ -61,7 +66,11 @@ export async function getDeploymentStatus(deploymentId: string) {
   return res.json();
 }
 
-export async function triggerDeploy(projectIdOverride?: string, gitSha?: string) {
+export async function triggerDeploy(
+  projectIdOverride?: string,
+  gitSha?: string,
+  target: VercelTarget = 'production',
+) {
   const pid = projectIdOverride ?? projectId;
 
   if (!pid) {
@@ -74,7 +83,7 @@ export async function triggerDeploy(projectIdOverride?: string, gitSha?: string)
   const body: any = {
     name: pid,
     project: pid,
-    target: 'production',
+    target,
   };
 
   if (gitSha) {
@@ -99,7 +108,10 @@ export async function triggerDeploy(projectIdOverride?: string, gitSha?: string)
   return res.json();
 }
 
-export async function redeploy(deploymentId: string) {
+export async function redeploy(
+  deploymentId: string,
+  target: VercelTarget = 'production',
+) {
   if (!projectId) {
     throw new Error('VERCEL_PROJECT_ID is not set');
   }
@@ -113,7 +125,7 @@ export async function redeploy(deploymentId: string) {
     body: JSON.stringify({
       name: projectId,
       project: projectId,
-      target: 'production',
+      target,
       deploymentId,
     }),
   });

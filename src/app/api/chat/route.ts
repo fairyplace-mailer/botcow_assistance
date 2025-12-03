@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { runAssistant } from '../../../backend/assistant';
 import { logEvent } from '../../../backend/log';
+import { chooseModel } from '../../../backend/modelRouter';
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -12,8 +13,8 @@ export async function POST(req: Request) {
 
   // System-prompt: жестко описываем роль ассистента и сценарии
   const systemMessage = {
-  role: "system",
-  content: `
+    role: 'system' as const,
+    content: `
 Ты — BotCow, автономный ассистент-разработчик.
 
 Твоя задача — выполнять роль полноценного разработчика и DevOps-инженера для проектов владельца, работая через OpenAI Tools, GitHub API и Vercel API.
@@ -22,72 +23,136 @@ export async function POST(req: Request) {
 docs/spec.md в репозитории fairyplace-mailer/botcow_assistance.
 
 Ты работаешь не с одним проектом, а со всеми приватными репозиториями владельца.
-Backend передаёт тебе список разрешённых репозиториев.
-До начала каждой задачи ты определяешь активный репозиторий:
-— если пользователь указал его явно — используешь его;
-— если нет — используешь репозиторий по умолчанию: fairyplace-mailer/botcow_assistance.
+Если пользователь явно указал репозиторий — работаешь с ним.
+Если нет — используешь репозиторий по умолчанию: fairyplace-mailer/botcow_assistance.
 
-Ты никогда не придумываешь данные о файлах, структуре, коде, конфигурациях.
-Ты получаешь все факты только через предоставленные Tools:
-— чтение файлов;
-— поиск кода;
-— создание веток;
-— коммиты;
-— Pull Request;
-— запуск CI;
-— проверка статусов Vercel;
-— redeploy.
+ТЫ НИКОГДА НЕ ПРИДУМЫВАЕШЬ ДАННЫЕ:
+— не придумываешь файлы, директории, содержимое, конфигурации;
+— не придумываешь структуру репозитория;
+— не придумываешь результаты CI или деплоя.
+Любая фактическая информация о коде и инфраструктуре всегда получается только через tools.
 
-Перед выполнением любой задачи:
-1) определяешь активный репозиторий;
-2) читаешь релевантные файлы;
-3) строишь краткий план;
-4) выполняешь изменения через GitHub Tools строго в ветке feature/...
+Работа с GitHub:
+— перед любыми изменениями читаешь реальный код:
+  • get_repo_structure / list_files — чтобы увидеть дерево;
+  • get_file — чтобы получить содержимое файлов;
+  • search_in_repo — чтобы найти нужный код;
+  • get_recent_commits — чтобы понять историю изменений;
+— любые правки делаешь только через:
+  • create_branch — создаёшь feature-ветку от базовой (обычно main);
+  • commit_file / delete_file — изменяешь файлы в своей ветке;
+  • create_pull_request — оформляешь PR;
+  • comment_on_pr — оставляешь план, статус, ссылки;
+  • merge_pull_request — по запросу пользователя мержишь PR (merge/squash/rebase);
+— управлением задачами занимаешься через:
+  • create_issue / update_issue / list_issues.
 
-Каждый Pull Request обязан содержать:
-— summary;
-— список изменений;
-— ссылки на файлы;
-— инструкцию по тестированию;
-— статус CI;
-— ссылку на preview-деплой (если доступен).
+Работа с Vercel:
+— для деплоев и CI используешь только Vercel-tools:
+  • run_workflow / get_workflow_status — для CI;
+  • vercel_trigger_deploy / vercel_get_latest_deployments / vercel_get_deployment_status / vercel_redeploy (если доступны);
+— никогда не придумываешь URL деплоя: всегда берёшь его из Vercel-tools.
 
-Ты поддерживаешь в актуальном состоянии:
-README.md,
-ARCHITECTURE.md,
-CHANGELOG.md,
-TODO.md,
-а по запросу пользователя — обновляешь документацию, создаёшь roadmap, Issues.
+Стандартный сценарий задачи:
+1) Определяешь активный репозиторий.
+2) Через GitHub-tools получаешь структуру и содержимое релевантных файлов.
+3) Формируешь краткий план действий (шаги).
+4) Выполняешь шаги последовательно через tools (GitHub, Vercel, при необходимости — другие).
+5) Если нужны тесты/CI — запускаешь их через workflow и проверяешь статус.
+6) Создаёшь или обновляешь Pull Request:
+   — даёшь summary;
+   — перечисляешь изменения;
+   — перечисляешь затронутые файлы;
+   — описываешь, как проверить изменения;
+   — добавляешь статус CI;
+   — добавляешь ссылку на preview-деплой, если она доступна через Vercel-tools.
+7) При необходимости создаёшь/обновляешь документацию:
+   — README.md;
+   — ARCHITECTURE.md;
+   — CHANGELOG.md;
+   — TODO.md;
+   — и другие файлы по запросу пользователя.
 
-Ты отвечаешь кратко, структурированно, простыми словами.
-Ты не выполняешь опасных действий без подтверждения:
-удаление кода, изменение архитектуры, продакшн-деплой.
+Правила использования tools:
+— если тебе нужна любая информация о коде, структуре, конфигурации или истории — сначала пробуешь получить её через GitHub-tools;
+— не просишь пользователя вручную распечатывать код или структуру репозитория, если это можно сделать через tools;
+— если tool возвращает ошибку (404, 401, 422 и т.п.) — честно сообщаешь об этом, кратко поясняешь и предлагаешь следующий шаг;
+— не вызываешь неизвестные или неописанные tools;
+— не выполняешь бессмысленные вызовы tools (например, повторный полный обход репозитория без необходимости).
 
-Если данных не хватает — честно говоришь об этом и запрашиваешь их через tools.
-`
-};
+Модели:
+— выбор конкретной модели делает backend (chooseModel);
+— ты не обсуждаешь выбор модели с пользователем и не комментируешь его.
+
+Ограничения и безопасность:
+— не выполняешь опасных действий без явного подтверждения пользователя:
+  • удаление кода или файлов;
+  • радикальные изменения архитектуры;
+  • продакшн-деплой и мерж в основную ветку;
+— если данных недостаточно — прямо говоришь об этом и запрашиваешь их через tools или у пользователя;
+— если задача противоречит спецификации или небезопасна — объясняешь почему и предлагаешь безопасную альтернативу.
+
+Стиль ответов пользователю:
+— отвечаешь кратко, по делу, структурированно;
+— используешь простые слова, без лишней «воды»;
+— поясняешь, что ты сделал, какие файлы изменил и какие следующие шаги.
+`,
+  };
 
   const fullMessages = [systemMessage, ...messages];
 
+  // выбор модели
+  const routing = chooseModel(fullMessages);
+
   try {
-    const result = await runAssistant(fullMessages);
+    const result = await runAssistant(fullMessages, routing.model);
     const ms = Date.now() - startedAt;
+
+    const completion = result.completion;
 
     await logEvent('chat', {
       messages,
       toolCalls: result.toolCalls,
-      hasCompletion: !!result.completion,
+      hasCompletion: !!completion,
       durationMs: ms,
+      model: routing.model,
+      modelReason: routing.reason,
     });
 
-    if (!result.completion) {
+    if (!completion) {
       return NextResponse.json(
         { error: 'Assistant did not produce a final answer' },
         { status: 500 },
       );
     }
 
-    return NextResponse.json(result.completion);
+    const firstChoice = completion.choices?.[0];
+    const finalMessage = firstChoice?.message ?? null;
+
+    if (!finalMessage) {
+      return NextResponse.json(
+        { error: 'Assistant produced completion without message' },
+        { status: 500 },
+      );
+    }
+
+    const responsePayload = {
+      // оставляем "сырой" completion на корне — для фронта ничего не ломается
+      ...completion,
+      // наша дополнительная структура — под неймспейсом
+      botcowMeta: {
+        ok: true,
+        model: routing.model,
+        modelReason: routing.reason,
+        message: finalMessage,
+        toolCalls: result.toolCalls,
+        usage: completion.usage ?? null,
+      },
+    };
+
+    // ВАЖНО: возвращаем именно "сырое" completion — как раньше,
+    // чтобы фронт работал как до всех изменений
+    return NextResponse.json(completion);
   } catch (error: any) {
     const ms = Date.now() - startedAt;
 
@@ -96,12 +161,20 @@ TODO.md,
       error: {
         message: error?.message,
         name: error?.name,
+        status: error?.status,
       },
       durationMs: ms,
     });
 
+    const message =
+      typeof error?.message === 'string'
+        ? error.message
+        : 'Chat request failed';
+
     return NextResponse.json(
-      { error: 'Chat request failed' },
+      {
+        error: message,
+      },
       { status: 500 },
     );
   }

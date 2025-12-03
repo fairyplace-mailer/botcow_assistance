@@ -1,16 +1,23 @@
-import { saveLog } from './blob';
+import { appendToBlob, cleanupLogs } from "./blob-util";
 
-export async function logEvent(type: string, payload: Record<string, unknown>) {
+export async function logEvent(
+  type: string,
+  payload: Record<string, unknown>
+) {
   const now = new Date();
-  const date = now.toISOString().slice(0, 10);
-  const path = `logs/${date}/${type}-${now.getTime()}.json`;
-
-  const data = {
+  const line = JSON.stringify({
     type,
     timestamp: now.toISOString(),
     payload,
-  };
+  });
 
-  await saveLog(path, JSON.stringify(data));
+  const path = "logs/current.jsonl";
+
+  // 1. append
+  await appendToBlob(path, line);
+
+  // 2. cleanup: сохраняем только current.jsonl
+  await cleanupLogs("logs/", [path]);
+
   return { path };
 }

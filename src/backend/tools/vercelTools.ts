@@ -3,9 +3,8 @@ import {
   getDeploymentStatus,
   triggerDeploy,
   redeploy,
+  type VercelTarget,
 } from '../vercel';
-
-export type VercelTarget = 'production' | 'preview';
 
 export interface VercelGetLatestDeploymentsArgs {
   target: VercelTarget;
@@ -19,15 +18,94 @@ export interface VercelGetDeploymentStatusArgs {
 export interface VercelTriggerDeployArgs {
   project_id?: string;
   git_commit_sha?: string;
+  target?: VercelTarget;
 }
 
 export interface VercelRedeployArgs {
   deployment_id: string;
+  target?: VercelTarget;
+}
+
+export interface NormalizedVercelDeployment {
+  id: string;
+  url: string | null;
+  state: string | null;
+  readyState: string | null;
+  createdAt: number | null;
+  target: string | null;
+  name: string | null;
+  projectId: string | null;
+  inspectorUrl: string | null;
+  meta: Record<string, unknown> | null;
+}
+
+function normalizeDeployment(raw: any): NormalizedVercelDeployment {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      id: '',
+      url: null,
+      state: null,
+      readyState: null,
+      createdAt: null,
+      target: null,
+      name: null,
+      projectId: null,
+      inspectorUrl: null,
+      meta: null,
+    };
+  }
+
+  const id =
+    (typeof raw.id === 'string' && raw.id) ||
+    (typeof raw.uid === 'string' && raw.uid) ||
+    '';
+
+  const url = typeof raw.url === 'string' ? raw.url : null;
+
+  const createdAt =
+    (typeof raw.createdAt === 'number' && raw.createdAt) ||
+    (typeof raw.created === 'number' && raw.created) ||
+    null;
+
+  const state =
+    (typeof raw.state === 'string' && raw.state) ||
+    (typeof raw.status === 'string' && raw.status) ||
+    null;
+
+  const readyState =
+    (typeof raw.readyState === 'string' && raw.readyState) || state;
+
+  const target = typeof raw.target === 'string' ? raw.target : null;
+
+  const name = typeof raw.name === 'string' ? raw.name : null;
+
+  const projectId =
+    typeof raw.projectId === 'string' ? raw.projectId : null;
+
+  const inspectorUrl =
+    typeof raw.inspectorUrl === 'string' ? raw.inspectorUrl : null;
+
+  const meta =
+    raw.meta && typeof raw.meta === 'object'
+      ? (raw.meta as Record<string, unknown>)
+      : null;
+
+  return {
+    id,
+    url,
+    state,
+    readyState,
+    createdAt,
+    target,
+    name,
+    projectId,
+    inspectorUrl,
+    meta,
+  };
 }
 
 /**
  * JSON-схемы tools для OpenAI (function calling).
- * Подключим их позже в общем списке tools ассистента.
  */
 export const vercelToolsSchemas = [
   {
@@ -74,7 +152,7 @@ export const vercelToolsSchemas = [
     function: {
       name: 'vercel_trigger_deploy',
       description:
-        'Запустить новый деплой проекта на Vercel (опционально привязать к git-коммиту).',
+        'Запустить новый деплой проекта на Vercel (опционально привязать к git-коммиту и окружению).',
       parameters: {
         type: 'object',
         properties: {
@@ -88,6 +166,12 @@ export const vercelToolsSchemas = [
             description:
               'SHA git-коммита, который нужно задеплоить (используется для github-линков).',
           },
+          target: {
+            type: 'string',
+            enum: ['production', 'preview'],
+            description:
+              'Целевая среда деплоя. Если не указано, по умолчанию production.',
+          },
         },
       },
     },
@@ -96,13 +180,20 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_redeploy',
-      description: 'Пере-деплой готового деплоя по его deployment_id.',
+      description:
+        'Пере-деплой готового деплоя по его deployment_id (с возможностью указать окружение).',
       parameters: {
         type: 'object',
         properties: {
           deployment_id: {
             type: 'string',
             description: 'Идентификатор исходного деплоя в Vercel.',
+          },
+          target: {
+            type: 'string',
+            enum: ['production', 'preview'],
+            description:
+              'Целевая среда деплоя. Если не указано, по умолчанию production.',
           },
         },
         required: ['deployment_id'],
@@ -115,29 +206,59 @@ export const vercelToolsSchemas = [
  * Хендлеры tools — их будем дергать из общего router-а tools.
  */
 export const vercelToolHandlers = {
-  async vercel_get_latest_deployments(args: VercelGetLatestDeploymentsArgs) {
+  async vercel_get_latest_deployments(
+    args: VercelGetLatestDeploymentsArgs,
+  ) {
     const limit = args.limit ?? 5;
-    const env =
-      args.target === 'preview'
-        ? ('preview' as const)
-        : ('production' as const);
+    const env: VercelTarget =
+      args.target === 'preview' ? 'preview' : 'production';
 
     const data = await getLatestDeployments(env);
-    if (Array.isArray((data as any).deployments)) {
-      (data as any).deployments = (data as any).deployments.slice(0, limit);
-    }
-    return data;
+
+    const deploymentsRaw = Array.isArray((data as any).deployments)
+      ? (data as any).deployments
+      : [];
+
+    const deployments = deploymentsRaw
+      .slice(0, limit)
+      .map((d: any) => normalizeDeployment(d));
+
+    const pagination =
+      (data as any).pagination && typeof (data as any).pagination === 'object'
+        ? (data as any).pagination
+        : undefined;
+
+    return {
+      target: env,
+      deployments,
+      ...(pagination ? { pagination } : {}),
+    };
   },
 
-  async vercel_get_deployment_status(args: VercelGetDeploymentStatusArgs) {
-    return getDeploymentStatus(args.deployment_id);
+  async vercel_get_deployment_status(
+    args: VercelGetDeploymentStatusArgs,
+  ) {
+    const raw = await getDeploymentStatus(args.deployment_id);
+    return normalizeDeployment(raw as any);
   },
 
   async vercel_trigger_deploy(args: VercelTriggerDeployArgs) {
-    return triggerDeploy(args.project_id, args.git_commit_sha);
+    const target: VercelTarget =
+      args.target === 'preview' ? 'preview' : 'production';
+
+    const raw = await triggerDeploy(
+      args.project_id,
+      args.git_commit_sha,
+      target,
+    );
+    return normalizeDeployment(raw as any);
   },
 
   async vercel_redeploy(args: VercelRedeployArgs) {
-    return redeploy(args.deployment_id);
+    const target: VercelTarget =
+      args.target === 'preview' ? 'preview' : 'production';
+
+    const raw = await redeploy(args.deployment_id, target);
+    return normalizeDeployment(raw as any);
   },
 };

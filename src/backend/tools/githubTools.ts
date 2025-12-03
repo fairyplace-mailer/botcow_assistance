@@ -6,6 +6,7 @@ import {
   mergePullRequest,
   runWorkflow,
   getWorkflowStatus,
+  commentOnPullRequest,
 } from '../github';
 
 export const githubToolsSchemas = [
@@ -51,7 +52,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['branchName'],
@@ -85,7 +87,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['path', 'content', 'message', 'branch'],
@@ -119,10 +122,37 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['title', 'head'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_comment_on_pull_request',
+      description: 'Оставить комментарий в Pull Request по номеру.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pull_number: {
+            type: 'number',
+            description: 'Номер PR.',
+          },
+          body: {
+            type: 'string',
+            description: 'Текст комментария (markdown).',
+          },
+          repo: {
+            type: 'string',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+          },
+        },
+        required: ['pull_number', 'body'],
       },
     },
   },
@@ -140,7 +170,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['pull_number'],
@@ -166,7 +197,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REПО.',
           },
           inputs: {
             type: 'object',
@@ -191,7 +223,8 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+            description:
+              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['run_id'],
@@ -238,6 +271,14 @@ export const githubToolHandlers = {
     repo?: string;
   }) {
     return createPullRequest(args);
+  },
+
+  async github_comment_on_pull_request(args: {
+    pull_number: number;
+    body: string;
+    repo?: string;
+  }) {
+    return commentOnPullRequest(args);
   },
 
   async github_merge_pull_request(args: {

@@ -32,6 +32,7 @@ interface AssistantResult {
  */
 export async function runAssistant(
   rawMessages: AssistantMessage[],
+  model: string,
 ): Promise<AssistantResult> {
   const maxToolLoops = 10;
 
@@ -40,12 +41,12 @@ export async function runAssistant(
   let lastCompletion: ChatCompletion | null = null;
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const completion: ChatCompletion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages,
-      tools: toolSchemas as ChatCompletionTool[],
-      tool_choice: 'auto',
-    });
+const completion: ChatCompletion = await openai.chat.completions.create({
+  model,
+  messages,
+  tools: [...toolSchemas] as ChatCompletionTool[],
+  tool_choice: 'auto',
+});
 
     lastCompletion = completion;
 
@@ -68,10 +69,29 @@ export async function runAssistant(
     const toolResultMessages: AssistantMessage[] = [];
 
     for (const tc of toolCalls) {
-      const name = tc.function?.name ?? '';
+      // Обрабатываем только function-tool calls, custom пропускаем
+      if (tc.type !== 'function') {
+        toolCallsLog.push({
+          tool_call_id: tc.id,
+          name: tc.type,
+          ok: false,
+          error: 'Unsupported tool call type',
+        });
+
+        toolResultMessages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          name: tc.type,
+          content: JSON.stringify({ error: 'Unsupported tool call type' }),
+        } as AssistantMessage);
+
+        continue;
+      }
+
+      const name = tc.function.name ?? '';
       const tool_call_id = tc.id;
 
-      const rawArgs = tc.function?.arguments ?? '{}';
+      const rawArgs = tc.function.arguments ?? '{}';
 
       let args: unknown;
       try {
@@ -101,7 +121,7 @@ export async function runAssistant(
       }
 
       try {
-        const result = await handler(args as Record<string, unknown>);
+        const result = await (handler as (a: unknown) => Promise<unknown> | unknown)(args as unknown);
 
         toolCallsLog.push({ tool_call_id, name, ok: true });
 

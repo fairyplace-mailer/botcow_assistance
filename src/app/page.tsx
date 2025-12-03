@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import type { FormEvent, ChangeEvent } from 'react';
 
+// ... (оставим без изменений импорты и типы)
+
 type Role = 'user' | 'assistant';
 
 interface Message {
@@ -11,13 +13,12 @@ interface Message {
 }
 
 export default function Page() {
-  // чат
+  // состояния и useState оставим как есть, дополнительно добавим индикацию загрузок и ошибки
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
 
-  // файл / commit
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePath, setFilePath] = useState('');
   const [commitMessage, setCommitMessage] = useState('');
@@ -26,13 +27,11 @@ export default function Page() {
   const [commitResult, setCommitResult] = useState<string | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
 
-  // просмотр файла
   const [viewPath, setViewPath] = useState('');
   const [viewLoading, setViewLoading] = useState(false);
   const [viewContent, setViewContent] = useState<string | null>(null);
   const [viewError, setViewError] = useState<string | null>(null);
 
-  // workflow
   const [workflowId, setWorkflowId] = useState('ci.yml');
   const [workflowRef, setWorkflowRef] = useState('main');
   const [workflowRunId, setWorkflowRunId] = useState('');
@@ -189,9 +188,7 @@ export default function Page() {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      setWorkflowMessage(
-        `Workflow запущен (id=${data.result?.workflow_id ?? workflowId}, ref=${data.result?.ref ?? workflowRef})`,
-      );
+      setWorkflowMessage(`Workflow запущен (id=${data.result?.workflow_id ?? workflowId}, ref=${data.result?.ref ?? workflowRef})`);
     } catch (err: any) {
       setWorkflowError(err?.message || 'Run workflow failed');
     } finally {
@@ -250,7 +247,7 @@ export default function Page() {
           gap: 16,
         }}
       >
-        {/* Левая колонка: чат + предпросмотр файла */}
+        {/* Левая колонка: чат + просмотр файла */}
         <section
           style={{
             display: 'flex',
@@ -312,8 +309,7 @@ export default function Page() {
                       display: 'inline-block',
                       padding: '6px 10px',
                       borderRadius: 6,
-                      background:
-                        m.role === 'user' ? '#d0ebff' : '#e9ecef',
+                      background: m.role === 'user' ? '#d0ebff' : '#e9ecef',
                       whiteSpace: 'pre-wrap',
                       maxWidth: '100%',
                     }}
@@ -339,10 +335,7 @@ export default function Page() {
               </div>
             )}
 
-            <form
-              onSubmit={handleChatSubmit}
-              style={{ display: 'flex', gap: 8 }}
-            >
+            <form onSubmit={handleChatSubmit} style={{ display: 'flex', gap: 8 }}>
               <input
                 type="text"
                 value={input}
@@ -375,7 +368,7 @@ export default function Page() {
             </form>
           </div>
 
-          {/* Окно предпросмотра файла */}
+          {/* Окно просмотра файла */}
           <div
             style={{
               padding: 12,
@@ -454,11 +447,7 @@ export default function Page() {
 
         {/* Правая колонка: загрузка файлов, GitHub действия, workflow */}
         <section
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-          }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
         >
           {/* Загрузка файла и commit */}
           <div
@@ -472,12 +461,7 @@ export default function Page() {
               gap: 8,
             }}
           >
-            <h2
-              style={{
-                fontSize: 16,
-                margin: 0,
-              }}
-            >
+            <h2 style={{ fontSize: 16, margin: 0 }}>
               Загрузка файла → GitHub commit
             </h2>
 
@@ -488,12 +472,7 @@ export default function Page() {
               value={filePath}
               onChange={(e) => setFilePath(e.target.value)}
               placeholder="Путь в репо (например, docs/ARCHITECTURE.md)"
-              style={{
-                padding: 6,
-                borderRadius: 4,
-                border: '1px solid #ccc',
-                fontSize: 13,
-              }}
+              style={{ padding: 6, borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}
             />
 
             <input
@@ -501,12 +480,7 @@ export default function Page() {
               value={commitMessage}
               onChange={(e) => setCommitMessage(e.target.value)}
               placeholder="Commit message"
-              style={{
-                padding: 6,
-                borderRadius: 4,
-                border: '1px solid #ccc',
-                fontSize: 13,
-              }}
+              style={{ padding: 6, borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}
             />
 
             <input
@@ -514,12 +488,7 @@ export default function Page() {
               value={branchName}
               onChange={(e) => setBranchName(e.target.value)}
               placeholder="Ветка (например, botcow-assistant)"
-              style={{
-                padding: 6,
-                borderRadius: 4,
-                border: '1px solid #ccc',
-                fontSize: 13,
-              }}
+              style={{ padding: 6, borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}
             />
 
             <button
@@ -541,30 +510,11 @@ export default function Page() {
               {commitLoading ? 'Коммитим…' : 'Отправить коммит'}
             </button>
 
-            {commitError && (
-              <div
-                style={{
-                  color: 'red',
-                  fontSize: 13,
-                }}
-              >
-                Ошибка: {commitError}
-              </div>
-            )}
-
-            {commitResult && (
-              <div
-                style={{
-                  color: 'green',
-                  fontSize: 13,
-                }}
-              >
-                {commitResult}
-              </div>
-            )}
+            {commitError && <div style={{ color: 'red', fontSize: 13 }}>{commitError}</div>}
+            {commitResult && <div style={{ color: 'green', fontSize: 13 }}>{commitResult}</div>}
           </div>
 
-          {/* Workflow */}
+          {/* GitHub Actions workflow */}
           <div
             style={{
               padding: 12,
@@ -576,26 +526,14 @@ export default function Page() {
               gap: 8,
             }}
           >
-            <h2
-              style={{
-                fontSize: 16,
-                margin: 0,
-              }}
-            >
-              GitHub Actions workflow
-            </h2>
+            <h2 style={{ fontSize: 16, margin: 0 }}>GitHub Actions workflow</h2>
 
             <input
               type="text"
               value={workflowId}
               onChange={(e) => setWorkflowId(e.target.value)}
               placeholder="workflow_id (например, ci.yml)"
-              style={{
-                padding: 6,
-                borderRadius: 4,
-                border: '1px solid #ccc',
-                fontSize: 13,
-              }}
+              style={{ padding: 6, borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}
             />
 
             <input
@@ -603,12 +541,7 @@ export default function Page() {
               value={workflowRef}
               onChange={(e) => setWorkflowRef(e.target.value)}
               placeholder="ref (ветка, по умолчанию main)"
-              style={{
-                padding: 6,
-                borderRadius: 4,
-                border: '1px solid #ccc',
-                fontSize: 13,
-              }}
+              style={{ padding: 6, borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}
             />
 
             <button
@@ -635,12 +568,7 @@ export default function Page() {
               value={workflowRunId}
               onChange={(e) => setWorkflowRunId(e.target.value)}
               placeholder="run_id для проверки статуса"
-              style={{
-                padding: 6,
-                borderRadius: 4,
-                border: '1px solid #ccc',
-                fontSize: 13,
-              }}
+              style={{ padding: 6, borderRadius: 4, border: '1px solid #ccc', fontSize: 13 }}
             />
 
             <button
@@ -662,27 +590,8 @@ export default function Page() {
               {workflowStatusLoading ? 'Проверяем…' : 'Проверить статус'}
             </button>
 
-            {workflowError && (
-              <div
-                style={{
-                  color: 'red',
-                  fontSize: 13,
-                }}
-              >
-                Ошибка: {workflowError}
-              </div>
-            )}
-
-            {workflowMessage && (
-              <div
-                style={{
-                  color: '#065f46',
-                  fontSize: 13,
-                }}
-              >
-                {workflowMessage}
-              </div>
-            )}
+            {workflowError && <div style={{ color: 'red', fontSize: 13 }}>{workflowError}</div>}
+            {workflowMessage && <div style={{ color: '#065f46', fontSize: 13 }}>{workflowMessage}</div>}
           </div>
         </section>
       </div>

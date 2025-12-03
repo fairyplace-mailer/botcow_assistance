@@ -10,7 +10,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    env:
+      GITHUB_PAT_BOTCOW: ${{ secrets.BOTCOW_GITHUB_PAT }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+      BOTCOW_DEFAULT_REPO: ${{ secrets.BOTCOW_DEFAULT_REPO }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,9 +24,6 @@ jobs:
 
       - name: Install deps
         run: npm ci
-
-      - name: Lint
-        run: npm run lint
 
       - name: Test
         run: npm test

@@ -23,13 +23,27 @@ export function parseRepo(repo: string = defaultRepo as string) {
   return { owner, repo: repoName };
 }
 
-export async function getFile(path: string, repo: string = defaultRepo as string) {
+/**
+ * Получить содержимое файла (UTF-8 текст) по пути.
+ */
+export async function getFile(
+  path: string,
+  repo: string = defaultRepo as string,
+  ref?: string,
+) {
   const { owner, repo: repoName } = parseRepo(repo);
-  const res = await github.repos.getContent({
+
+  const params: Parameters<typeof github.repos.getContent>[0] = {
     owner,
     repo: repoName,
     path,
-  });
+  };
+
+  if (ref) {
+    (params as any).ref = ref;
+  }
+
+  const res = await github.repos.getContent(params);
 
   if (!('content' in res.data)) {
     throw new Error(`Not a file: ${path}`);
@@ -39,6 +53,168 @@ export async function getFile(path: string, repo: string = defaultRepo as string
   return raw;
 }
 
+/**
+ * Получить структуру репозитория (дерево файлов).
+ * Использует git tree с recursive=1.
+ */
+export async function getRepoStructure(options?: {
+  repo?: string;
+  ref?: string; // ветка или SHA, по умолчанию default_branch
+  pathPrefix?: string; // фильтр по префиксу пути
+}) {
+  const repoName = options?.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+
+  let ref = options?.ref;
+
+  if (!ref) {
+    const repoInfo = await github.repos.get({ owner, repo });
+    ref = repoInfo.data.default_branch || 'main';
+  }
+
+  const treeRes = await github.git.getTree({
+    owner,
+    repo,
+    tree_sha: ref,
+    recursive: '1',
+  });
+
+  const prefix = options?.pathPrefix?.replace(/\/+$/, '');
+  const items = (treeRes.data.tree || [])
+    .filter((item) => !!item.path)
+    .filter((item) =>
+      prefix ? item.path!.startsWith(`${prefix}/`) || item.path === prefix : true,
+    )
+    .map((item) => ({
+      path: item.path!,
+      type: item.type, // 'blob' | 'tree' | ...
+      mode: item.mode,
+      size: item.size,
+      sha: item.sha,
+      url: item.url,
+    }));
+
+  return {
+    ref,
+    items,
+  };
+}
+
+/**
+ * Список файлов/папок по указанному пути (один уровень).
+ */
+export async function listFiles(options?: {
+  path?: string;
+  repo?: string;
+  ref?: string;
+}) {
+  const repoName = options?.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+  const path = options?.path ?? '';
+
+  const params: Parameters<typeof github.repos.getContent>[0] = {
+    owner,
+    repo,
+    path,
+  };
+
+  if (options?.ref) {
+    (params as any).ref = options.ref;
+  }
+
+  const res = await github.repos.getContent(params);
+
+  if (Array.isArray(res.data)) {
+    return res.data.map((item) => ({
+      path: item.path,
+      name: item.name,
+      type: item.type, // 'file' | 'dir'
+      size: item.size,
+      sha: item.sha,
+    }));
+  }
+
+  // если вернулся файл — оборачиваем в массив
+  return [
+    {
+      path: res.data.path,
+      name: res.data.name,
+      type: res.data.type,
+      size: 'size' in res.data ? res.data.size : undefined,
+      sha: 'sha' in res.data ? res.data.sha : undefined,
+    },
+  ];
+}
+
+/**
+ * Поиск по коду в репозитории.
+ */
+export async function searchInRepo(options: {
+  query: string;
+  path?: string;
+  repo?: string;
+  per_page?: number;
+}) {
+  const repoName = options.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+  const per_page = options.per_page ?? 20;
+
+  let q = `${options.query} repo:${owner}/${repo}`;
+  if (options.path) {
+    q += ` path:${options.path}`;
+  }
+
+  const res = await github.search.code({
+    q,
+    per_page,
+  });
+
+  return res.data.items.map((item) => ({
+    path: item.path,
+    repository: item.repository.full_name,
+    score: item.score,
+    url: item.html_url,
+  }));
+}
+
+/**
+ * Последние коммиты по ветке.
+ */
+export async function getRecentCommits(options?: {
+  branch?: string;
+  limit?: number;
+  repo?: string;
+}) {
+  const repoName = options?.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+  const branch = options?.branch;
+  const limit = options?.limit ?? 20;
+
+  const params: Parameters<typeof github.repos.listCommits>[0] = {
+    owner,
+    repo,
+    per_page: limit,
+  };
+
+  if (branch) {
+    (params as any).sha = branch;
+  }
+
+  const res = await github.repos.listCommits(params);
+
+  return res.data.map((commit) => ({
+    sha: commit.sha,
+    author: commit.commit.author?.name,
+    email: commit.commit.author?.email,
+    date: commit.commit.author?.date,
+    message: commit.commit.message,
+    url: commit.html_url,
+  }));
+}
+
+/**
+ * Создать ветку от baseBranch.
+ */
 export async function createBranch(
   branchName: string,
   baseBranch: string = 'main',
@@ -56,10 +232,10 @@ export async function createBranch(
 
   try {
     const ref = await github.git.createRef({
-      owner,
-      repo: repoName,
-      ref: `refs/heads/${branchName}`,
-      sha,
+    owner,
+    repo: repoName,
+    ref: `refs/heads/${branchName}`,
+    sha,
     });
     return ref.data;
   } catch (error: any) {
@@ -70,6 +246,9 @@ export async function createBranch(
   }
 }
 
+/**
+ * Создать или обновить файл (commit).
+ */
 export async function commitFile(options: {
   path: string;
   content: string;
@@ -102,7 +281,15 @@ export async function commitFile(options: {
 
   const encoded = Buffer.from(content, 'utf8').toString('base64');
 
-  const params: Parameters<typeof github.repos.createOrUpdateFileContents>[0] = {
+  const params: {
+    owner: string;
+    repo: string;
+    path: string;
+    message: string;
+    content: string;
+    branch: string;
+    sha?: string;
+  } = {
     owner,
     repo,
     path,
@@ -112,13 +299,55 @@ export async function commitFile(options: {
   };
 
   if (sha) {
-    (params as any).sha = sha;
+    params.sha = sha;
   }
 
   const result = await github.repos.createOrUpdateFileContents(params);
   return result.data;
 }
 
+/**
+ * Удалить файл.
+ */
+export async function deleteFile(options: {
+  path: string;
+  message: string;
+  branch: string;
+  repo?: string;
+}) {
+  const repoName = options.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+
+  const { path, message, branch } = options;
+
+  const res = await github.repos.getContent({
+    owner,
+    repo,
+    path,
+    ref: branch,
+  });
+
+  if (!('sha' in res.data)) {
+    throw new Error(`Cannot delete non-file content: ${path}`);
+  }
+
+  const sha = (res.data as any).sha as string;
+
+  const result = await github.repos.deleteFile({
+    owner,
+    repo,
+    path,
+    message,
+    branch,
+    sha,
+  });
+
+  return result.data;
+}
+
+/**
+ * Создать Pull Request.
+ */
 export async function createPullRequest(options: {
   title: string;
   head: string;
@@ -131,7 +360,14 @@ export async function createPullRequest(options: {
   const repoName = options.repo ?? (defaultRepo as string);
   const { owner, repo } = parseRepo(repoName);
 
-  const params: Parameters<typeof github.pulls.create>[0] = {
+  const params: {
+    owner: string;
+    repo: string;
+    title: string;
+    head: string;
+    base: string;
+    body?: string;
+  } = {
     owner,
     repo,
     title,
@@ -140,30 +376,58 @@ export async function createPullRequest(options: {
   };
 
   if (options.body) {
-    (params as any).body = options.body;
+    params.body = options.body;
   }
 
   const pr = await github.pulls.create(params);
   return pr.data;
 }
 
-export async function mergePullRequest(options: {
+/**
+ * Оставить комментарий в PR (issues API).
+ */
+export async function commentOnPullRequest(options: {
   pull_number: number;
+  body: string;
   repo?: string;
 }) {
   const repoName = options.repo ?? (defaultRepo as string);
   const { owner, repo } = parseRepo(repoName);
 
-  const result = await github.pulls.merge({
+  const res = await github.issues.createComment({
+    owner,
+    repo,
+    issue_number: options.pull_number,
+    body: options.body,
+  });
+
+  return res.data;
+}
+
+/**
+ * Замёржить Pull Request выбранным методом.
+ */
+export async function mergePullRequest(options: {
+  pull_number: number;
+  method?: 'merge' | 'squash' | 'rebase';
+  repo?: string;
+}) {
+  const repoName = options.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+
+  const res = await github.pulls.merge({
     owner,
     repo,
     pull_number: options.pull_number,
+    merge_method: options.method ?? 'merge',
   });
 
-  return result.data;
+  return res.data;
 }
 
-// запустить workflow (по умолчанию ci.yml на main)
+/**
+ * Запустить workflow (по умолчанию ci.yml на main).
+ */
 export async function runWorkflow(options: {
   workflow_id?: string;
   ref?: string;
@@ -175,7 +439,13 @@ export async function runWorkflow(options: {
   const repoName = options.repo ?? (defaultRepo as string);
   const { owner, repo } = parseRepo(repoName);
 
-  const params: Parameters<typeof github.actions.createWorkflowDispatch>[0] = {
+  const params: {
+    owner: string;
+    repo: string;
+    workflow_id: string;
+    ref: string;
+    inputs?: Record<string, string>;
+  } = {
     owner,
     repo,
     workflow_id,
@@ -183,7 +453,7 @@ export async function runWorkflow(options: {
   };
 
   if (options.inputs) {
-    (params as any).inputs = options.inputs as { [key: string]: unknown };
+    params.inputs = options.inputs;
   }
 
   await github.actions.createWorkflowDispatch(params);
@@ -191,7 +461,9 @@ export async function runWorkflow(options: {
   return { dispatched: true, workflow_id, ref };
 }
 
-// получить статус конкретного запуска CI
+/**
+ * Получить статус конкретного запуска CI.
+ */
 export async function getWorkflowStatus(options: {
   run_id: number;
   repo?: string;
@@ -206,4 +478,114 @@ export async function getWorkflowStatus(options: {
   });
 
   return run.data;
+}
+
+/**
+ * Создать Issue.
+ */
+export async function createIssue(options: {
+  title: string;
+  body?: string;
+  labels?: string[];
+  assignees?: string[];
+  repo?: string;
+}) {
+  const repoName = options.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+
+  const params: any = {
+    owner,
+    repo,
+    title: options.title,
+  };
+
+  if (options.body !== undefined) {
+    params.body = options.body;
+  }
+  if (options.labels !== undefined) {
+    params.labels = options.labels;
+  }
+  if (options.assignees !== undefined) {
+    params.assignees = options.assignees;
+  }
+
+  const res = await github.issues.create(params);
+  return res.data;
+}
+
+/**
+ * Обновить Issue.
+ */
+export async function updateIssue(options: {
+  issue_number: number;
+  title?: string;
+  body?: string;
+  state?: 'open' | 'closed';
+  labels?: string[];
+  assignees?: string[];
+  repo?: string;
+}) {
+  const repoName = options.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+
+  const params: any = {
+    owner,
+    repo,
+    issue_number: options.issue_number,
+  };
+
+  if (options.title !== undefined) {
+    params.title = options.title;
+  }
+  if (options.body !== undefined) {
+    params.body = options.body;
+  }
+  if (options.state !== undefined) {
+    params.state = options.state;
+  }
+  if (options.labels !== undefined) {
+    params.labels = options.labels;
+  }
+  if (options.assignees !== undefined) {
+    params.assignees = options.assignees;
+  }
+
+  const res = await github.issues.update(params);
+  return res.data;
+}
+
+/**
+ * Список Issues по репозиторию.
+ */
+export async function listIssues(options?: {
+  state?: 'open' | 'closed' | 'all';
+  labels?: string[];
+  repo?: string;
+  per_page?: number;
+}) {
+  const repoName = options?.repo ?? (defaultRepo as string);
+  const { owner, repo } = parseRepo(repoName);
+
+  const params: any = {
+    owner,
+    repo,
+    state: options?.state ?? 'open',
+    per_page: options?.per_page ?? 30,
+  };
+
+  if (options?.labels !== undefined) {
+    params.labels = options.labels;
+  }
+
+  const res = await github.issues.listForRepo(params);
+
+  return res.data.map((issue) => ({
+    number: issue.number,
+    title: issue.title,
+    state: issue.state,
+    labels: issue.labels
+      ?.map((l) => (typeof l === 'string' ? l : l.name))
+      .filter(Boolean),
+    url: issue.html_url,
+  }));
 }

@@ -2,7 +2,7 @@
 
 export type ModelId =
   | 'gpt-5.1'
-  | 'gpt-5.1-mini'
+  | 'gpt-5-mini'
   | 'gpt-5.1-codex-mini'
   | 'o3-mini';
 
@@ -12,14 +12,13 @@ export interface ModelRoutingDecision {
 }
 
 /**
- * Роутинг модели по содержимому диалога.
- * Работает на уровне backend, до вызова runAssistant.
+ * Роутер моделей по содержимому диалога.
  *
  * Идея:
- * - o3-mini: сложный reasoning, баги, ревью кода, стэктрейсы.
- * - gpt-5.1-codex-mini: генерация/мелкий рефактор кода.
- * - gpt-5.1: архитектура, большие/сложные контексты.
- * - gpt-5.1-mini: всё короткое, статусы, PM, "болтовня".
+ * - o3-mini: сложный reasoning, баги, ревью кода, большие кодовые контексты.
+ * - gpt-5.1: архитектура, большие/сложные обсуждения, где важна «голова».
+ * - gpt-5.1-codex-mini: генерация и мелкий рефактор кода.
+ * - gpt-5-mini: обычные короткие запросы, PM, статусы, «болтовня».
  */
 export function chooseModel(
   messages: Array<{ role: string; content: unknown }>,
@@ -30,7 +29,7 @@ export function chooseModel(
   // Нет текста пользователя → дешёвый дефолт
   if (!text) {
     return {
-      model: 'gpt-5.1-mini',
+      model: 'gpt-5-mini',
       reason: 'no-user-text',
     };
   }
@@ -70,7 +69,7 @@ export function chooseModel(
     flags.hasDiff ||
     flags.hasRefactorWords
   ) {
-    // Если очень большой блок кода, лучше отдать в o3-mini
+    // Если очень много кода/контекста, лучше o3-mini
     if (longContext || manyMessages) {
       return {
         model: 'o3-mini',
@@ -84,18 +83,18 @@ export function chooseModel(
     };
   }
 
-  // 4) PM / статусы / деплой / Vercel → gpt-5.1-mini
+  // 4) PM / статусы / деплой / Vercel → gpt-5-mini
   if (flags.hasPmWords && length < 2000) {
     return {
-      model: 'gpt-5.1-mini',
+      model: 'gpt-5-mini',
       reason: 'pm-or-status-or-deploy',
     };
   }
 
-  // 5) Обычные короткие/средние запросы → gpt-5.1-mini
+  // 5) Обычные короткие/средние запросы → gpt-5-mini
   if (length < 1500 && !manyMessages) {
     return {
-      model: 'gpt-5.1-mini',
+      model: 'gpt-5-mini',
       reason: 'short-or-medium-request',
     };
   }
@@ -177,7 +176,7 @@ function detectFlags(text: string) {
     /рефактор|refactor|оптимизируй|оптимизация|почисти код|cleanup/i.test(text);
 
   const hasBugWords =
-    /bug|баг|ошибк|сломалось|falling|crash|crashed|падает/i.test(text);
+    /bug|баг|ошибк|сломалось|crash|crashed|падает|falling/i.test(text);
 
   const hasReviewWords =
     /review|ревью|code review|проверь код|посмотри дифф|посмотри diff/i.test(
@@ -189,10 +188,10 @@ function detectFlags(text: string) {
     /```diff/.test(text);
 
   const hasPmWords =
-    /issue|ticket|task|задач[аеи]|project board|kanban|kanban board|roadmap|эпик|epic|статус|status|update status|progress/i.test(
+    /issue|ticket|task|задач[аеи]|project board|kanban|roadmap|эпик|epic|статус|status|update status|progress/i.test(
       lower,
     ) ||
-    /deploy|деплой|redeploy|rollback|roll back|верцел|vercel|лог деплоя|deployment log/i.test(
+    /deploy|деплой|redeploy|rollback|roll back|vercel|верцел|лог деплоя|deployment log/i.test(
       lower,
     );
 

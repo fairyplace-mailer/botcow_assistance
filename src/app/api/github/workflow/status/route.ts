@@ -18,17 +18,23 @@ export async function POST(req: Request) {
     }
     // if placeholder (-1) then we need to try to resolve latest run
     if (last.run_id === -1) {
-      // try to find latest workflow run for the same ref
       try {
-        const runsRes = await (await import('../../../../../backend/github')).github.actions.listWorkflowRunsForRepo({
-          owner: (repo.split('/')[0]),
-          repo: (repo.split('/')[1]),
-          per_page: 5,
+        const backend = await import('../../../../../backend/github');
+        const { github, parseRepo } = backend;
+        const parsed = parseRepo(repo);
+
+        const runsRes = await github.actions.listWorkflowRunsForRepo({
+          owner: parsed.owner,
+          repo: parsed.repo,
+          workflow_id: last.workflow_id,
+          branch: last.ref,
+          event: 'workflow_dispatch',
+          per_page: 1,
         });
 
         const runs = runsRes.data.workflow_runs || [];
-        const match = runs.find((r: any) => r.head_branch === last.ref || r.head_sha === last.ref);
-        if (match) {
+        if (runs.length > 0) {
+          const match = runs[0];
           await saveRun(repo, {
             run_id: match.id,
             workflow_id: last.workflow_id,

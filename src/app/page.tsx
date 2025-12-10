@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useLayoutEffect } from 'react';
 import type { FormEvent, ChangeEvent } from 'react';
 
 // ... (оставим без изменений импорты и типы)
@@ -39,6 +39,47 @@ export default function Page() {
   const [workflowStatusLoading, setWorkflowStatusLoading] = useState(false);
   const [workflowMessage, setWorkflowMessage] = useState<string | null>(null);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
+
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+  function getMaxHeight(): number {
+    const ta = taRef.current;
+    if (!ta || typeof window === 'undefined') return 0;
+    const style = window.getComputedStyle(ta);
+    // try to get numeric line-height, fallback to font-size * 1.2
+    const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2) || 18;
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    const paddingBottom = parseFloat(style.paddingBottom) || 0;
+    const borderTop = parseFloat(style.borderTopWidth) || 0;
+    const borderBottom = parseFloat(style.borderBottomWidth) || 0;
+    // max height equals 6 lines + vertical paddings and borders
+    return Math.round(lineHeight * 6 + paddingTop + paddingBottom + borderTop + borderBottom);
+  }
+
+  function adjustHeight() {
+    const ta = taRef.current;
+    if (!ta) return;
+    // reset to auto to measure scrollHeight correctly
+    ta.style.height = 'auto';
+    const maxH = getMaxHeight();
+    const newH = Math.min(ta.scrollHeight, maxH || ta.scrollHeight);
+    ta.style.height = `${newH}px`;
+    // if content exceeds max, keep scroll pinned to bottom
+    if (ta.scrollHeight > (maxH || Infinity)) {
+      ta.scrollTop = ta.scrollHeight;
+    }
+  }
+
+  useLayoutEffect(() => {
+    // adjust when input changes (including mount)
+    adjustHeight();
+    // also adjust on window resize as computed styles may change
+    function onResize() {
+      adjustHeight();
+    }
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [input]);
 
   async function handleChatSubmit(e: FormEvent) {
     e.preventDefault();
@@ -336,10 +377,12 @@ export default function Page() {
             )}
 
             <form onSubmit={handleChatSubmit} style={{ display: 'flex', gap: 8 }}>
-              <input
-                type="text"
+              <textarea
+                ref={taRef}
+                rows={1}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onInput={adjustHeight}
                 placeholder="Напиши запрос ассистенту..."
                 style={{
                   flex: 1,
@@ -347,6 +390,8 @@ export default function Page() {
                   borderRadius: 4,
                   border: '1px solid #ccc',
                   fontSize: 14,
+                  resize: 'none',
+                  overflow: 'auto',
                 }}
               />
               <button

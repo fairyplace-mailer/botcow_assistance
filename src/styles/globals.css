@@ -1,0 +1,91 @@
+:root{
+  /* Light theme */
+  --bg: #F7F7F5;
+  --muted: #EFEDE8;
+  --border: #D9D7D2;
+
+  --fg: #1C1C1A;
+  --muted-fg: #4A4A47;
+
+  --primary: #3DA4A1;
+  --primary-fg: #FFFFFF;
+  --secondary: #4E6E81;
+  --secondary-fg: #FFFFFF;
+  --accent: #C8794D;
+  --accent-fg: #FFFFFF;
+
+  --success: #3FAF72;
+  --warning: #EFB55A;
+  --error: #D95C4A;
+  --info: #5AA7C8;
+
+  /* semantic tokens */
+  --surface: #FFFFFF; /* card background */
+}
+
+html[data-theme="dark"]{
+  --bg: #181A1A;
+  --muted: #202322;
+  --border: #2A2D2C;
+
+  --fg: #EDEDEB;
+  --muted-fg: #C7C7C4;
+
+  --primary: #5CC6C3;
+  --primary-fg: #181A1A;
+  --secondary: #6F8FA3;
+  --secondary-fg: #181A1A;
+  --accent: #E0915E;
+  --accent-fg: #181A1A;
+
+  --success: #3FAF72;
+  --warning: #EFB55A;
+  --error: #D95C4A;
+  --info: #5AA7C8;
+
+  --surface: var(--muted);
+}
+
+/* Global reset and base styles */
+*{box-sizing:border-box}
+html,body,#root,#__next{height:100%}
+body{
+  margin:0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* Utility classes (small set used in app) */
+.container{
+  max-width:1200px;
+  margin:0 auto;
+}
+.card{
+  padding:12px;
+  border-radius:8px;
+  background:var(--surface);
+  border:1px solid var(--border);
+}
+
+.button{
+  padding:8px 12px;
+  border-radius:4px;
+  border:none;
+  cursor:pointer;
+  font-size:14px;
+}
+
+.button-primary{
+  background:var(--primary);
+  color:var(--primary-fg);
+}
+
+.button-secondary{
+  background:var(--secondary);
+  color:var(--secondary-fg);
+}
+
+.small-muted{ color: var(--muted-fg); font-size:13px }
+
+textarea{font-family:inherit}

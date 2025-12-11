@@ -501,11 +501,11 @@ export async function getWorkflowStatus(options: {
  * endpoint /actions/workflows/{workflow_id}/runs, иначе — /actions/runs.
  */
 export async function listWorkflowRunsForRepo(args: {
-  workflow_id?: string | null;
-  branch?: string | null;
-  repo?: string | null;
-  per_page?: number | null;
-  event?: string | null;
+  workflow_id?: string | null | undefined;
+  branch?: string | null | undefined;
+  repo?: string | null | undefined;
+  per_page?: number | null | undefined;
+  event?: string | null | undefined;
   status?:
     | 'waiting'
     | 'completed'
@@ -521,7 +521,8 @@ export async function listWorkflowRunsForRepo(args: {
     | 'queued'
     | 'requested'
     | 'pending'
-    | null;
+    | null
+    | undefined;
 }) {
   const { workflow_id, branch, repo, per_page, event, status } = args;
   const { owner, repo: defaultRepoName } = parseRepo(repo ?? (defaultRepo as string));

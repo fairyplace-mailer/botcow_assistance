@@ -237,7 +237,7 @@ export async function createBranch(
 ) {
   const baseRef = await github.git.getRef({
     owner,
-    repo: repoName,
+    repo: repo,
     ref: `heads/${baseBranch}`,
   });
 

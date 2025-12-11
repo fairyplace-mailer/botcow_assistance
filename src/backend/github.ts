@@ -234,8 +234,6 @@ export async function createBranch(
   baseBranch: string = 'main',
   repo: string = defaultRepo as string,
 ) {
-  const { owner, repo: repoName } = parseRepo(repo);
-
   const baseRef = await github.git.getRef({
     owner,
     repo: repoName,
@@ -504,8 +502,9 @@ export async function listWorkflowRunsForRepo(args: {
   repo?: string | null;
   per_page?: number | null;
   event?: string | null;
+  status?: string | null;
 }) {
-  const { workflow_id, branch, repo, per_page, event } = args;
+  const { workflow_id, branch, repo, per_page, event, status } = args;
   const { owner, repo: defaultRepoName } = parseRepo(repo ?? (defaultRepo as string));
 
   // Prefer workflow-specific endpoint when workflow_id provided
@@ -516,6 +515,7 @@ export async function listWorkflowRunsForRepo(args: {
       workflow_id: workflow_id as any,
       branch: branch ?? undefined,
       event: event ?? undefined,
+      status: status ?? undefined,
       per_page: per_page ?? 10,
     });
 
@@ -542,6 +542,7 @@ export async function listWorkflowRunsForRepo(args: {
     repo: defaultRepoName,
     branch: branch ?? undefined,
     event: event ?? undefined,
+    status: status ?? undefined,
     per_page: per_page ?? 10,
   });
 

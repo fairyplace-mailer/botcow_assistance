@@ -274,27 +274,30 @@ export default function Page() {
       style={{
         minHeight: '100vh',
         margin: 0,
-        padding: 16,
+        padding: '16px 32px 32px 32px',
         background: 'var(--bg)',
       }}
     >
       <div
         style={{
-          maxWidth: 1200,
-          margin: '0 auto',
+          maxWidth: 1400,
+          margin: '0 auto 0 40px',          // ближе к левому краю
           display: 'grid',
-          gridTemplateColumns: '2fr 1.2fr',
-          gap: 16,
+          gridTemplateColumns: 'auto minmax(320px, 1fr)', // левая колонка фикс, правая — остаток
+          gap: 24,
         }}
-      >
+       >
         {/* Левая колонка: чат + просмотр файла */}
         <section
           style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-          }}
-        >
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          width: 880,        // фиксированная ширина
+          maxWidth: 880,
+          flexShrink: 0,     // не даём сжиматься/расползаться
+        }}
+       >
           <div className="card">
             <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>
               BotCow Code Assistant
@@ -311,11 +314,10 @@ export default function Page() {
               display: 'flex',
               flexDirection: 'column',
               height: 420,
-              maxWidth: 640,        // ← фиксируем максимум
-              width: '100%',        // ← растягиваемся только внутри этого лимита
+              width: '100%',   // занимает всю левую колонку, но не больше 880
               boxSizing: 'border-box',
             }}
-          >
+           >
             <div
               style={{
                 flex: 1,
@@ -372,31 +374,31 @@ export default function Page() {
 
             <form
               onSubmit={handleChatSubmit}
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  width: '100%',          // форма не шире карты чата
-                }}
-            >
-              <textarea
-                ref={taRef}
-                rows={1}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onInput={adjustHeight}
-                placeholder="Напиши запрос ассистенту..."
-                style={{
-                  flex: '1 1 0',        // можно сжимать
-                  minWidth: 0,          // ключевой момент: не раздвигать родителя
-                  padding: 8,
-                  borderRadius: 4,
-                  border: '1px solid var(--border)',
-                  fontSize: 14,
-                  resize: 'none',
-                  overflow: 'auto',
-                  boxSizing: 'border-box',
-                }}
-              />
+              style={{
+                display: 'flex',
+                gap: 8,
+                width: '100%',
+              }}
+             >
+               <textarea
+                 ref={taRef}
+                 rows={1}
+                 value={input}
+                 onChange={(e) => setInput(e.target.value)}
+                 onInput={adjustHeight}
+                 placeholder="Напиши запрос ассистенту..."
+                 style={{
+                   flex: '1 1 0',
+                   minWidth: 0,          // не вытягивает карту
+                   padding: 8,
+                   borderRadius: 4,
+                   border: '1px solid var(--border)',
+                   fontSize: 14,
+                   resize: 'none',
+                   overflow: 'auto',
+                   boxSizing: 'border-box',
+                 }}
+               />
               <button
                 type="submit"
                 disabled={chatLoading || !input.trim()}

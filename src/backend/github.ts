@@ -234,6 +234,7 @@ export async function createBranch(
   baseBranch: string = 'main',
   repo: string = defaultRepo as string,
 ) {
+  const owner = "fairyplace-mailer";
   const baseRef = await github.git.getRef({
     owner,
     repo: repoName,

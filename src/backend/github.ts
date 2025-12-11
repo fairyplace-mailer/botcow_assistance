@@ -506,7 +506,22 @@ export async function listWorkflowRunsForRepo(args: {
   repo?: string | null;
   per_page?: number | null;
   event?: string | null;
-  status?: string | null;
+  status?:
+    | 'waiting'
+    | 'completed'
+    | 'action_required'
+    | 'cancelled'
+    | 'failure'
+    | 'neutral'
+    | 'skipped'
+    | 'stale'
+    | 'success'
+    | 'timed_out'
+    | 'in_progress'
+    | 'queued'
+    | 'requested'
+    | 'pending'
+    | null;
 }) {
   const { workflow_id, branch, repo, per_page, event, status } = args;
   const { owner, repo: defaultRepoName } = parseRepo(repo ?? (defaultRepo as string));

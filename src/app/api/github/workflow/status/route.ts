@@ -33,8 +33,8 @@ export async function POST(req: Request) {
         });
 
         const runs = runsRes.data.workflow_runs || [];
-        if (runs.length > 0) {
-          const match = runs[0];
+        const [match] = runs;
+        if (match) {
           await saveRun(repo, {
             run_id: match.id,
             workflow_id: last.workflow_id,

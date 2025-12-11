@@ -10,6 +10,22 @@ import {
   listWorkflowRuns,
 } from '../github';
 
+type WorkflowRunStatus =
+  | 'waiting'
+  | 'completed'
+  | 'action_required'
+  | 'cancelled'
+  | 'failure'
+  | 'neutral'
+  | 'skipped'
+  | 'stale'
+  | 'success'
+  | 'timed_out'
+  | 'in_progress'
+  | 'queued'
+  | 'requested'
+  | 'pending';
+
 export const githubToolsSchemas = [
   {
     type: 'function',
@@ -254,7 +270,24 @@ export const githubToolsSchemas = [
           },
           status: {
             type: 'string',
-            description: 'Фильтр по статусу (queued, in_progress, completed).',
+            description:
+              'Фильтр по статусу workflow run. Допустимые: waiting, completed, action_required, cancelled, failure, neutral, skipped, stale, success, timed_out, in_progress, queued, requested, pending.',
+            enum: [
+              'waiting',
+              'completed',
+              'action_required',
+              'cancelled',
+              'failure',
+              'neutral',
+              'skipped',
+              'stale',
+              'success',
+              'timed_out',
+              'in_progress',
+              'queued',
+              'requested',
+              'pending',
+            ],
           },
           per_page: {
             type: 'number',
@@ -338,23 +371,22 @@ export const githubToolHandlers = {
     return getWorkflowStatus(args);
   },
 
-  async github_list_workflow_runs(args: {
+    async github_list_workflow_runs(args: {
     workflow_id?: string;
     branch?: string;
     event?: string;
-    status?: string;
+    status?: WorkflowRunStatus | null;
     per_page?: number;
     repo?: string;
   }) {
     const runs = await listWorkflowRuns({
-      workflow_id: args.workflow_id,
-      branch: args.branch,
-      event: args.event,
-      status: args.status,
-      per_page: args.per_page,
-      repo: args.repo,
+      workflow_id: args.workflow_id ?? undefined,
+      branch: args.branch ?? undefined,
+      event: args.event ?? undefined,
+      status: args.status ?? undefined,
+      per_page: args.per_page ?? undefined,
+      repo: args.repo ?? undefined,
     });
 
     return { runs };
   },
-};

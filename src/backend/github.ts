@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 
 const token = process.env.GITHUB_PAT_BOTCOW;
 const defaultRepo = process.env.BOTCOW_DEFAULT_REPO;
+const owner = "fairyplace-mailer";
 
 if (!token) {
   throw new Error('GITHUB_PAT_BOTCOW is not set');
@@ -22,6 +23,20 @@ export function parseRepo(repo: string = defaultRepo as string) {
   }
   return { owner, repo: repoName };
 }
+
+export type NormalizedRun = {
+  id: number;
+  status: string | null;
+  conclusion: string | null;
+  head_branch?: string | null;
+  head_sha?: string | null;
+  created_at?: string | null;
+  html_url?: string | null;
+  run_number?: number | null;
+  name?: string | null;
+  event?: string | null;
+  workflow_id?: number | null;
+};
 
 /**
  * Получить содержимое файла (UTF-8 текст) по пути.
@@ -218,13 +233,13 @@ export async function getRecentCommits(options?: {
 export async function createBranch(
   branchName: string,
   baseBranch: string = 'main',
-  repo: string = defaultRepo as string,
+  repoName: string = defaultRepo as string,
 ) {
-  const { owner, repo: repoName } = parseRepo(repo);
+  const { owner, repo } = parseRepo(repoName);
 
   const baseRef = await github.git.getRef({
     owner,
-    repo: repoName,
+    repo,
     ref: `heads/${baseBranch}`,
   });
 
@@ -232,11 +247,12 @@ export async function createBranch(
 
   try {
     const ref = await github.git.createRef({
-    owner,
-    repo: repoName,
-    ref: `refs/heads/${branchName}`,
-    sha,
+      owner,
+      repo,
+      ref: `refs/heads/${branchName}`,
+      sha,
     });
+
     return ref.data;
   } catch (error: any) {
     if (error?.status === 422) {
@@ -481,6 +497,93 @@ export async function getWorkflowStatus(options: {
 }
 
 /**
+ * Список запусков workflow. Если указан workflow_id — использует
+ * endpoint /actions/workflows/{workflow_id}/runs, иначе — /actions/runs.
+ */
+export async function listWorkflowRunsForRepo(args: {
+  workflow_id?: string | null | undefined;
+  branch?: string | null | undefined;
+  repo?: string | null | undefined;
+  per_page?: number | null | undefined;
+  event?: string | null | undefined;
+  status?:
+    | 'waiting'
+    | 'completed'
+    | 'action_required'
+    | 'cancelled'
+    | 'failure'
+    | 'neutral'
+    | 'skipped'
+    | 'stale'
+    | 'success'
+    | 'timed_out'
+    | 'in_progress'
+    | 'queued'
+    | 'requested'
+    | 'pending'
+    | null
+    | undefined;
+}) {
+  const { workflow_id, branch, repo, per_page, event, status } = args;
+  const { owner, repo: defaultRepoName } = parseRepo(repo ?? (defaultRepo as string));
+
+  // Prefer workflow-specific endpoint when workflow_id provided
+  if (workflow_id) {
+    const res = await github.actions.listWorkflowRuns({
+      owner,
+      repo: defaultRepoName,
+      workflow_id: workflow_id as any,
+      branch: branch ?? undefined,
+      event: event ?? undefined,
+      status: status ?? undefined,
+      per_page: per_page ?? 10,
+    });
+
+    const runs = (res.data.workflow_runs || []).map((r: any) => ({
+      id: r.id,
+      status: r.status ?? null,
+      conclusion: r.conclusion ?? null,
+      head_branch: r.head_branch ?? null,
+      head_sha: r.head_sha ?? null,
+      created_at: r.created_at ?? null,
+      html_url: r.html_url ?? null,
+      run_number: r.run_number ?? null,
+      name: r.name ?? null,
+      event: r.event ?? null,
+      workflow_id: r.workflow_id ?? null,
+    }));
+
+    return { total_count: res.data.total_count, runs };
+  }
+
+  // Fallback to repo-wide endpoint
+  const res = await github.actions.listWorkflowRunsForRepo({
+    owner,
+    repo: defaultRepoName,
+    branch: branch ?? undefined,
+    event: event ?? undefined,
+    status: status ?? undefined,
+    per_page: per_page ?? 10,
+  });
+
+  const runs = (res.data.workflow_runs || []).map((r: any) => ({
+    id: r.id,
+    status: r.status ?? null,
+    conclusion: r.conclusion ?? null,
+    head_branch: r.head_branch ?? null,
+    head_sha: r.head_sha ?? null,
+    created_at: r.created_at ?? null,
+    html_url: r.html_url ?? null,
+    run_number: r.run_number ?? null,
+    name: r.name ?? null,
+    event: r.event ?? null,
+    workflow_id: r.workflow_id ?? null,
+  }));
+
+  return { total_count: res.data.total_count, runs };
+}
+
+/**
  * Создать Issue.
  */
 export async function createIssue(options: {
@@ -589,3 +692,6 @@ export async function listIssues(options?: {
     url: issue.html_url,
   }));
 }
+
+// Alias export to ensure bundlers that rely on static names see both variants
+export const listWorkflowRuns = listWorkflowRunsForRepo;

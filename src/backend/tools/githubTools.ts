@@ -7,7 +7,24 @@ import {
   runWorkflow,
   getWorkflowStatus,
   commentOnPullRequest,
+  listWorkflowRuns,
 } from '../github';
+
+type WorkflowRunStatus =
+  | 'waiting'
+  | 'completed'
+  | 'action_required'
+  | 'cancelled'
+  | 'failure'
+  | 'neutral'
+  | 'skipped'
+  | 'stale'
+  | 'success'
+  | 'timed_out'
+  | 'in_progress'
+  | 'queued'
+  | 'requested'
+  | 'pending';
 
 export const githubToolsSchemas = [
   {
@@ -231,6 +248,59 @@ export const githubToolsSchemas = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_workflow_runs',
+      description: 'Получить список запусков workflow по workflow_id или по репо.',
+      parameters: {
+        type: 'object',
+        properties: {
+          workflow_id: {
+            type: 'string',
+            description: 'Имя или ID workflow (например "ci.yml"). Если не указан — вернёт запуск по всему репо.',
+          },
+          branch: {
+            type: 'string',
+            description: 'Фильтр по ветке (head_branch).',
+          },
+          event: {
+            type: 'string',
+            description: 'Фильтр по событию (например "workflow_dispatch").',
+          },
+          status: {
+            type: 'string',
+            description:
+              'Фильтр по статусу workflow run. Допустимые: waiting, completed, action_required, cancelled, failure, neutral, skipped, stale, success, timed_out, in_progress, queued, requested, pending.',
+            enum: [
+              'waiting',
+              'completed',
+              'action_required',
+              'cancelled',
+              'failure',
+              'neutral',
+              'skipped',
+              'stale',
+              'success',
+              'timed_out',
+              'in_progress',
+              'queued',
+              'requested',
+              'pending',
+            ],
+          },
+          per_page: {
+            type: 'number',
+            description: 'Число возвращаемых записей, по умолчанию 5.',
+          },
+          repo: {
+            type: 'string',
+            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+          },
+        },
+      },
+    },
+  },
 ] as const;
 
 export const githubToolHandlers = {
@@ -299,5 +369,25 @@ export const githubToolHandlers = {
 
   async github_get_workflow_status(args: { run_id: number; repo?: string }) {
     return getWorkflowStatus(args);
+  },
+
+    async github_list_workflow_runs(args: {
+    workflow_id?: string;
+    branch?: string;
+    event?: string;
+    status?: WorkflowRunStatus | null;
+    per_page?: number;
+    repo?: string;
+  }) {
+    const runs = await listWorkflowRuns({
+      workflow_id: args.workflow_id ?? undefined,
+      branch: args.branch ?? undefined,
+      event: args.event ?? undefined,
+      status: args.status ?? undefined,
+      per_page: args.per_page ?? undefined,
+      repo: args.repo ?? undefined,
+    });
+
+    return { runs };
   },
 };

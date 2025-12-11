@@ -15,6 +15,7 @@ import {
   createIssue,
   updateIssue,
   listIssues,
+  listWorkflowRunsForRepo,
 } from './github';
 
 /**
@@ -239,6 +240,25 @@ export const toolSchemas = [
   {
     type: 'function',
     function: {
+      name: 'github_list_workflow_runs',
+      description:
+        'Получить список запусков GitHub Actions workflow для репозитория.',
+      parameters: {
+        type: 'object',
+        properties: {
+          workflow_id: { type: 'string', nullable: true },
+          ref: { type: 'string', nullable: true },
+          repo: { type: 'string', nullable: true },
+          per_page: { type: 'number', nullable: true },
+        },
+        required: [],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
       name: 'github_get_workflow_status',
       description: 'Получить статус workflow.',
       parameters: {
@@ -381,6 +401,10 @@ export const toolHandlers = {
 
   github_run_workflow: async (args: any) => {
     return await runWorkflow(args);
+  },
+
+  github_list_workflow_runs: async (args: any) => {
+    return await listWorkflowRunsForRepo(args);
   },
 
   github_get_workflow_status: async (args: any) => {

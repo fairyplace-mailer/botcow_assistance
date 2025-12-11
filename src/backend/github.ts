@@ -617,3 +617,6 @@ export async function listIssues(options?: {
     url: issue.html_url,
   }));
 }
+
+// Alias export to ensure bundlers that rely on static names see both variants
+export const listWorkflowRuns = listWorkflowRunsForRepo;

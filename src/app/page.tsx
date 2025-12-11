@@ -311,6 +311,9 @@ export default function Page() {
               display: 'flex',
               flexDirection: 'column',
               height: 420,
+              maxWidth: 640,        // ← фиксируем максимум
+              width: '100%',        // ← растягиваемся только внутри этого лимита
+              boxSizing: 'border-box',
             }}
           >
             <div
@@ -343,6 +346,7 @@ export default function Page() {
                       color: m.role === 'user' ? 'var(--primary-fg)' : 'var(--fg)',
                       whiteSpace: 'pre-wrap',
                       maxWidth: '100%',
+                      wordBreak: 'break-word',    // или overflowWrap: 'anywhere'
                     }}
                   >
                     <strong>
@@ -366,7 +370,14 @@ export default function Page() {
               </div>
             )}
 
-            <form onSubmit={handleChatSubmit} style={{ display: 'flex', gap: 8 }}>
+            <form
+              onSubmit={handleChatSubmit}
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  width: '100%',          // форма не шире карты чата
+                }}
+            >
               <textarea
                 ref={taRef}
                 rows={1}
@@ -375,13 +386,15 @@ export default function Page() {
                 onInput={adjustHeight}
                 placeholder="Напиши запрос ассистенту..."
                 style={{
-                  flex: 1,
+                  flex: '1 1 0',        // можно сжимать
+                  minWidth: 0,          // ключевой момент: не раздвигать родителя
                   padding: 8,
                   borderRadius: 4,
                   border: '1px solid var(--border)',
                   fontSize: 14,
                   resize: 'none',
                   overflow: 'auto',
+                  boxSizing: 'border-box',
                 }}
               />
               <button

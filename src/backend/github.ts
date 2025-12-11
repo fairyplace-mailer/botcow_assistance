@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 
 const token = process.env.GITHUB_PAT_BOTCOW;
 const defaultRepo = process.env.BOTCOW_DEFAULT_REPO;
+const owner = "fairyplace-mailer";
 
 if (!token) {
   throw new Error('GITHUB_PAT_BOTCOW is not set');
@@ -234,8 +235,6 @@ export async function createBranch(
   baseBranch: string = 'main',
   repo: string = defaultRepo as string,
 ) {
-  const owner = "fairyplace-mailer";
-  const repo = "botcow_assistance";
   const baseRef = await github.git.getRef({
     owner,
     repo: repoName,

@@ -232,10 +232,10 @@ export async function createBranch(
 
   try {
     const ref = await github.git.createRef({
-    owner,
-    repo: repoName,
-    ref: `refs/heads/${branchName}`,
-    sha,
+      owner,
+      repo: repoName,
+      ref: `refs/heads/${branchName}`,
+      sha,
     });
     return ref.data;
   } catch (error: any) {
@@ -652,3 +652,6 @@ export async function listIssues(options?: {
     url: issue.html_url,
   }));
 }
+
+// Alias for backward compatibility with tools import
+export { listWorkflowRuns as listWorkflowRunsForRepo };

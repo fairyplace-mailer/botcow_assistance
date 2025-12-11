@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getWorkflowStatus } from '../../../../../backend/github';
+import { getWorkflowStatus, listWorkflowRuns } from '../../../../../backend/github';
 import { getLastRun, saveRun } from '../../../../../backend/ciStore';
 
 export async function POST(req: Request) {
@@ -16,38 +16,42 @@ export async function POST(req: Request) {
     if (!last) {
       return NextResponse.json({ error: 'no run tracked for repo' }, { status: 404 });
     }
-    // if placeholder (-1) then we need to try to resolve latest run
-    if (last.run_id === -1) {
-      try {
-        const backend = await import('../../../../../backend/github');
-        const { github, parseRepo } = backend;
-        const parsed = parseRepo(repo);
 
-        const runsRes = await github.actions.listWorkflowRunsForRepo({
-          owner: parsed.owner,
-          repo: parsed.repo,
+    // if placeholder (null) then we need to try to resolve latest run
+    if (last.run_id === null) {
+      try {
+        const res = await listWorkflowRuns({
           workflow_id: last.workflow_id,
           branch: last.ref,
+          repo,
           event: 'workflow_dispatch',
-          per_page: 1,
+          per_page: 5,
         });
 
-        const runs = runsRes.data.workflow_runs || [];
-        const [match] = runs;
+        const runs = res.runs || [];
+        const match = runs[0];
         if (match) {
           await saveRun(repo, {
             run_id: match.id,
             workflow_id: last.workflow_id,
             ref: last.ref,
             startedAt: last.startedAt,
+            status: 'found',
           });
           run_id = match.id;
+        } else {
+          // still not found
+          await saveRun(repo, {
+            ...last,
+            status: 'not_found',
+            run_id: null,
+          });
         }
       } catch (e) {
         // ignore - fallthrough
       }
     } else {
-      run_id = last.run_id;
+      run_id = last.run_id as number;
     }
   }
 

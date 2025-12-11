@@ -233,11 +233,13 @@ export async function getRecentCommits(options?: {
 export async function createBranch(
   branchName: string,
   baseBranch: string = 'main',
-  repo: string = defaultRepo as string,
+  repoName: string = defaultRepo as string,
 ) {
+  const { owner, repo } = parseRepo(repoName);
+
   const baseRef = await github.git.getRef({
     owner,
-    repo: repo,
+    repo,
     ref: `heads/${baseBranch}`,
   });
 
@@ -246,10 +248,11 @@ export async function createBranch(
   try {
     const ref = await github.git.createRef({
       owner,
-      repo: repoName,
+      repo,
       ref: `refs/heads/${branchName}`,
       sha,
     });
+
     return ref.data;
   } catch (error: any) {
     if (error?.status === 422) {

@@ -3,8 +3,8 @@
 export type ModelId =
   | 'gpt-5.1'
   | 'gpt-5-mini'
-  | 'gpt-5.1-codex-mini'
-  | 'o3-mini';
+  | 'gpt-5.1-codex'
+  | 'o3';
 
 export interface ModelRoutingDecision {
   model: ModelId;
@@ -15,9 +15,9 @@ export interface ModelRoutingDecision {
  * Роутер моделей по содержимому диалога.
  *
  * Идея:
- * - o3-mini: сложный reasoning, баги, ревью кода, большие кодовые контексты.
+ * - o3: сложный reasoning, баги, ревью кода, большие кодовые контексты.
  * - gpt-5.1: архитектура, большие/сложные обсуждения, где важна «голова».
- * - gpt-5.1-codex-mini: генерация и мелкий рефактор кода.
+ * - gpt-5.1-codex: генерация и мелкий рефактор кода.
  * - gpt-5-mini: обычные короткие запросы, PM, статусы, «болтовня».
  */
 export function chooseModel(
@@ -49,7 +49,7 @@ export function chooseModel(
     (flags.hasTsKeywords && longContext)
   ) {
     return {
-      model: 'o3-mini',
+      model: 'o3',
       reason: 'deep-code-reasoning-or-bug-or-review',
     };
   }
@@ -72,13 +72,13 @@ export function chooseModel(
     // Если очень много кода/контекста, лучше o3-mini
     if (longContext || manyMessages) {
       return {
-        model: 'o3-mini',
+        model: 'o3',
         reason: 'large-code-context-fallback-to-o3-mini',
       };
     }
 
     return {
-      model: 'gpt-5.1-codex-mini',
+      model: 'gpt-5.1-codex',
       reason: 'code-gen-or-small-refactor',
     };
   }

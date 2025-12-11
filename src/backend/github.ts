@@ -23,6 +23,20 @@ export function parseRepo(repo: string = defaultRepo as string) {
   return { owner, repo: repoName };
 }
 
+export type NormalizedRun = {
+  id: number;
+  status: string | null;
+  conclusion: string | null;
+  head_branch?: string | null;
+  head_sha?: string | null;
+  created_at?: string | null;
+  html_url?: string | null;
+  run_number?: number | null;
+  name?: string | null;
+  event?: string | null;
+  workflow_id?: number | null;
+};
+
 /**
  * Получить содержимое файла (UTF-8 текст) по пути.
  */
@@ -486,26 +500,66 @@ export async function getWorkflowStatus(options: {
  */
 export async function listWorkflowRunsForRepo(args: {
   workflow_id?: string | null;
-  ref?: string | null;
+  branch?: string | null;
   repo?: string | null;
   per_page?: number | null;
+  event?: string | null;
 }) {
-  const { workflow_id, ref, repo, per_page } = args;
+  const { workflow_id, branch, repo, per_page, event } = args;
   const { owner, repo: defaultRepoName } = parseRepo(repo ?? (defaultRepo as string));
 
-  if (!workflow_id) {
-    throw new Error('workflow_id is required to list workflow runs');
+  // Prefer workflow-specific endpoint when workflow_id provided
+  if (workflow_id) {
+    const res = await github.actions.listWorkflowRuns({
+      owner,
+      repo: defaultRepoName,
+      workflow_id: workflow_id as any,
+      branch: branch ?? undefined,
+      event: event ?? undefined,
+      per_page: per_page ?? 10,
+    });
+
+    const runs = (res.data.workflow_runs || []).map((r: any) => ({
+      id: r.id,
+      status: r.status ?? null,
+      conclusion: r.conclusion ?? null,
+      head_branch: r.head_branch ?? null,
+      head_sha: r.head_sha ?? null,
+      created_at: r.created_at ?? null,
+      html_url: r.html_url ?? null,
+      run_number: r.run_number ?? null,
+      name: r.name ?? null,
+      event: r.event ?? null,
+      workflow_id: r.workflow_id ?? null,
+    }));
+
+    return { total_count: res.data.total_count, runs };
   }
 
-  const { data } = await github.actions.listWorkflowRuns({
+  // Fallback to repo-wide endpoint
+  const res = await github.actions.listWorkflowRunsForRepo({
     owner,
     repo: defaultRepoName,
-    workflow_id,
-    branch: ref ?? undefined,
+    branch: branch ?? undefined,
+    event: event ?? undefined,
     per_page: per_page ?? 10,
   });
 
-  return data;
+  const runs = (res.data.workflow_runs || []).map((r: any) => ({
+    id: r.id,
+    status: r.status ?? null,
+    conclusion: r.conclusion ?? null,
+    head_branch: r.head_branch ?? null,
+    head_sha: r.head_sha ?? null,
+    created_at: r.created_at ?? null,
+    html_url: r.html_url ?? null,
+    run_number: r.run_number ?? null,
+    name: r.name ?? null,
+    event: r.event ?? null,
+    workflow_id: r.workflow_id ?? null,
+  }));
+
+  return { total_count: res.data.total_count, runs };
 }
 
 /**

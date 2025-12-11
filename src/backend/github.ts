@@ -483,64 +483,29 @@ export async function getWorkflowStatus(options: {
 /**
  * Список запусков workflow. Если указан workflow_id — использует
  * endpoint /actions/workflows/{workflow_id}/runs, иначе — /actions/runs.
- * Возвращает нормализованный массив с полями id, status, conclusion, head_branch, head_sha, created_at.
  */
-export async function listWorkflowRuns(options?: {
-  workflow_id?: string;
-  branch?: string;
-  event?: string;
-  status?: string;
-  per_page?: number;
-  repo?: string;
+export async function listWorkflowRunsForRepo(args: {
+  workflow_id?: string | null;
+  ref?: string | null;
+  repo?: string | null;
+  per_page?: number | null;
 }) {
-  const repoName = options?.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
-  const per_page = options?.per_page ?? 5;
+  const { workflow_id, ref, repo, per_page } = args;
+  const { owner, repo: defaultRepoName } = parseRepo(repo ?? (defaultRepo as string));
 
-  if (options?.workflow_id) {
-    const res = await github.actions.listWorkflowRuns({
-      owner,
-      repo,
-      workflow_id: options.workflow_id,
-      branch: options.branch,
-      event: options.event,
-      status: options.status,
-      per_page,
-    });
-
-    return (res.data.workflow_runs || []).map((run) => ({
-      id: run.id,
-      status: run.status,
-      conclusion: run.conclusion,
-      head_branch: run.head_branch,
-      head_sha: run.head_sha,
-      created_at: run.created_at,
-      html_url: run.html_url,
-      run_number: run.run_number,
-      name: run.name,
-    }));
+  if (!workflow_id) {
+    throw new Error('workflow_id is required to list workflow runs');
   }
 
-  const res = await github.actions.listWorkflowRunsForRepo({
+  const { data } = await github.actions.listWorkflowRuns({
     owner,
-    repo,
-    branch: options?.branch,
-    event: options?.event,
-    status: options?.status,
-    per_page,
+    repo: defaultRepoName,
+    workflow_id,
+    branch: ref ?? undefined,
+    per_page: per_page ?? 10,
   });
 
-  return (res.data.workflow_runs || []).map((run) => ({
-    id: run.id,
-    status: run.status,
-    conclusion: run.conclusion,
-    head_branch: run.head_branch,
-    head_sha: run.head_sha,
-    created_at: run.created_at,
-    html_url: run.html_url,
-    run_number: run.run_number,
-    name: run.name,
-  }));
+  return data;
 }
 
 /**
@@ -652,6 +617,3 @@ export async function listIssues(options?: {
     url: issue.html_url,
   }));
 }
-
-// Alias for backward compatibility with tools import
-export { listWorkflowRuns as listWorkflowRunsForRepo };

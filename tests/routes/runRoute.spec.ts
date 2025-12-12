@@ -1,9 +1,8 @@
 import request from 'supertest';
 import * as ciRunner from '../../src/backend/ciRunner';
+import { app } from '../../src/server';
 
 jest.mock('../../src/backend/ciRunner');
-
-const app = require('../../src/server');
 
 describe('routes: /api/github/workflow/run', () => {
   beforeEach(() => jest.resetAllMocks());

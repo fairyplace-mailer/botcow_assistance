@@ -1,34 +1,41 @@
-export type ModelId =
-  | 'gpt-5.2'
-  | 'gpt-5.2-mini-none'
-  | 'gpt-5.1-codex-max';
+// src/backend/modelRouter.ts
+
+export type ModelId = 'gpt-5.2' | 'gpt-5.1-codex-max';
+export type ReasoningEffort = 'none' | 'high';
 
 export interface ModelRoutingDecision {
   model: ModelId;
+  reasoning?: { effort: ReasoningEffort };
   reason: string;
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
 }
+
+type ModelConfig = Pick<ModelRoutingDecision, 'model' | 'reasoning'>;
 
 /**
  * Роутер моделей по содержимому диалога.
  *
  * Идея:
- * - gpt-5.2 c reasoning.effort=high: сложный reasoning, баги, ревью кода, большие кодовые контексты.
- * - gpt-5.2 c reasoning.effort=none: обычные короткие запросы, PM, статусы, «болтовня».
- * - gpt-5.1-codex-max: генерация и мелкий рефактор кода.
+ * - gpt-5.2 + reasoning.effort=high: сложный reasoning по коду/багам/ревью, большой контекст.
+ * - gpt-5.2 (drop-in): архитектура, дизайн, длинные/сложные обсуждения без явного кода.
+ * - gpt-5.1-codex-max: генерация и мелкий рефактор кода (короткий/средний контекст).
+ * - gpt-5.2 + reasoning.effort=none: короткие запросы, PM/статусы/деплой, «болтовня».
  */
+const MODEL_DEFAULT: ModelConfig = { model: 'gpt-5.2' };
+const MODEL_FAST: ModelConfig = { model: 'gpt-5.2', reasoning: { effort: 'none' } };
+const MODEL_DEEP: ModelConfig = { model: 'gpt-5.2', reasoning: { effort: 'high' } };
+const MODEL_CODEX: ModelConfig = { model: 'gpt-5.1-codex-max' };
+
 export function chooseModel(
   messages: Array<{ role: string; content: unknown }>,
 ): ModelRoutingDecision {
   const lastUser = findLastUserMessage(messages);
   const text = normalizeContentToText(lastUser?.content);
 
-  // Нет текста пользователя → дешёвый дефолт
+  // Нет текста пользователя → быстрый дефолт
   if (!text) {
     return {
-      model: 'gpt-5.2-mini-none',
+      ...MODEL_FAST,
       reason: 'no-user-text',
-      reasoningEffort: 'none',
     };
   }
 
@@ -38,7 +45,7 @@ export function chooseModel(
 
   const flags = detectFlags(text);
 
-  // 1) Жёсткий reasoning по коду / багам / ревью → gpt-5.2 с высоким effort
+  // 1) Жёсткий reasoning по коду / багам / ревью → gpt-5.2 (effort=high)
   if (
     flags.hasStackTrace ||
     flags.hasBugWords ||
@@ -47,18 +54,16 @@ export function chooseModel(
     (flags.hasTsKeywords && longContext)
   ) {
     return {
-      model: 'gpt-5.2',
+      ...MODEL_DEEP,
       reason: 'deep-code-reasoning-or-bug-or-review',
-      reasoningEffort: 'high',
     };
   }
 
-  // 2) Архитектура, дизайн, большие задачки → gpt-5.2 с medium effort
+  // 2) Архитектура, дизайн, большие задачки → gpt-5.2 (drop-in)
   if (flags.hasArchWords || (longContext && manyMessages)) {
     return {
-      model: 'gpt-5.2',
+      ...MODEL_DEFAULT,
       reason: 'architecture-or-long-context',
-      reasoningEffort: 'medium',
     };
   }
 
@@ -69,45 +74,40 @@ export function chooseModel(
     flags.hasDiff ||
     flags.hasRefactorWords
   ) {
-    // Если очень много кода/контекста, лучше gpt-5.2 с высоким effort
+    // Если очень много кода/контекста, лучше глубокий reasoning
     if (longContext || manyMessages) {
       return {
-        model: 'gpt-5.2',
-        reason: 'large-code-context-fallback-to-gpt-5.2',
-        reasoningEffort: 'high',
+        ...MODEL_DEEP,
+        reason: 'large-code-context-fallback-to-gpt-5.2-high',
       };
     }
 
     return {
-      model: 'gpt-5.1-codex-max',
+      ...MODEL_CODEX,
       reason: 'code-gen-or-small-refactor',
-      reasoningEffort: 'low',
     };
   }
 
-  // 4) PM / статусы / деплой / Vercel → gpt-5.2 с effort=none
+  // 4) PM / статусы / деплой / Vercel → gpt-5.2 (effort=none)
   if (flags.hasPmWords && length < 2000) {
     return {
-      model: 'gpt-5.2-mini-none',
+      ...MODEL_FAST,
       reason: 'pm-or-status-or-deploy',
-      reasoningEffort: 'none',
     };
   }
 
-  // 5) Обычные короткие/средние запросы → gpt-5.2 с effort=none
+  // 5) Обычные короткие/средние запросы → gpt-5.2 (effort=none)
   if (length < 1500 && !manyMessages) {
     return {
-      model: 'gpt-5.2-mini-none',
+      ...MODEL_FAST,
       reason: 'short-or-medium-request',
-      reasoningEffort: 'none',
     };
   }
 
-  // 6) Остальное (длинные/сложные без явного кода) → gpt-5.2 с medium effort
+  // 6) Остальное (длинные/сложные без явного кода) → gpt-5.2 (drop-in)
   return {
-    model: 'gpt-5.2',
+    ...MODEL_DEFAULT,
     reason: 'fallback-long-or-complex',
-    reasoningEffort: 'medium',
   };
 }
 
@@ -161,9 +161,10 @@ function detectFlags(text: string) {
 
   const hasCodeFence = text.includes('```');
 
-  const hasTsKeywords = /\b(import|export|function|class|interface|type|const|let|async|await)\b/.test(
-    text,
-  );
+  const hasTsKeywords =
+    /\b(import|export|function|class|interface|type|const|let|async|await)\b/.test(
+      text,
+    );
 
   const hasStackTrace =
     text.includes('Error:') ||
@@ -184,14 +185,15 @@ function detectFlags(text: string) {
     /bug|баг|ошибк|сломалось|crash|crashed|падает|falling/i.test(text);
 
   const hasReviewWords =
-    /review|ревью|code review|проверь код|посмотри дифф|посмотри diff/i.test(lower);
+    /review|ревью|code review|проверь код|посмотри дифф|посмотри diff/i.test(
+      lower,
+    );
 
   const hasDiff =
-    /diff --git|@@ .+ @@|^\+\+\+ |^--- /m.test(text) ||
-    /```diff/.test(text);
+    /diff --git|@@ .+ @@|^\+\+\+ |^--- /m.test(text) || /```diff/.test(text);
 
   const hasPmWords =
-    /issue|ticket|task|задач[аеии]|project board|kanban|roadmap|эпик|epic|статус|status|update status|progress/i.test(
+    /issue|ticket|task|задач[аеи]|project board|kanban|roadmap|эпик|epic|статус|status|update status|progress/i.test(
       lower,
     ) ||
     /deploy|деплой|redeploy|rollback|roll back|vercel|верцел|лог деплоя|deployment log/i.test(

@@ -49,7 +49,16 @@ export async function runWorkflowAndTrack(options: {
   }
 
   // trigger workflow dispatch (doesn't return run id)
-  const dispatchResult = await runWorkflow({ workflow_id, ref, repo, inputs: options.inputs });
+  const dispatchParams: { workflow_id: string; ref: string; repo: string; inputs?: Record<string, string> } = {
+    workflow_id,
+    ref,
+    repo,
+  };
+  if (options.inputs) {
+    dispatchParams.inputs = options.inputs;
+  }
+
+  const dispatchResult = await runWorkflow(dispatchParams);
 
   // Try to find the created workflow run by polling listWorkflowRuns
   let foundRunId: number | null = null;

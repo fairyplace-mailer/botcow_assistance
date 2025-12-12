@@ -1,39 +1,32 @@
-# Переменные окружения BotCow Code Assistant
+# Environment variables
 
-Все переменные задаются в Vercel → Production.
+Below is a list of environment variables used by the project.
 
-## Переменные
+## Required
 
-### OpenAI
-- `OPENAI_API_KEY`
+- `OPENAI_API_KEY` — OpenAI API key.
+- `GITHUB_PAT_BOTCOW` — GitHub Personal Access Token used by the bot.
+- `BOTCOW_DEFAULT_REPO` — default repo in `owner/name` format.
 
-### Vercel Blob
-- `BLOB_READ_WRITE_TOKEN`
+## Optional
 
-### GitHub
-- `GITHUB_PAT_BOTCOW`
-- `BOTCOW_DEFAULT_REPO`
+- `BLOB_READ_WRITE_TOKEN` — Vercel Blob token (required if you use Blob-backed stores).
 
-### Vercel API
-- `VERCEL_TOKEN`
-- `VERCEL_PROJECT_ID`
-- `VERCEL_TEAM_ID`
+## CI / GitHub Actions
 
-### Vercel Webhooks
-- `VERCEL_WEBHOOK_SECRET` — общий секрет для подписи webhook’ов (пока endpoint принимает без проверки; рекомендуется добавить и включить проверку).
+- `GITHUB_WEBHOOK_SECRET` — secret for validating GitHub webhooks.
 
-### База данных (будущее)
-- `DATABASE_URL`
+## Vercel
 
-## Локальное использование
-Создать файл `.env.local`:
+### Webhooks
 
-OPENAI_API_KEY=...
-BLOB_READ_WRITE_TOKEN=...
-GITHUB_PAT_BOTCOW=...
-BOTCOW_DEFAULT_REPO=fairyplace-mailer/botcow_assistance
-VERCEL_TOKEN=...
-VERCEL_PROJECT_ID=...
-VERCEL_TEAM_ID=...
-VERCEL_WEBHOOK_SECRET=...
-DATABASE_URL=…
+- `VERCEL_WEBHOOK_SECRET` — secret used to validate incoming Vercel webhooks on:
+  - `POST /api/vercel/webhook`
+
+Without this variable the endpoint returns `500` and does not accept webhooks.
+
+### API (optional)
+
+- `VERCEL_TOKEN` — Vercel API token (used for polling helpers like `getLatestDeployments()` and `getDeploymentStatus()`).
+- `VERCEL_TEAM_ID` — Vercel team id.
+- `VERCEL_PROJECT_ID` — Vercel project id.

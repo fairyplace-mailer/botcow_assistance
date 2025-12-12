@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server';
-import { saveDeployment, type StoredVercelDeployment } from '../../../../backend/vercelDeployStore';
+import {
+  saveDeployment,
+  type StoredVercelDeployment,
+} from '../../../../backend/vercelDeployStore';
+import { verifyVercelWebhookSignature } from '../../../../backend/vercelWebhookAuth';
+import {
+  commentOnceOnPullRequest,
+  findOpenPullRequestByHeadSha,
+} from '../../../../backend/githubPr';
 
 export const runtime = 'nodejs';
 
@@ -10,14 +18,21 @@ function pickFirstString(...values: any[]): string | null {
   return null;
 }
 
-function inferState(eventType: string, payload: any): StoredVercelDeployment['state'] {
+function inferState(
+  eventType: string,
+  payload: any,
+): StoredVercelDeployment['state'] {
   const t = (eventType || '').toLowerCase();
   if (t === 'deployment.created') return 'created';
   if (t === 'deployment.ready') return 'ready';
   if (t === 'deployment.error') return 'error';
 
   // fallback to known fields from payload if present
-  const s = pickFirstString(payload?.deployment?.state, payload?.deployment?.readyState, payload?.deployment?.status);
+  const s = pickFirstString(
+    payload?.deployment?.state,
+    payload?.deployment?.readyState,
+    payload?.deployment?.status,
+  );
   if (!s) return 'unknown';
   const normalized = s.toLowerCase();
   if (['ready', 'completed', 'success'].includes(normalized)) return 'ready';
@@ -27,29 +42,66 @@ function inferState(eventType: string, payload: any): StoredVercelDeployment['st
   return 'unknown';
 }
 
-export async function POST(req: Request) {
-  // NOTE: signature verification is intentionally not implemented yet.
-  // We store minimal useful state and can tighten security later.
+function normalizeUrl(url: string | null): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  return `https://${trimmed}`;
+}
 
-  const body = await req.json().catch(() => null);
+export async function POST(req: Request) {
+  const secret = process.env.VERCEL_WEBHOOK_SECRET;
+  if (!secret) {
+    return NextResponse.json(
+      { error: 'VERCEL_WEBHOOK_SECRET is not set' },
+      { status: 500 },
+    );
+  }
+
+  const rawBody = await req.text();
+
+  const verified = verifyVercelWebhookSignature({
+    rawBody,
+    headers: req.headers,
+    secret,
+  });
+
+  if (!verified.ok) {
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+  }
+
+  const body = JSON.parse(rawBody);
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const eventType = pickFirstString((body as any).type, (body as any).event, (body as any).eventType) ?? 'unknown';
-  const deployment = (body as any).payload?.deployment ?? (body as any).deployment ?? null;
+  const eventType =
+    pickFirstString((body as any).type, (body as any).event, (body as any).eventType) ??
+    'unknown';
+  const deployment =
+    (body as any).payload?.deployment ?? (body as any).deployment ?? null;
 
-  const deploymentId = pickFirstString(deployment?.id, deployment?.uid, (body as any).deploymentId);
+  const deploymentId = pickFirstString(
+    deployment?.id,
+    deployment?.uid,
+    (body as any).deploymentId,
+  );
   if (!deploymentId) {
     return NextResponse.json({ error: 'deploymentId not found' }, { status: 400 });
   }
 
-  const url = pickFirstString(deployment?.url, deployment?.alias?.[0], deployment?.domains?.[0])
-    ? pickFirstString(deployment?.url)
-    : null;
+  const url = normalizeUrl(
+    pickFirstString(deployment?.url, deployment?.alias?.[0], deployment?.domains?.[0]),
+  );
 
-  const target = pickFirstString(deployment?.target, deployment?.environment, deployment?.env);
-  const targetNorm = target === 'production' ? 'production' : target === 'preview' ? 'preview' : null;
+  const target = pickFirstString(
+    deployment?.target,
+    deployment?.environment,
+    deployment?.env,
+  );
+  const targetNorm =
+    target === 'production' ? 'production' : target === 'preview' ? 'preview' : null;
 
   const gitSha = pickFirstString(
     deployment?.meta?.githubCommitSha,
@@ -69,7 +121,7 @@ export async function POST(req: Request) {
 
   const stored: StoredVercelDeployment = {
     deploymentId,
-    url: url,
+    url,
     target: targetNorm,
     state: inferState(eventType, { deployment }),
     createdAt: typeof deployment?.createdAt === 'number' ? deployment.createdAt : now,
@@ -89,5 +141,28 @@ export async function POST(req: Request) {
 
   await saveDeployment(repoFullName, stored);
 
-  return NextResponse.json({ ok: true });
+  // PR comment layer: only when we have a SHA and ready preview URL.
+  if (stored.state === 'ready' && stored.target === 'preview' && stored.gitSha && stored.url) {
+    const pr = await findOpenPullRequestByHeadSha({
+      repoFullName,
+      sha: stored.gitSha,
+    });
+
+    if (pr) {
+      const marker = `<!-- botcow:vercel-preview:${stored.deploymentId} -->`;
+      const body =
+        `${marker}\n` +
+        `Vercel preview is ready: ${stored.url}\n\n` +
+        `Deployment: ${stored.deploymentId}`;
+
+      await commentOnceOnPullRequest({
+        repoFullName,
+        pull_number: pr.number,
+        body,
+        marker,
+      });
+    }
+  }
+
+  return NextResponse.json({ ok: true, verified: verified.algorithm });
 }

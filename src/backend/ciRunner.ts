@@ -105,7 +105,10 @@ export async function runWorkflowAndTrack(options: {
           return da - db;
         });
 
-        foundRunId = candidates[0].id as number;
+        const first = candidates[0];
+        if (first && typeof first.id === 'number') {
+          foundRunId = first.id as number;
+        }
         break;
       }
 

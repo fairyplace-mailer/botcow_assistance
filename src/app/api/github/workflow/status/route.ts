@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getWorkflowStatus, listWorkflowRuns } from '../../../../../backend/github';
+import { listWorkflowRuns } from '../../../../../backend/github';
 import { getLastRun, saveRun } from '../../../../../backend/ciStore';
+import { getWorkflowRunStatus } from '../../../../../backend/ciRunner';
 
 export async function POST(req: Request) {
   let { run_id, repo } = await req.json();
@@ -25,11 +26,11 @@ export async function POST(req: Request) {
           branch: last.ref,
           repo,
           event: 'workflow_dispatch',
-          per_page: 5,
+          per_page: 10,
         });
 
         const runs = res.runs || [];
-        const match = runs[0];
+        const match = runs.find((r: any) => !!r.id);
         if (match) {
           await saveRun(repo, {
             run_id: match.id,
@@ -60,7 +61,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await getWorkflowStatus({ run_id, repo });
+    const result = await getWorkflowRunStatus({ run_id, repo });
     return NextResponse.json({ result });
   } catch (error: any) {
     return NextResponse.json(

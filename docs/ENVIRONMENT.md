@@ -19,6 +19,9 @@
 - `VERCEL_PROJECT_ID`
 - `VERCEL_TEAM_ID`
 
+### Vercel Webhooks
+- `VERCEL_WEBHOOK_SECRET` — общий секрет для подписи webhook’ов (пока endpoint принимает без проверки; рекомендуется добавить и включить проверку).
+
 ### База данных (будущее)
 - `DATABASE_URL`
 
@@ -32,5 +35,5 @@ BOTCOW_DEFAULT_REPO=fairyplace-mailer/botcow_assistance
 VERCEL_TOKEN=...
 VERCEL_PROJECT_ID=...
 VERCEL_TEAM_ID=...
+VERCEL_WEBHOOK_SECRET=...
 DATABASE_URL=…
-

@@ -35,8 +35,13 @@ export async function runWorkflowAndTrack(options: {
   let commitSha: string | null = null;
   try {
     const commits = await getRecentCommits({ branch: ref, limit: 1, repo });
-    if (commits && commits.length > 0) {
-      commitSha = commits[0].sha;
+    if (
+      Array.isArray(commits) &&
+      commits.length > 0 &&
+      commits[0] &&
+      typeof (commits[0] as any).sha === 'string'
+    ) {
+      commitSha = (commits[0] as any).sha as string;
     }
   } catch (e) {
     // best-effort — continue without commitSha

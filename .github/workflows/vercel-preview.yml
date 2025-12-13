@@ -1,164 +1,77 @@
-name: Vercel Preview Deploy
+name: Vercel Preview Comment
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  deployment_status:
 
 permissions:
   contents: read
   pull-requests: write
 
-concurrency:
-  group: vercel-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
-  deploy:
-    # Safety guard in case someone later adds other triggers
-    if: ${{ github.event_name == 'pull_request' }}
+  comment:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
 
     steps:
-      - name: Deploy preview on Vercel (API)
-        id: deploy
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          PR_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_REF: ${{ github.event.pull_request.head.ref }}
-          REPO_FULL: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${VERCEL_TOKEN}" ] || [ -z "${VERCEL_PROJECT_ID}" ]; then
-            echo "Missing VERCEL_TOKEN or VERCEL_PROJECT_ID" >&2
-            exit 1
-          fi
-
-          # Create deployment
-          BODY=$(jq -n \
-            --arg projectId "${VERCEL_PROJECT_ID}" \
-            --arg repo "${REPO_FULL}" \
-            --arg sha "${PR_SHA}" \
-            --arg ref "${PR_REF}" \
-            '{
-              "name": $projectId,
-              "project": $projectId,
-              "target": "preview",
-              "gitSource": {
-                "type": "github",
-                "repoId": $repo,
-                "sha": $sha,
-                "ref": $ref
-              },
-              "meta": {
-                "githubCommitSha": $sha,
-                "githubCommitRef": $ref
-              }
-            }'
-          )
-
-          URL="https://api.vercel.com/v13/deployments"
-          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
-            URL="$URL?teamId=${VERCEL_TEAM_ID}"
-          fi
-
-          RESP=$(curl -sS -X POST "$URL" \
-            -H "Authorization: Bearer ${VERCEL_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data "$BODY")
-
-          DEPLOYMENT_ID=$(echo "$RESP" | jq -r '.id // empty')
-          if [ -z "$DEPLOYMENT_ID" ]; then
-            echo "Failed to create deployment. Response:" >&2
-            echo "$RESP" >&2
-            exit 1
-          fi
-
-          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Poll Vercel deployment status
-        id: poll
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-          DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
-        run: |
-          set -euo pipefail
-
-          URL="https://api.vercel.com/v13/deployments/${DEPLOYMENT_ID}"
-          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
-            URL="$URL?teamId=${VERCEL_TEAM_ID}"
-          fi
-
-          # up to ~15 minutes
-          for i in $(seq 1 90); do
-            RESP=$(curl -sS -X GET "$URL" \
-              -H "Authorization: Bearer ${VERCEL_TOKEN}")
-
-            STATE=$(echo "$RESP" | jq -r '.readyState // .state // .status // empty')
-            DEPLOY_URL=$(echo "$RESP" | jq -r '.url // empty')
-            ERR_MSG=$(echo "$RESP" | jq -r '.error.message // empty')
-
-            echo "state=$STATE url=$DEPLOY_URL"
-
-            if [ "$STATE" = "READY" ] || [ "$STATE" = "ready" ]; then
-              echo "state=ready" >> "$GITHUB_OUTPUT"
-              echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            if [ "$STATE" = "ERROR" ] || [ "$STATE" = "error" ]; then
-              echo "state=error" >> "$GITHUB_OUTPUT"
-              echo "error=$ERR_MSG" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            sleep 10
-          done
-
-          echo "state=timeout" >> "$GITHUB_OUTPUT"
-
-      - name: Comment preview URL on PR
-        if: ${{ always() }}
+      - name: Comment Vercel preview status on PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-          STATE: ${{ steps.poll.outputs.state }}
-          URL: ${{ steps.poll.outputs.url }}
-          ERROR: ${{ steps.poll.outputs.error }}
+          SHA: ${{ github.event.deployment.sha }}
+          STATE: ${{ github.event.deployment_status.state }}
+          ENV_URL: ${{ github.event.deployment_status.environment_url }}
+          LOG_URL: ${{ github.event.deployment_status.log_url }}
+          DESCRIPTION: ${{ github.event.deployment_status.description }}
         run: |
           set -euo pipefail
+
+          # We care mostly about Vercel preview deployments.
+          # Vercel usually reports environment=Preview/preview.
+          ENV_NAME="${{ github.event.deployment.environment }}"
+          if [ "${ENV_NAME}" != "preview" ] && [ "${ENV_NAME}" != "Preview" ]; then
+            echo "Skip: environment=${ENV_NAME}"
+            exit 0
+          fi
+
+          if [ -z "${SHA}" ]; then
+            echo "Missing SHA in deployment event" >&2
+            exit 1
+          fi
+
+          # Find open PR for this head SHA
+          PR_NUMBER=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${REPO}/commits/${SHA}/pulls" \
+            --jq 'map(select(.state=="open"))[0].number // empty')
+
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "No open PR found for sha=${SHA}. Nothing to comment."
+            exit 0
+          fi
 
           MARKER="<!-- botcow:vercel-preview -->"
 
-          if [ "${STATE}" = "ready" ] && [ -n "${URL}" ]; then
-            BODY="$MARKER
-
-Vercel preview: https://${URL}
-
-Status: ready"
-          elif [ "${STATE}" = "error" ]; then
-            BODY="$MARKER
-
-Vercel preview deployment failed.
-
-Status: error
-
-Error: ${ERROR:-unknown}"
-          else
-            BODY="$MARKER
-
-Vercel preview deployment status: ${STATE:-unknown}
-
-(If this stays stuck, check Vercel Deployments list for this project.)"
+          URL_LINE=""
+          if [ -n "${ENV_URL}" ]; then
+            URL_LINE="Preview: ${ENV_URL}"
           fi
 
-          # Post a new comment (simple + reliable)
+          EXTRA=""
+          if [ -n "${LOG_URL}" ]; then
+            EXTRA="${EXTRA}
+Logs: ${LOG_URL}"
+          fi
+          if [ -n "${DESCRIPTION}" ]; then
+            EXTRA="${EXTRA}
+Note: ${DESCRIPTION}"
+          fi
+
+          BODY="$MARKER
+
+${URL_LINE}
+Status: ${STATE}${EXTRA}"
+
           gh api \
             -X POST \
-            repos/${REPO}/issues/${PR_NUMBER}/comments \
+            "repos/${REPO}/issues/${PR_NUMBER}/comments" \
             -f body="$BODY"

@@ -1,4 +1,4 @@
-name: Vercel Preview (PR)
+name: Vercel Preview Deploy
 
 on:
   pull_request:
@@ -13,157 +13,151 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy-preview:
+  deploy:
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
-      - name: Trigger Vercel deployment (preview)
-        id: trigger
+      - name: Deploy preview on Vercel (API)
+        id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           PR_SHA: ${{ github.event.pull_request.head.sha }}
           PR_REF: ${{ github.event.pull_request.head.ref }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_FULL: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          if [ -z "${VERCEL_TOKEN:-}" ] || [ -z "${VERCEL_PROJECT_ID:-}" ]; then
-            echo "Missing required secrets: VERCEL_TOKEN and/or VERCEL_PROJECT_ID" >&2
+          if [ -z "${VERCEL_TOKEN}" ] || [ -z "${VERCEL_PROJECT_ID}" ]; then
+            echo "Missing VERCEL_TOKEN or VERCEL_PROJECT_ID" >&2
             exit 1
           fi
 
-          TEAM_QS=""
-          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
-            TEAM_QS="?teamId=${VERCEL_TEAM_ID}"
-          fi
-
-          # Important: On Hobby we don't have Vercel webhooks, so we must poll Vercel API.
-          # We also want a stable way to correlate deployment <-> PR: put metadata.
-          PAYLOAD=$(cat <<EOF
-          {
-            "name": "${VERCEL_PROJECT_ID}",
-            "project": "${VERCEL_PROJECT_ID}",
-            "target": "preview",
-            "gitSource": {
-              "type": "github",
-              "repo": "${REPO}",
-              "ref": "${PR_REF}",
-              "sha": "${PR_SHA}"
-            },
-            "meta": {
-              "githubRepo": "${REPO}",
-              "githubPullRequest": "${PR_NUMBER}",
-              "githubCommitSha": "${PR_SHA}",
-              "githubCommitRef": "${PR_REF}"
-            }
-          }
-EOF
+          # Create deployment
+          BODY=$(jq -n \
+            --arg projectId "${VERCEL_PROJECT_ID}" \
+            --arg repo "${REPO_FULL}" \
+            --arg sha "${PR_SHA}" \
+            --arg ref "${PR_REF}" \
+            '{
+              "name": $projectId,
+              "project": $projectId,
+              "target": "preview",
+              "gitSource": {
+                "type": "github",
+                "repoId": $repo,
+                "sha": $sha,
+                "ref": $ref
+              },
+              "meta": {
+                "githubCommitSha": $sha,
+                "githubCommitRef": $ref
+              }
+            }'
           )
 
-          echo "Triggering Vercel preview deployment for ${REPO}#${PR_NUMBER} sha=${PR_SHA} ref=${PR_REF}" >&2
+          URL="https://api.vercel.com/v13/deployments"
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+            URL="$URL?teamId=${VERCEL_TEAM_ID}"
+          fi
 
-          RESPONSE=$(curl -sS -X POST "https://api.vercel.com/v13/deployments${TEAM_QS}" \
+          RESP=$(curl -sS -X POST "$URL" \
             -H "Authorization: Bearer ${VERCEL_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data "${PAYLOAD}")
+            --data "$BODY")
 
-          DEPLOYMENT_ID=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); if(!j.id){console.error(j); process.exit(1)}; console.log(j.id)")
-          DEPLOYMENT_URL=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); console.log(j.url || '')")
+          DEPLOYMENT_ID=$(echo "$RESP" | jq -r '.id // empty')
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "Failed to create deployment. Response:" >&2
+            echo "$RESP" >&2
+            exit 1
+          fi
 
-          echo "deployment_id=${DEPLOYMENT_ID}" >> "$GITHUB_OUTPUT"
-          echo "deployment_url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
+          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Poll Vercel deployment status
         id: poll
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-          DEPLOYMENT_ID: ${{ steps.trigger.outputs.deployment_id }}
+          DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
         run: |
           set -euo pipefail
 
-          TEAM_QS=""
+          URL="https://api.vercel.com/v13/deployments/${DEPLOYMENT_ID}"
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then
-            TEAM_QS="?teamId=${VERCEL_TEAM_ID}"
+            URL="$URL?teamId=${VERCEL_TEAM_ID}"
           fi
 
-          echo "Polling Vercel deployment ${DEPLOYMENT_ID}" >&2
-
-          # Poll up to ~15 minutes (60 * 15s)
-          for i in $(seq 1 60); do
-            RESPONSE=$(curl -sS "https://api.vercel.com/v13/deployments/${DEPLOYMENT_ID}${TEAM_QS}" \
+          # up to ~15 minutes
+          for i in $(seq 1 90); do
+            RESP=$(curl -sS -X GET "$URL" \
               -H "Authorization: Bearer ${VERCEL_TOKEN}")
 
-            STATE=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); console.log((j.readyState||j.state||j.status||'').toUpperCase())")
-            URL=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); console.log(j.url || '')")
-            ERROR_CODE=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); console.log((j.error && (j.error.code||j.error.message)) ? (j.error.code||j.error.message) : '')")
+            STATE=$(echo "$RESP" | jq -r '.readyState // .state // .status // empty')
+            DEPLOY_URL=$(echo "$RESP" | jq -r '.url // empty')
+            ERR_MSG=$(echo "$RESP" | jq -r '.error.message // empty')
 
-            echo "state=${STATE} url=${URL}" >&2
+            echo "state=$STATE url=$DEPLOY_URL"
 
-            if [ -n "${URL}" ]; then
-              echo "deployment_url=${URL}" >> "$GITHUB_OUTPUT"
-            fi
-
-            if [ "${STATE}" = "READY" ]; then
-              echo "deployment_state=READY" >> "$GITHUB_OUTPUT"
+            if [ "$STATE" = "READY" ] || [ "$STATE" = "ready" ]; then
+              echo "state=ready" >> "$GITHUB_OUTPUT"
+              echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
-            if [ "${STATE}" = "ERROR" ] || [ "${STATE}" = "CANCELED" ] || [ "${STATE}" = "CANCELED" ] || [ "${STATE}" = "FAILED" ]; then
-              echo "deployment_state=${STATE}" >> "$GITHUB_OUTPUT"
-              echo "deployment_error=${ERROR_CODE}" >> "$GITHUB_OUTPUT"
+            if [ "$STATE" = "ERROR" ] || [ "$STATE" = "error" ]; then
+              echo "state=error" >> "$GITHUB_OUTPUT"
+              echo "error=$ERR_MSG" >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
-            sleep 15
+            sleep 10
           done
 
-          echo "deployment_state=TIMEOUT" >> "$GITHUB_OUTPUT"
+          echo "state=timeout" >> "$GITHUB_OUTPUT"
 
       - name: Comment preview URL on PR
-        if: always()
+        if: ${{ always() }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-          DEPLOYMENT_ID: ${{ steps.trigger.outputs.deployment_id }}
-          DEPLOYMENT_URL: ${{ steps.poll.outputs.deployment_url || steps.trigger.outputs.deployment_url }}
-          DEPLOYMENT_STATE: ${{ steps.poll.outputs.deployment_state }}
-          DEPLOYMENT_ERROR: ${{ steps.poll.outputs.deployment_error }}
+          STATE: ${{ steps.poll.outputs.state }}
+          URL: ${{ steps.poll.outputs.url }}
+          ERROR: ${{ steps.poll.outputs.error }}
         run: |
           set -euo pipefail
 
-          MARKER="<!-- botcow:vercel-preview:${DEPLOYMENT_ID} -->"
+          MARKER="<!-- botcow:vercel-preview -->"
 
-          if [ -n "${DEPLOYMENT_URL:-}" ]; then
-            PREVIEW_URL="https://${DEPLOYMENT_URL}"
+          if [ "${STATE}" = "ready" ] && [ -n "${URL}" ]; then
+            BODY="$MARKER
+
+Vercel preview: https://${URL}
+
+Status: ready"
+          elif [ "${STATE}" = "error" ]; then
+            BODY="$MARKER
+
+Vercel preview deployment failed.
+
+Status: error
+
+Error: ${ERROR:-unknown}"
           else
-            PREVIEW_URL="(no url yet)"
+            BODY="$MARKER
+
+Vercel preview deployment status: ${STATE:-unknown}
+
+(If this stays stuck, check Vercel Deployments list for this project.)"
           fi
 
-          BODY="${MARKER}
-
-          Vercel preview deployment: **${DEPLOYMENT_STATE:-UNKNOWN}**
-
-          - Preview: ${PREVIEW_URL}
-          - Deployment id: ${DEPLOYMENT_ID}
-          "
-
-          if [ -n "${DEPLOYMENT_ERROR:-}" ]; then
-            BODY="${BODY}
-          - Error: ${DEPLOYMENT_ERROR}
-          "
-          fi
-
-          # Avoid spamming: if our marker is already present, do nothing.
-          EXISTING=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate -q ".[].[].body" | grep -F "${MARKER}" || true)
-          if [ -n "${EXISTING}" ]; then
-            echo "Comment already exists for deployment ${DEPLOYMENT_ID}, skipping." >&2
-            exit 0
-          fi
-
-          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY" >/dev/null
+          # Post a new comment (simple + reliable)
+          gh api \
+            -X POST \
+            repos/${REPO}/issues/${PR_NUMBER}/comments \
+            -f body="$BODY"

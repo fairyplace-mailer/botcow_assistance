@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   deploy:
+    # Safety guard in case someone later adds other triggers
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20

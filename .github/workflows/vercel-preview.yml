@@ -1,7 +1,8 @@
 name: Vercel Preview Comment
 
 on:
-  deployment_status:
+  check_run:
+    types: [completed]
 
 permissions:
   contents: read
@@ -9,69 +10,81 @@ permissions:
 
 jobs:
   comment:
+    if: |
+      github.event.check_run.name != '' &&
+      (contains(github.event.check_run.name, 'Vercel') || github.event.check_run.app.slug == 'vercel')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-
     steps:
-      - name: Comment Vercel preview status on PR
+      - name: Prepare variables
+        id: vars
+        env:
+          CHECK_NAME: ${{ github.event.check_run.name }}
+          CONCLUSION: ${{ github.event.check_run.conclusion }}
+          DETAILS_URL: ${{ github.event.check_run.details_url }}
+          SHA: ${{ github.event.check_run.head_sha }}
+        run: |
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+          echo "conclusion=${CONCLUSION}" >> $GITHUB_OUTPUT
+          echo "details_url=${DETAILS_URL}" >> $GITHUB_OUTPUT
+
+      - name: Find PRs for SHA
+        id: prs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.event.deployment.sha }}
-          STATE: ${{ github.event.deployment_status.state }}
-          ENV_URL: ${{ github.event.deployment_status.environment_url }}
-          LOG_URL: ${{ github.event.deployment_status.log_url }}
-          DESCRIPTION: ${{ github.event.deployment_status.description }}
+          SHA: ${{ steps.vars.outputs.sha }}
         run: |
-          set -euo pipefail
-
-          # We care mostly about Vercel preview deployments.
-          # Vercel usually reports environment=Preview/preview.
-          ENV_NAME="${{ github.event.deployment.environment }}"
-          if [ "${ENV_NAME}" != "preview" ] && [ "${ENV_NAME}" != "Preview" ]; then
-            echo "Skip: environment=${ENV_NAME}"
+          prs_json=$(gh api -H "Accept: application/vnd.github+json" "/repos/${REPO}/commits/${SHA}/pulls")
+          echo "$prs_json" > prs.json
+          count=$(jq 'length' prs.json)
+          echo "count=${count}" >> $GITHUB_OUTPUT
+          if [ "$count" -eq 0 ]; then
+            echo "No PRs found for sha=${SHA}." >&2
             exit 0
           fi
+          # use the first PR (most cases: exactly one)
+          number=$(jq -r '.[0].number' prs.json)
+          echo "number=${number}" >> $GITHUB_OUTPUT
 
-          if [ -z "${SHA}" ]; then
-            echo "Missing SHA in deployment event" >&2
-            exit 1
+      - name: Upsert comment on PR
+        if: ${{ steps.prs.outputs.count != '0' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.prs.outputs.number }}
+          CONCLUSION: ${{ steps.vars.outputs.conclusion }}
+          DETAILS_URL: ${{ steps.vars.outputs.details_url }}
+          SHA: ${{ steps.vars.outputs.sha }}
+        run: |
+          marker="<!-- botcow:vercel-preview -->"
+
+          status="${CONCLUSION}"
+          if [ -z "$status" ] || [ "$status" = "null" ]; then
+            status="completed"
           fi
 
-          # Find open PR for this head SHA
-          PR_NUMBER=$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            "repos/${REPO}/commits/${SHA}/pulls" \
-            --jq 'map(select(.state=="open"))[0].number // empty')
+          # best-effort preview URL: Vercel check Details usually points to the deployment.
+          preview_url="$DETAILS_URL"
 
-          if [ -z "${PR_NUMBER}" ]; then
-            echo "No open PR found for sha=${SHA}. Nothing to comment."
-            exit 0
+          body=$(cat <<EOF
+          ${marker}
+          **Vercel Preview**
+
+          - Status: \\`${status}\\`
+          - Preview: ${preview_url}
+          - Details: ${DETAILS_URL}
+          - Commit: ${SHA}
+          EOF
+          )
+
+          # Find existing comment with marker
+          comments=$(gh api -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100")
+          existing_id=$(echo "$comments" | jq -r --arg m "$marker" '.[] | select(.body | contains($m)) | .id' | head -n 1)
+
+          if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
+            gh api -X PATCH -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${existing_id}" -f body="$body" > /dev/null
+            echo "Updated comment id=${existing_id} on PR #${PR_NUMBER}."
+          else
+            gh api -X POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$body" > /dev/null
+            echo "Created comment on PR #${PR_NUMBER}."
           fi
-
-          MARKER="<!-- botcow:vercel-preview -->"
-
-          URL_LINE=""
-          if [ -n "${ENV_URL}" ]; then
-            URL_LINE="Preview: ${ENV_URL}"
-          fi
-
-          EXTRA=""
-          if [ -n "${LOG_URL}" ]; then
-            EXTRA="${EXTRA}
-Logs: ${LOG_URL}"
-          fi
-          if [ -n "${DESCRIPTION}" ]; then
-            EXTRA="${EXTRA}
-Note: ${DESCRIPTION}"
-          fi
-
-          BODY="$MARKER
-
-${URL_LINE}
-Status: ${STATE}${EXTRA}"
-
-          gh api \
-            -X POST \
-            "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            -f body="$BODY"

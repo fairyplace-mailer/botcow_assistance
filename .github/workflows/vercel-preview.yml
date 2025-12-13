@@ -1,0 +1,169 @@
+name: Vercel Preview (PR)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: vercel-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Trigger Vercel deployment (preview)
+        id: trigger
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_REF: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${VERCEL_TOKEN:-}" ] || [ -z "${VERCEL_PROJECT_ID:-}" ]; then
+            echo "Missing required secrets: VERCEL_TOKEN and/or VERCEL_PROJECT_ID" >&2
+            exit 1
+          fi
+
+          TEAM_QS=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+            TEAM_QS="?teamId=${VERCEL_TEAM_ID}"
+          fi
+
+          # Important: On Hobby we don't have Vercel webhooks, so we must poll Vercel API.
+          # We also want a stable way to correlate deployment <-> PR: put metadata.
+          PAYLOAD=$(cat <<EOF
+          {
+            "name": "${VERCEL_PROJECT_ID}",
+            "project": "${VERCEL_PROJECT_ID}",
+            "target": "preview",
+            "gitSource": {
+              "type": "github",
+              "repo": "${REPO}",
+              "ref": "${PR_REF}",
+              "sha": "${PR_SHA}"
+            },
+            "meta": {
+              "githubRepo": "${REPO}",
+              "githubPullRequest": "${PR_NUMBER}",
+              "githubCommitSha": "${PR_SHA}",
+              "githubCommitRef": "${PR_REF}"
+            }
+          }
+EOF
+          )
+
+          echo "Triggering Vercel preview deployment for ${REPO}#${PR_NUMBER} sha=${PR_SHA} ref=${PR_REF}" >&2
+
+          RESPONSE=$(curl -sS -X POST "https://api.vercel.com/v13/deployments${TEAM_QS}" \
+            -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "${PAYLOAD}")
+
+          DEPLOYMENT_ID=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); if(!j.id){console.error(j); process.exit(1)}; console.log(j.id)")
+          DEPLOYMENT_URL=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); console.log(j.url || '')")
+
+          echo "deployment_id=${DEPLOYMENT_ID}" >> "$GITHUB_OUTPUT"
+          echo "deployment_url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Poll Vercel deployment status
+        id: poll
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          DEPLOYMENT_ID: ${{ steps.trigger.outputs.deployment_id }}
+        run: |
+          set -euo pipefail
+
+          TEAM_QS=""
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+            TEAM_QS="?teamId=${VERCEL_TEAM_ID}"
+          fi
+
+          echo "Polling Vercel deployment ${DEPLOYMENT_ID}" >&2
+
+          # Poll up to ~15 minutes (60 * 15s)
+          for i in $(seq 1 60); do
+            RESPONSE=$(curl -sS "https://api.vercel.com/v13/deployments/${DEPLOYMENT_ID}${TEAM_QS}" \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}")
+
+            STATE=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); console.log((j.readyState||j.state||j.status||'').toUpperCase())")
+            URL=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); console.log(j.url || '')")
+            ERROR_CODE=$(node -e "const r=${RESPONSE@Q}; const j=JSON.parse(r); console.log((j.error && (j.error.code||j.error.message)) ? (j.error.code||j.error.message) : '')")
+
+            echo "state=${STATE} url=${URL}" >&2
+
+            if [ -n "${URL}" ]; then
+              echo "deployment_url=${URL}" >> "$GITHUB_OUTPUT"
+            fi
+
+            if [ "${STATE}" = "READY" ]; then
+              echo "deployment_state=READY" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ "${STATE}" = "ERROR" ] || [ "${STATE}" = "CANCELED" ] || [ "${STATE}" = "CANCELED" ] || [ "${STATE}" = "FAILED" ]; then
+              echo "deployment_state=${STATE}" >> "$GITHUB_OUTPUT"
+              echo "deployment_error=${ERROR_CODE}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            sleep 15
+          done
+
+          echo "deployment_state=TIMEOUT" >> "$GITHUB_OUTPUT"
+
+      - name: Comment preview URL on PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          DEPLOYMENT_ID: ${{ steps.trigger.outputs.deployment_id }}
+          DEPLOYMENT_URL: ${{ steps.poll.outputs.deployment_url || steps.trigger.outputs.deployment_url }}
+          DEPLOYMENT_STATE: ${{ steps.poll.outputs.deployment_state }}
+          DEPLOYMENT_ERROR: ${{ steps.poll.outputs.deployment_error }}
+        run: |
+          set -euo pipefail
+
+          MARKER="<!-- botcow:vercel-preview:${DEPLOYMENT_ID} -->"
+
+          if [ -n "${DEPLOYMENT_URL:-}" ]; then
+            PREVIEW_URL="https://${DEPLOYMENT_URL}"
+          else
+            PREVIEW_URL="(no url yet)"
+          fi
+
+          BODY="${MARKER}
+
+          Vercel preview deployment: **${DEPLOYMENT_STATE:-UNKNOWN}**
+
+          - Preview: ${PREVIEW_URL}
+          - Deployment id: ${DEPLOYMENT_ID}
+          "
+
+          if [ -n "${DEPLOYMENT_ERROR:-}" ]; then
+            BODY="${BODY}
+          - Error: ${DEPLOYMENT_ERROR}
+          "
+          fi
+
+          # Avoid spamming: if our marker is already present, do nothing.
+          EXISTING=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate -q ".[].[].body" | grep -F "${MARKER}" || true)
+          if [ -n "${EXISTING}" ]; then
+            echo "Comment already exists for deployment ${DEPLOYMENT_ID}, skipping." >&2
+            exit 0
+          fi
+
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY" >/dev/null

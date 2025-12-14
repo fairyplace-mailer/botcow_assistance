@@ -1,7 +1,7 @@
 import {
   downloadWorkflowRunLogs,
   listWorkflowRunJobs,
-  type WorkflowRunJob,
+  type NormalizedJob,
 } from './github';
 import {
   extractWorkflowRunLogsTextFromZipBase64,
@@ -33,15 +33,11 @@ function isFailedConclusion(conclusion?: string | null) {
   return conclusion === 'failure' || conclusion === 'cancelled' || conclusion === 'timed_out';
 }
 
-function summarizeFailedSteps(job: WorkflowRunJob): FailedStepSummary[] {
-  const steps = job.steps ?? [];
-  return steps
-    .filter((s) => isFailedConclusion(s.conclusion))
-    .map((s) => ({
-      jobName: job.name,
-      stepName: s.name,
-      conclusion: s.conclusion,
-    }));
+function summarizeFailedSteps(job: NormalizedJob): FailedStepSummary[] {
+  // NormalizedJob currently doesn't include step details.
+  // We keep the shape for forward compatibility; once we enrich NormalizedJob with steps,
+  // this will start producing useful results.
+  return [];
 }
 
 export async function getWorkflowRunLogsText(args: {

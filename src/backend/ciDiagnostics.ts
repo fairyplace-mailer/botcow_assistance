@@ -53,12 +53,13 @@ function extractErrorLinesFromLogs(text: string, maxLines = 60): string[] {
     /Next\.js build worker exited with code/i,
     /ELIFECYCLE/i,
     /npm ERR!/i,
-    /Command ".+" exited with/i,
+    /Command \".+\" exited with/i,
   ];
 
   const hits: number[] = [];
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
+    if (!l) continue;
     if (patterns.some((p) => p.test(l))) hits.push(i);
   }
 
@@ -81,7 +82,7 @@ function extractErrorLinesFromLogs(text: string, maxLines = 60): string[] {
 
   const out: string[] = [];
   for (const [a, b] of merged) {
-    for (let i = a; i <= b; i++) out.push(lines[i]);
+    for (let i = a; i <= b; i++) out.push(lines[i] ?? '');
     out.push('');
   }
 

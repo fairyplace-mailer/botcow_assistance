@@ -16,7 +16,10 @@ import {
   updateIssue,
   listIssues,
   listWorkflowRunsForRepo,
+  listWorkflowRunJobs,
+  downloadWorkflowRunLogs,
 } from './github';
+import { extractWorkflowRunLogsTextFromZipBase64 } from './githubLogs';
 
 /**
  * СХЕМЫ (описание tools для OpenAI).
@@ -275,6 +278,57 @@ export const toolSchemas = [
   {
     type: 'function',
     function: {
+      name: 'github_list_workflow_run_jobs',
+      description: 'Получить список jobs для workflow run.',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: { type: 'string', nullable: true },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
+      name: 'github_download_workflow_run_logs',
+      description:
+        'Скачать логи workflow run. Возвращает zip в base64 (формат zip-base64).',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: { type: 'string', nullable: true },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
+      name: 'github_get_workflow_run_logs_text',
+      description:
+        'Скачать и распаковать логи workflow run. Возвращает текст (слепок .txt файлов из zip).',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: { type: 'string', nullable: true },
+          maxChars: { type: 'number', nullable: true },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
       name: 'github_create_issue',
       description: 'Создать Issue.',
       parameters: {
@@ -409,6 +463,21 @@ export const toolHandlers = {
 
   github_get_workflow_status: async (args: any) => {
     return await getWorkflowStatus(args);
+  },
+
+  github_list_workflow_run_jobs: async (args: any) => {
+    return await listWorkflowRunJobs(args);
+  },
+
+  github_download_workflow_run_logs: async (args: any) => {
+    return await downloadWorkflowRunLogs(args);
+  },
+
+  github_get_workflow_run_logs_text: async (args: any) => {
+    const zip = await downloadWorkflowRunLogs(args);
+    return extractWorkflowRunLogsTextFromZipBase64(zip.contentBase64, {
+      maxChars: args.maxChars,
+    });
   },
 
   github_create_issue: async (args: any) => {

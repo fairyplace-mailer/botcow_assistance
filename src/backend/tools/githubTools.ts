@@ -1,49 +1,80 @@
 import {
-  getFile,
-  createBranch,
-  commitFile,
+  createIssue,
   createPullRequest,
-  mergePullRequest,
-  runWorkflow,
-  getWorkflowStatus,
-  commentOnPullRequest,
+  downloadWorkflowRunLogs,
+  getFile,
+  getRepoStructure,
+  listFiles,
+  listIssues,
+  listWorkflowRunJobs,
   listWorkflowRuns,
+  mergePullRequest,
+  searchInRepo,
+  updateIssue,
 } from '../github';
+import {
+  githubDiagnoseLatestWorkflowRun,
+  githubDiagnoseWorkflowRun,
+  githubGetWorkflowRunLogsText,
+} from '../ciDiagnostics';
+import { githubDiagnoseActionsSetup } from '../diagnostics/actionsDiagnostics';
 
-type WorkflowRunStatus =
-  | 'waiting'
-  | 'completed'
-  | 'action_required'
-  | 'cancelled'
-  | 'failure'
-  | 'neutral'
-  | 'skipped'
-  | 'stale'
-  | 'success'
-  | 'timed_out'
-  | 'in_progress'
-  | 'queued'
-  | 'requested'
-  | 'pending';
-
+/**
+ * JSON schemas tools for OpenAI (function calling).
+ */
 export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
-      name: 'github_get_file',
-      description:
-        'Прочитать файл из репозитория по пути (используется по умолчанию BOTCOW_DEFAULT_REPO).',
+      name: 'github_get_repo_structure',
+      description: 'Получить структуру репозитория (GitHub).',
       parameters: {
         type: 'object',
         properties: {
-          path: {
-            type: 'string',
-            description: 'Путь к файлу в репо, например "src/app/page.tsx".',
-          },
           repo: {
             type: 'string',
             description:
-              'Полное имя репозитория "owner/repo". Если не указано, используется BOTCOW_DEFAULT_REPO.',
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_files',
+      description: 'Список файлов/папок по пути (один уровень).',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь внутри репозитория.' },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+          ref: {
+            type: 'string',
+            description: 'Ветка/тег/sha. Если не задано — default branch.',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_get_file',
+      description: 'Получить содержимое файла.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь внутри репозитория.' },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
           },
         },
         required: ['path'],
@@ -53,62 +84,21 @@ export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
-      name: 'github_create_branch',
-      description:
-        'Создать новую ветку от базовой (по умолчанию main) в указанном репозитории.',
+      name: 'github_search_in_repo',
+      description: 'Поиск по репозиторию.',
       parameters: {
         type: 'object',
         properties: {
-          branchName: {
-            type: 'string',
-            description: 'Имя новой ветки.',
-          },
-          baseBranch: {
-            type: 'string',
-            description: 'Базовая ветка, по умолчанию main.',
-          },
+          query: { type: 'string', description: 'Поисковая строка.' },
+          path: { type: 'string', description: 'Ограничить поиск директорией.' },
           repo: {
             type: 'string',
             description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
           },
+          per_page: { type: 'number', description: 'Кол-во (до 100).' },
         },
-        required: ['branchName'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_commit_file',
-      description:
-        'Создать или обновить файл в ветке репозитория с коммитом (используется для фич/фиксов).',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Путь к файлу в репо.',
-          },
-          content: {
-            type: 'string',
-            description: 'Содержимое файла в виде текста.',
-          },
-          message: {
-            type: 'string',
-            description: 'Текст commit message.',
-          },
-          branch: {
-            type: 'string',
-            description: 'Ветка для коммита.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['path', 'content', 'message', 'branch'],
+        required: ['query'],
       },
     },
   },
@@ -116,32 +106,15 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_pull_request',
-      description:
-        'Создать Pull Request из ветки head в базовую ветку (обычно main).',
+      description: 'Создать Pull Request.',
       parameters: {
         type: 'object',
         properties: {
-          title: {
-            type: 'string',
-            description: 'Заголовок PR.',
-          },
-          head: {
-            type: 'string',
-            description: 'Исходная ветка (head).',
-          },
-          base: {
-            type: 'string',
-            description: 'Целевая ветка (base), по умолчанию main.',
-          },
-          body: {
-            type: 'string',
-            description: 'Описание PR.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
+          title: { type: 'string' },
+          head: { type: 'string' },
+          base: { type: 'string' },
+          body: { type: 'string' },
+          repo: { type: 'string' },
         },
         required: ['title', 'head'],
       },
@@ -150,46 +123,14 @@ export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
-      name: 'github_comment_on_pull_request',
-      description: 'Оставить комментарий в Pull Request по номеру.',
-      parameters: {
-        type: 'object',
-        properties: {
-          pull_number: {
-            type: 'number',
-            description: 'Номер PR.',
-          },
-          body: {
-            type: 'string',
-            description: 'Текст комментария (markdown).',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['pull_number', 'body'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'github_merge_pull_request',
-      description: 'Смерджить Pull Request по номеру.',
+      description: 'Смержить Pull Request выбранным методом.',
       parameters: {
         type: 'object',
         properties: {
-          pull_number: {
-            type: 'number',
-            description: 'Номер PR.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
+          pull_number: { type: 'number' },
+          method: { type: 'string', enum: ['merge', 'squash', 'rebase'] },
+          repo: { type: 'string' },
         },
         required: ['pull_number'],
       },
@@ -198,30 +139,70 @@ export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
-      name: 'github_run_workflow',
-      description:
-        'Запустить GitHub Actions workflow (по умолчанию ci.yml на main).',
+      name: 'github_create_issue',
+      description: 'Создать Issue.',
       parameters: {
         type: 'object',
         properties: {
-          workflow_id: {
-            type: 'string',
-            description: 'Имя или ID workflow, например "ci.yml".',
-          },
-          ref: {
-            type: 'string',
-            description: 'Ветка/commit ref, по умолчанию main.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REПО.',
-          },
-          inputs: {
-            type: 'object',
-            additionalProperties: { type: 'string' },
-            description: 'Опциональные inputs для workflow.',
-          },
+          title: { type: 'string' },
+          body: { type: 'string' },
+          labels: { type: 'array', items: { type: 'string' } },
+          assignees: { type: 'array', items: { type: 'string' } },
+          repo: { type: 'string' },
+        },
+        required: ['title'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_update_issue',
+      description: 'Обновить Issue.',
+      parameters: {
+        type: 'object',
+        properties: {
+          issue_number: { type: 'number' },
+          title: { type: 'string' },
+          body: { type: 'string' },
+          state: { type: 'string', enum: ['open', 'closed'] },
+          labels: { type: 'array', items: { type: 'string' } },
+          assignees: { type: 'array', items: { type: 'string' } },
+          repo: { type: 'string' },
+        },
+        required: ['issue_number'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_issues',
+      description: 'Список Issues по фильтрам.',
+      parameters: {
+        type: 'object',
+        properties: {
+          state: { type: 'string', enum: ['open', 'closed', 'all'] },
+          labels: { type: 'array', items: { type: 'string' } },
+          repo: { type: 'string' },
+        },
+      },
+    },
+  },
+
+  // Actions
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_workflow_runs',
+      description: 'Получить список GitHub Actions workflow runs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          workflow_id: { type: 'string' },
+          repo: { type: 'string' },
+          ref: { type: 'string' },
+          per_page: { type: 'number' },
         },
       },
     },
@@ -229,20 +210,13 @@ export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
-      name: 'github_get_workflow_status',
-      description: 'Получить статус конкретного запуска workflow (run_id).',
+      name: 'github_list_workflow_run_jobs',
+      description: 'Получить список jobs по workflow run id.',
       parameters: {
         type: 'object',
         properties: {
-          run_id: {
-            type: 'number',
-            description: 'Идентификатор запуска workflow.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
+          run_id: { type: 'number' },
+          repo: { type: 'string' },
         },
         required: ['run_id'],
       },
@@ -251,86 +225,144 @@ export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
-      name: 'github_list_workflow_runs',
-      description: 'Получить список запусков workflow по workflow_id или по репо.',
+      name: 'github_download_workflow_run_logs',
+      description: 'Скачать логи workflow run (zip base64).',
       parameters: {
         type: 'object',
         properties: {
-          workflow_id: {
-            type: 'string',
-            description: 'Имя или ID workflow (например "ci.yml"). Если не указан — вернёт запуск по всему репо.',
-          },
-          branch: {
-            type: 'string',
-            description: 'Фильтр по ветке (head_branch).',
-          },
-          event: {
-            type: 'string',
-            description: 'Фильтр по событию (например "workflow_dispatch").',
-          },
-          status: {
-            type: 'string',
-            description:
-              'Фильтр по статусу workflow run. Допустимые: waiting, completed, action_required, cancelled, failure, neutral, skipped, stale, success, timed_out, in_progress, queued, requested, pending.',
-            enum: [
-              'waiting',
-              'completed',
-              'action_required',
-              'cancelled',
-              'failure',
-              'neutral',
-              'skipped',
-              'stale',
-              'success',
-              'timed_out',
-              'in_progress',
-              'queued',
-              'requested',
-              'pending',
-            ],
-          },
-          per_page: {
-            type: 'number',
-            description: 'Число возвращаемых записей, по умолчанию 5.',
-          },
-          repo: {
-            type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
+          run_id: { type: 'number' },
+          repo: { type: 'string' },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+
+  // Diagnostics (Stage 1)
+  {
+    type: 'function',
+    function: {
+      name: 'github_get_workflow_run_logs_text',
+      description:
+        'Достать логи workflow run как текст (распаковка zip).',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: { type: 'string' },
+          maxChars: { type: 'number' },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_diagnose_workflow_run',
+      description:
+        'Диагностика CI по workflow run: failed jobs + ключевые строки ошибок из логов.',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: { type: 'string' },
+          maxChars: { type: 'number' },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_diagnose_latest_workflow_run',
+      description:
+        'Диагностика последнего workflow run (logs + failed jobs).',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string' },
+          workflow_id: { type: 'string' },
+          ref: { type: 'string' },
+          per_page: { type: 'number' },
+          maxChars: { type: 'number' },
+        },
+      },
+    },
+  },
+
+  // Diagnostics (Stage 2)
+  {
+    type: 'function',
+    function: {
+      name: 'github_diagnose_actions_setup',
+      description:
+        'Косвенная диагностика GitHub Actions (почему нет ран-ов, 403, permissions). Возвращает чеклист и подсказки.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string' },
+          ref: { type: 'string' },
+          workflow_id: { type: 'string' },
         },
       },
     },
   },
 ] as const;
 
+type ListFilesArgs = { path?: string; repo?: string; ref?: string };
+
+type SearchArgs = {
+  query: string;
+  path?: string;
+  repo?: string;
+  per_page?: number;
+};
+
+function buildOptional<T extends Record<string, unknown>>(obj: T): {
+  [K in keyof T as undefined extends T[K] ? never : K]: T[K];
+} & Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out as any;
+}
+
+/**
+ * Handlers.
+ */
 export const githubToolHandlers = {
+  async github_get_repo_structure(args: { repo?: string }) {
+    return getRepoStructure(args.repo ? { repo: args.repo } : undefined);
+  },
+
+  async github_list_files(args: ListFilesArgs) {
+    const options: { path?: string; repo?: string; ref?: string } = {};
+    if (args.path !== undefined) options.path = args.path;
+    if (args.repo !== undefined) options.repo = args.repo;
+    if (args.ref !== undefined) options.ref = args.ref;
+    return listFiles(options);
+  },
+
   async github_get_file(args: { path: string; repo?: string }) {
-    const content = await getFile(args.path, args.repo);
-    return { path: args.path, repo: args.repo, content };
+    return getFile(args.path, args.repo);
   },
 
-  async github_create_branch(args: {
-    branchName: string;
-    baseBranch?: string;
-    repo?: string;
-  }) {
-    return createBranch(args.branchName, args.baseBranch, args.repo);
-  },
+  async github_search_in_repo(args: SearchArgs) {
+    const options: {
+      query: string;
+      path?: string;
+      repo?: string;
+      per_page?: number;
+    } = { query: args.query };
 
-  async github_commit_file(args: {
-    path: string;
-    content: string;
-    message: string;
-    branch: string;
-    repo?: string;
-  }) {
-    const { repo, ...rest } = args;
+    if (args.path !== undefined) options.path = args.path;
+    if (args.repo !== undefined) options.repo = args.repo;
+    if (args.per_page !== undefined) options.per_page = args.per_page;
 
-    if (repo) {
-      return commitFile({ ...rest, repo });
-    }
-
-    return commitFile(rest);
+    return searchInRepo(options);
   },
 
   async github_create_pull_request(args: {
@@ -340,54 +372,192 @@ export const githubToolHandlers = {
     body?: string;
     repo?: string;
   }) {
-    return createPullRequest(args);
-  },
+    const options: {
+      title: string;
+      head: string;
+      base?: string;
+      body?: string;
+      repo?: string;
+    } = {
+      title: args.title,
+      head: args.head,
+    };
 
-  async github_comment_on_pull_request(args: {
-    pull_number: number;
-    body: string;
-    repo?: string;
-  }) {
-    return commentOnPullRequest(args);
+    if (args.base !== undefined) options.base = args.base;
+    if (args.body !== undefined) options.body = args.body;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return createPullRequest(options);
   },
 
   async github_merge_pull_request(args: {
     pull_number: number;
+    method?: 'merge' | 'squash' | 'rebase';
     repo?: string;
   }) {
-    return mergePullRequest(args);
+    const options: {
+      pull_number: number;
+      method?: 'merge' | 'squash' | 'rebase';
+      repo?: string;
+    } = {
+      pull_number: args.pull_number,
+    };
+
+    if (args.method !== undefined) options.method = args.method;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return mergePullRequest(options);
   },
 
-  async github_run_workflow(args: {
+  async github_create_issue(args: {
+    title: string;
+    body?: string;
+    labels?: string[];
+    assignees?: string[];
+    repo?: string;
+  }) {
+    const options: {
+      title: string;
+      body?: string;
+      labels?: string[];
+      assignees?: string[];
+      repo?: string;
+    } = { title: args.title };
+
+    if (args.body !== undefined) options.body = args.body;
+    if (args.labels !== undefined) options.labels = args.labels;
+    if (args.assignees !== undefined) options.assignees = args.assignees;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return createIssue(options);
+  },
+
+  async github_update_issue(args: {
+    issue_number: number;
+    title?: string;
+    body?: string;
+    state?: 'open' | 'closed';
+    labels?: string[];
+    assignees?: string[];
+    repo?: string;
+  }) {
+    const options: {
+      issue_number: number;
+      title?: string;
+      body?: string;
+      state?: 'open' | 'closed';
+      labels?: string[];
+      assignees?: string[];
+      repo?: string;
+    } = { issue_number: args.issue_number };
+
+    if (args.title !== undefined) options.title = args.title;
+    if (args.body !== undefined) options.body = args.body;
+    if (args.state !== undefined) options.state = args.state;
+    if (args.labels !== undefined) options.labels = args.labels;
+    if (args.assignees !== undefined) options.assignees = args.assignees;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return updateIssue(options);
+  },
+
+  async github_list_issues(args: {
+    state?: 'open' | 'closed' | 'all';
+    labels?: string[];
+    repo?: string;
+  }) {
+    const options: {
+      state?: 'open' | 'closed' | 'all';
+      labels?: string[];
+      repo?: string;
+    } = {};
+
+    if (args.state !== undefined) options.state = args.state;
+    if (args.labels !== undefined) options.labels = args.labels;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return listIssues(options);
+  },
+
+  async github_list_workflow_runs(args: {
+    workflow_id?: string;
+    repo?: string;
+    ref?: string;
+    per_page?: number;
+  }) {
+    return listWorkflowRuns(
+      buildOptional({
+        workflow_id: args.workflow_id,
+        repo: args.repo,
+        ref: args.ref,
+        per_page: args.per_page,
+      }),
+    );
+  },
+
+  async github_list_workflow_run_jobs(args: { run_id: number; repo?: string }) {
+    return listWorkflowRunJobs(
+      args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
+    );
+  },
+
+  async github_download_workflow_run_logs(args: { run_id: number; repo?: string }) {
+    return downloadWorkflowRunLogs(
+      args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
+    );
+  },
+
+  async github_get_workflow_run_logs_text(args: {
+    run_id: number;
+    repo?: string;
+    maxChars?: number;
+  }) {
+    return githubGetWorkflowRunLogsText(
+      buildOptional({
+        run_id: args.run_id,
+        repo: args.repo,
+        maxChars: args.maxChars,
+      }),
+    );
+  },
+
+  async github_diagnose_workflow_run(args: {
+    run_id: number;
+    repo?: string;
+    maxChars?: number;
+  }) {
+    return githubDiagnoseWorkflowRun(
+      buildOptional({
+        run_id: args.run_id,
+        repo: args.repo,
+        maxChars: args.maxChars,
+      }),
+    );
+  },
+
+  async github_diagnose_latest_workflow_run(args: {
+    repo?: string;
     workflow_id?: string;
     ref?: string;
-    repo?: string;
-    inputs?: Record<string, string>;
-  }) {
-    return runWorkflow(args);
-  },
-
-  async github_get_workflow_status(args: { run_id: number; repo?: string }) {
-    return getWorkflowStatus(args);
-  },
-
-    async github_list_workflow_runs(args: {
-    workflow_id?: string;
-    branch?: string;
-    event?: string;
-    status?: WorkflowRunStatus | null;
     per_page?: number;
-    repo?: string;
+    maxChars?: number;
   }) {
-    const runs = await listWorkflowRuns({
-      workflow_id: args.workflow_id ?? undefined,
-      branch: args.branch ?? undefined,
-      event: args.event ?? undefined,
-      status: args.status ?? undefined,
-      per_page: args.per_page ?? undefined,
-      repo: args.repo ?? undefined,
-    });
+    return githubDiagnoseLatestWorkflowRun(
+      buildOptional({
+        repo: args.repo,
+        workflow_id: args.workflow_id,
+        ref: args.ref,
+        per_page: args.per_page,
+        maxChars: args.maxChars,
+      }),
+    );
+  },
 
-    return { runs };
+  async github_diagnose_actions_setup(args: {
+    repo?: string;
+    ref?: string;
+    workflow_id?: string;
+  }) {
+    return githubDiagnoseActionsSetup(args);
   },
 };

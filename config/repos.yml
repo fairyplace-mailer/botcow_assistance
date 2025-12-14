@@ -1,0 +1,29 @@
+# BotCow multi-repo configuration
+#
+# This file is the source of truth for which repositories BotCow may operate on,
+# and how to map them to Vercel projects.
+#
+# Notes:
+# - repo: GitHub repository in the form "owner/name"
+# - defaultBranch: default branch used when not specified
+# - vercel:
+#   - projectId/teamId are Vercel identifiers (stored in env for the running app as needed)
+#   - if you don't use a team, teamId can be omitted or left empty
+
+version: 1
+
+defaultRepo: fairyplace-mailer/botcow_assistance
+
+repos:
+  - repo: fairyplace-mailer/botcow_assistance
+    defaultBranch: botcow-prevectus
+    vercel:
+      projectIdEnv: VERCEL_PROJECT_ID
+      teamIdEnv: VERCEL_TEAM_ID
+
+  - repo: fairyplace-mailer/botcat_chat
+    defaultBranch: main
+    vercel:
+      # When running BotCow against botcat_chat, set these env vars (or map them in Vercel)
+      projectIdEnv: VERCEL_PROJECT_ID_BOTCAT_CHAT
+      teamIdEnv: VERCEL_TEAM_ID

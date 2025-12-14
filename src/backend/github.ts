@@ -1,27 +1,36 @@
 import { Octokit } from '@octokit/rest';
+import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
 
 const token = process.env.GITHUB_PAT_BOTCOW;
-const defaultRepo = process.env.BOTCOW_DEFAULT_REPO;
-const owner = "fairyplace-mailer";
 
 if (!token) {
   throw new Error('GITHUB_PAT_BOTCOW is not set');
-}
-
-if (!defaultRepo) {
-  throw new Error('BOTCOW_DEFAULT_REPO is not set');
 }
 
 export const github = new Octokit({
   auth: token,
 });
 
-export function parseRepo(repo: string = defaultRepo as string) {
-  const [owner, repoName] = repo.split('/');
-  if (!owner || !repoName) {
-    throw new Error(`Invalid repo: ${repo}`);
+function getDefaultRepo(): string {
+  // Source of truth: config/repos.yml
+  return getDefaultRepoFromConfig();
+}
+
+export function parseRepo(repo?: string) {
+  const resolved = repo ?? getDefaultRepo();
+
+  // Safety: restrict to allowlist from config
+  if (!isRepoAllowed(resolved)) {
+    throw new Error(
+      `Repo is not allowed by config: ${resolved}. Add it to config/repos.yml`,
+    );
   }
-  return { owner, repo: repoName };
+
+  const [owner, repoName] = resolved.split('/');
+  if (!owner || !repoName) {
+    throw new Error(`Invalid repo: ${resolved}`);
+  }
+  return { owner, repo: repoName, fullName: resolved };
 }
 
 export type NormalizedRun = {
@@ -38,14 +47,20 @@ export type NormalizedRun = {
   workflow_id?: number | null;
 };
 
+export type NormalizedJob = {
+  id: number;
+  name: string;
+  status: string | null;
+  conclusion: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  html_url?: string | null;
+};
+
 /**
- * Получить содержимое файла (UTF-8 текст) по пути.
+ * Прочитать файл (UTF-8 текст) по пути.
  */
-export async function getFile(
-  path: string,
-  repo: string = defaultRepo as string,
-  ref?: string,
-) {
+export async function getFile(path: string, repo?: string, ref?: string) {
   const { owner, repo: repoName } = parseRepo(repo);
 
   const params: Parameters<typeof github.repos.getContent>[0] = {
@@ -70,15 +85,13 @@ export async function getFile(
 
 /**
  * Получить структуру репозитория (дерево файлов).
- * Использует git tree с recursive=1.
  */
 export async function getRepoStructure(options?: {
   repo?: string;
   ref?: string; // ветка или SHA, по умолчанию default_branch
   pathPrefix?: string; // фильтр по префиксу пути
 }) {
-  const repoName = options?.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options?.repo);
 
   let ref = options?.ref;
 
@@ -123,8 +136,7 @@ export async function listFiles(options?: {
   repo?: string;
   ref?: string;
 }) {
-  const repoName = options?.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options?.repo);
   const path = options?.path ?? '';
 
   const params: Parameters<typeof github.repos.getContent>[0] = {
@@ -170,8 +182,7 @@ export async function searchInRepo(options: {
   repo?: string;
   per_page?: number;
 }) {
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
   const per_page = options.per_page ?? 20;
 
   let q = `${options.query} repo:${owner}/${repo}`;
@@ -200,8 +211,7 @@ export async function getRecentCommits(options?: {
   limit?: number;
   repo?: string;
 }) {
-  const repoName = options?.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options?.repo);
   const branch = options?.branch;
   const limit = options?.limit ?? 20;
 
@@ -233,7 +243,7 @@ export async function getRecentCommits(options?: {
 export async function createBranch(
   branchName: string,
   baseBranch: string = 'main',
-  repoName: string = defaultRepo as string,
+  repoName?: string,
 ) {
   const { owner, repo } = parseRepo(repoName);
 
@@ -273,8 +283,7 @@ export async function commitFile(options: {
   repo?: string;
 }) {
   const { path, content, message, branch } = options;
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   let sha: string | undefined;
 
@@ -331,8 +340,7 @@ export async function deleteFile(options: {
   branch: string;
   repo?: string;
 }) {
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   const { path, message, branch } = options;
 
@@ -373,8 +381,7 @@ export async function createPullRequest(options: {
 }) {
   const { title, head } = options;
   const base = options.base ?? 'main';
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   const params: {
     owner: string;
@@ -407,8 +414,7 @@ export async function commentOnPullRequest(options: {
   body: string;
   repo?: string;
 }) {
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   const res = await github.issues.createComment({
     owner,
@@ -428,8 +434,7 @@ export async function mergePullRequest(options: {
   method?: 'merge' | 'squash' | 'rebase';
   repo?: string;
 }) {
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   const res = await github.pulls.merge({
     owner,
@@ -442,7 +447,7 @@ export async function mergePullRequest(options: {
 }
 
 /**
- * Запустить workflow (по умолчанию ci.yml на main).
+ * Запустить workflow.
  */
 export async function runWorkflow(options: {
   workflow_id?: string;
@@ -452,8 +457,7 @@ export async function runWorkflow(options: {
 }) {
   const workflow_id = options.workflow_id ?? 'ci.yml';
   const ref = options.ref ?? 'main';
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   const params: {
     owner: string;
@@ -484,8 +488,7 @@ export async function getWorkflowStatus(options: {
   run_id: number;
   repo?: string;
 }) {
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   const run = await github.actions.getWorkflowRun({
     owner,
@@ -497,8 +500,55 @@ export async function getWorkflowStatus(options: {
 }
 
 /**
- * Список запусков workflow. Если указан workflow_id — использует
- * endpoint /actions/workflows/{workflow_id}/runs, иначе — /actions/runs.
+ * Получить список jobs для workflow run.
+ */
+export async function listWorkflowRunJobs(options: { run_id: number; repo?: string }) {
+  const { owner, repo } = parseRepo(options.repo);
+
+  const res = await github.actions.listJobsForWorkflowRun({
+    owner,
+    repo,
+    run_id: options.run_id,
+    per_page: 100,
+  });
+
+  const jobs = (res.data.jobs || []).map((j: any) => ({
+    id: j.id,
+    name: j.name,
+    status: j.status ?? null,
+    conclusion: j.conclusion ?? null,
+    started_at: j.started_at ?? null,
+    completed_at: j.completed_at ?? null,
+    html_url: j.html_url ?? null,
+  })) as NormalizedJob[];
+
+  return { total_count: res.data.total_count, jobs };
+}
+
+/**
+ * Скачать логи workflow run.
+ * Возвращает zip-архив в base64.
+ */
+export async function downloadWorkflowRunLogs(options: {
+  run_id: number;
+  repo?: string;
+}): Promise<{ format: 'zip-base64'; contentBase64: string }> {
+  const { owner, repo } = parseRepo(options.repo);
+
+  // Use official octokit endpoint for proper typing under exactOptionalPropertyTypes.
+  const res = await github.actions.downloadWorkflowRunLogs({
+    owner,
+    repo,
+    run_id: options.run_id,
+  });
+
+  const buf = Buffer.from(res.data as any);
+
+  return { format: 'zip-base64', contentBase64: buf.toString('base64') };
+}
+
+/**
+ * Список запусков workflow.
  */
 export async function listWorkflowRunsForRepo(args: {
   workflow_id?: string | null | undefined;
@@ -525,13 +575,13 @@ export async function listWorkflowRunsForRepo(args: {
     | undefined;
 }) {
   const { workflow_id, branch, repo, per_page, event, status } = args;
-  const { owner, repo: defaultRepoName } = parseRepo(repo ?? (defaultRepo as string));
+  const { owner, repo: repoName } = parseRepo(repo ?? undefined);
 
   // Prefer workflow-specific endpoint when workflow_id provided
   if (workflow_id) {
     const res = await github.actions.listWorkflowRuns({
       owner,
-      repo: defaultRepoName,
+      repo: repoName,
       workflow_id: workflow_id as any,
       branch: branch ?? undefined,
       event: event ?? undefined,
@@ -559,7 +609,7 @@ export async function listWorkflowRunsForRepo(args: {
   // Fallback to repo-wide endpoint
   const res = await github.actions.listWorkflowRunsForRepo({
     owner,
-    repo: defaultRepoName,
+    repo: repoName,
     branch: branch ?? undefined,
     event: event ?? undefined,
     status: status ?? undefined,
@@ -593,8 +643,7 @@ export async function createIssue(options: {
   assignees?: string[];
   repo?: string;
 }) {
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   const params: any = {
     owner,
@@ -628,8 +677,7 @@ export async function updateIssue(options: {
   assignees?: string[];
   repo?: string;
 }) {
-  const repoName = options.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options.repo);
 
   const params: any = {
     owner,
@@ -666,8 +714,7 @@ export async function listIssues(options?: {
   repo?: string;
   per_page?: number;
 }) {
-  const repoName = options?.repo ?? (defaultRepo as string);
-  const { owner, repo } = parseRepo(repoName);
+  const { owner, repo } = parseRepo(options?.repo);
 
   const params: any = {
     owner,

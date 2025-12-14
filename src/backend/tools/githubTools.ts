@@ -429,13 +429,17 @@ export const githubToolHandlers = {
   },
 
   async github_list_workflow_run_jobs(args: { run_id: number; repo?: string }) {
-    return listWorkflowRunJobs({ run_id: args.run_id, repo: args.repo });
+    return listWorkflowRunJobs(
+      args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
+    );
   },
 
   async github_download_workflow_run_logs(args: {
     run_id: number;
     repo?: string;
   }) {
-    return downloadWorkflowRunLogs({ run_id: args.run_id, repo: args.repo });
+    return downloadWorkflowRunLogs(
+      args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
+    );
   },
 };

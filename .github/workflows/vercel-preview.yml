@@ -23,36 +23,50 @@ jobs:
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           SHA: ${{ github.event.pull_request.head.sha }}
+          REF: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
         run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
+          set -euo pipefail
+
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
             echo "Missing VERCEL_TOKEN" >&2
             exit 1
           fi
-          if [ -z "$VERCEL_PROJECT_ID" ]; then
+          if [ -z "${VERCEL_PROJECT_ID:-}" ]; then
             echo "Missing VERCEL_PROJECT_ID" >&2
             exit 1
           fi
 
+          # Vercel expects { project, target, gitSource } for /v13/deployments.
+          # project = projectId string.
           payload=$(jq -n \
-            --arg name "preview-${SHA}" \
+            --arg project "$VERCEL_PROJECT_ID" \
             --arg target "preview" \
-            --arg projectId "$VERCEL_PROJECT_ID" \
             --arg sha "$SHA" \
-            '{name:$name, target:$target, projectId:$projectId, gitSource:{type:"github", sha:$sha}}')
+            --arg ref "$REF" \
+            '{project:$project, target:$target, gitSource:{type:"github", sha:$sha, ref:$ref}}')
 
           url="https://api.vercel.com/v13/deployments"
-          if [ -n "$VERCEL_TEAM_ID" ]; then
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
             url="$url?teamId=$VERCEL_TEAM_ID"
           fi
 
           echo "Creating deployment via $url" >&2
-          resp=$(curl -fsS -X POST "$url" \
+          echo "Payload: $payload" >&2
+
+          # We want the response body even on non-2xx.
+          http_code=$(curl -sS -o deployment.json -w "%{http_code}" -X POST "$url" \
             -H "Authorization: Bearer $VERCEL_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$payload")
 
-          echo "$resp" > deployment.json
-          id=$(jq -r '.id' deployment.json)
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "Vercel API error (HTTP $http_code). Response:" >&2
+            cat deployment.json >&2
+            exit 1
+          fi
+
+          id=$(jq -r '.id // empty' deployment.json)
           dep_url=$(jq -r '.url // empty' deployment.json)
 
           if [ -z "$id" ] || [ "$id" = "null" ]; then
@@ -71,18 +85,25 @@ jobs:
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
         run: |
+          set -euo pipefail
+
           url="https://api.vercel.com/v13/deployments/${DEPLOYMENT_ID}"
-          if [ -n "$VERCEL_TEAM_ID" ]; then
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
             url="$url?teamId=$VERCEL_TEAM_ID"
           fi
 
           # Poll up to ~10 minutes
           for i in $(seq 1 60); do
-            resp=$(curl -fsS -X GET "$url" -H "Authorization: Bearer $VERCEL_TOKEN")
-            echo "$resp" > status.json
+            http_code=$(curl -sS -o status.json -w "%{http_code}" -X GET "$url" \
+              -H "Authorization: Bearer $VERCEL_TOKEN")
+
+            if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+              echo "Vercel status API error (HTTP $http_code). Response:" >&2
+              cat status.json >&2
+              exit 1
+            fi
 
             state=$(jq -r '.readyState // .state // .status // empty' status.json)
-            # Try to surface a usable URL (url is host without protocol)
             dep_url=$(jq -r '.url // empty' status.json)
 
             if [ -n "$dep_url" ]; then
@@ -113,10 +134,12 @@ jobs:
           DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
           DEPLOYMENT_URL: ${{ steps.poll.outputs.deployment_url || steps.deploy.outputs.deployment_url }}
         run: |
+          set -euo pipefail
+
           marker="<!-- botcow:vercel-preview -->"
 
           preview=""
-          if [ -n "$DEPLOYMENT_URL" ]; then
+          if [ -n "${DEPLOYMENT_URL:-}" ]; then
             # Vercel returns host without protocol
             if echo "$DEPLOYMENT_URL" | grep -q '^https\?://'; then
               preview="$DEPLOYMENT_URL"
@@ -131,7 +154,7 @@ jobs:
           ${marker}
           **Vercel Preview**
 
-          - Status: \\`${STATE}\\`
+          - Status: \`${STATE}\`
           - Preview: ${preview}
           - Details: ${details}
           - Commit: ${SHA}

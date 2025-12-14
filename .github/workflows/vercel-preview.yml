@@ -13,18 +13,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy-and-comment:
+  comment-existing-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Vercel deployment
-        id: deploy
+      - name: Find latest Vercel deployment for this PR commit
+        id: find
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           SHA: ${{ github.event.pull_request.head.sha }}
-          REF: ${{ github.event.pull_request.head.ref }}
-          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -37,125 +35,53 @@ jobs:
             exit 1
           fi
 
-          # Derive numeric repoId required by Vercel when using gitSource.type=github
-          project_url="https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}"
+          url="https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&limit=30"
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then
-            project_url="$project_url?teamId=$VERCEL_TEAM_ID"
+            url="$url&teamId=${VERCEL_TEAM_ID}"
           fi
 
-          repo_id=$(curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "$project_url" \
-            | jq -r '.link.repoId // empty')
+          echo "Query deployments: $url" >&2
+          curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "$url" > deployments.json
 
-          if [ -z "$repo_id" ] || [ "$repo_id" = "null" ]; then
-            echo "Unable to resolve repoId from Vercel project link. Ensure the Vercel project is linked to GitHub." >&2
-            exit 1
+          # Try to match by gitSource.sha first, then by meta.githubCommitSha.
+          dep=$(jq -c --arg sha "$SHA" '
+            .deployments
+            | map(select((.gitSource.sha? == $sha) or (.meta.githubCommitSha? == $sha)))
+            | sort_by(.createdAt) | reverse
+            | .[0] // empty
+          ' deployments.json)
+
+          if [ -z "$dep" ]; then
+            echo "No Vercel deployment found for sha=$SHA (searched latest 30)." >&2
+            echo "state=not_found" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          # `name` is required by POST /v13/deployments
-          name=$(echo "${REPO}" | tr '/' '-')
+          id=$(echo "$dep" | jq -r '.uid // .id // empty')
+          state=$(echo "$dep" | jq -r '.readyState // .state // .status // empty')
+          dep_url=$(echo "$dep" | jq -r '.url // empty')
 
-          # NOTE: In this Vercel account/API, `target=preview` is rejected.
-          # Omitting `target` creates a non-production deployment by default.
-          payload=$(jq -n \
-            --arg name "$name" \
-            --arg project "$VERCEL_PROJECT_ID" \
-            --arg sha "$SHA" \
-            --arg ref "$REF" \
-            --arg repoId "$repo_id" \
-            '{name:$name, project:$project, gitSource:{type:"github", repoId:$repoId, sha:$sha, ref:$ref}}')
-
-          url="https://api.vercel.com/v13/deployments"
-          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
-            url="$url?teamId=$VERCEL_TEAM_ID"
-          fi
-
-          echo "Creating deployment via $url" >&2
-          echo "Payload: $payload" >&2
-
-          http_code=$(curl -sS -o deployment.json -w "%{http_code}" -X POST "$url" \
-            -H "Authorization: Bearer $VERCEL_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload")
-
-          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-            echo "Vercel API error (HTTP $http_code). Response:" >&2
-            cat deployment.json >&2
-            exit 1
-          fi
-
-          id=$(jq -r '.id // empty' deployment.json)
-          dep_url=$(jq -r '.url // empty' deployment.json)
-
-          if [ -z "$id" ] || [ "$id" = "null" ]; then
-            echo "Failed to create deployment. Response:" >&2
-            cat deployment.json >&2
-            exit 1
-          fi
-
-          echo "deployment_id=${id}" >> $GITHUB_OUTPUT
-          echo "deployment_url=${dep_url}" >> $GITHUB_OUTPUT
-
-      - name: Poll Vercel deployment status
-        id: poll
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-          DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
-        run: |
-          set -euo pipefail
-
-          url="https://api.vercel.com/v13/deployments/${DEPLOYMENT_ID}"
-          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
-            url="$url?teamId=$VERCEL_TEAM_ID"
-          fi
-
-          for i in $(seq 1 60); do
-            http_code=$(curl -sS -o status.json -w "%{http_code}" -X GET "$url" \
-              -H "Authorization: Bearer $VERCEL_TOKEN")
-
-            if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-              echo "Vercel status API error (HTTP $http_code). Response:" >&2
-              cat status.json >&2
-              exit 1
-            fi
-
-            state=$(jq -r '.readyState // .state // .status // empty' status.json)
-            dep_url=$(jq -r '.url // empty' status.json)
-
-            if [ -n "$dep_url" ]; then
-              echo "deployment_url=${dep_url}" >> $GITHUB_OUTPUT
-            fi
-
-            if [ "$state" = "READY" ] || [ "$state" = "ready" ]; then
-              echo "state=ready" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-            if [ "$state" = "ERROR" ] || [ "$state" = "error" ]; then
-              echo "state=error" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            sleep 10
-          done
-
-          echo "state=timeout" >> $GITHUB_OUTPUT
+          echo "deployment_id=$id" >> "$GITHUB_OUTPUT"
+          echo "deployment_state=$state" >> "$GITHUB_OUTPUT"
+          echo "deployment_url=$dep_url" >> "$GITHUB_OUTPUT"
 
       - name: Upsert PR comment with preview URL
+        if: ${{ steps.find.outputs.state != 'not_found' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}
-          STATE: ${{ steps.poll.outputs.state }}
-          DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
-          DEPLOYMENT_URL: ${{ steps.poll.outputs.deployment_url || steps.deploy.outputs.deployment_url }}
+          DEPLOYMENT_ID: ${{ steps.find.outputs.deployment_id }}
+          DEPLOYMENT_STATE: ${{ steps.find.outputs.deployment_state }}
+          DEPLOYMENT_URL: ${{ steps.find.outputs.deployment_url }}
         run: |
           set -euo pipefail
 
           marker="<!-- botcow:vercel-preview -->"
 
           preview=""
-          if [ -n "${DEPLOYMENT_URL:-}" ]; then
+          if [ -n "${DEPLOYMENT_URL:-}" ] && [ "${DEPLOYMENT_URL}" != "null" ]; then
             if echo "$DEPLOYMENT_URL" | grep -q '^https\?://'; then
               preview="$DEPLOYMENT_URL"
             else
@@ -163,13 +89,16 @@ jobs:
             fi
           fi
 
-          details="https://vercel.com/deployments/${DEPLOYMENT_ID}"
+          details=""
+          if [ -n "${DEPLOYMENT_ID:-}" ] && [ "${DEPLOYMENT_ID}" != "null" ]; then
+            details="https://vercel.com/deployments/${DEPLOYMENT_ID}"
+          fi
 
           body=$(cat <<EOF
           ${marker}
           **Vercel Preview**
 
-          - Status: \`${STATE}\`
+          - Status: \`${DEPLOYMENT_STATE:-unknown}\`
           - Preview: ${preview}
           - Details: ${details}
           - Commit: ${SHA}
@@ -185,4 +114,33 @@ jobs:
           else
             gh api -X POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$body" > /dev/null
             echo "Created comment on PR #${PR_NUMBER}."
+          fi
+
+      - name: Comment when no deployment was found
+        if: ${{ steps.find.outputs.state == 'not_found' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          marker="<!-- botcow:vercel-preview -->"
+          body=$(cat <<EOF
+          ${marker}
+          **Vercel Preview**
+
+          Не нашёл деплой Vercel для коммита ${SHA} среди последних 30 деплоев проекта.
+          Подожди 1–2 минуты и сделай новый push в PR (или rerun workflow).
+          EOF
+          )
+
+          comments=$(gh api -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100")
+          existing_id=$(echo "$comments" | jq -r --arg m "$marker" '.[] | select(.body | contains($m)) | .id' | head -n 1)
+
+          if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
+            gh api -X PATCH -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${existing_id}" -f body="$body" > /dev/null
+          else
+            gh api -X POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$body" > /dev/null
           fi

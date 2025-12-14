@@ -12,24 +12,27 @@ import {
   searchInRepo,
   updateIssue,
 } from '../github';
+import {
+  githubDiagnoseLatestWorkflowRun,
+  githubDiagnoseWorkflowRun,
+  githubGetWorkflowRunLogsText,
+} from '../ciDiagnostics';
 
 /**
- * JSON-схемы tools для OpenAI (function calling).
- * Должны экспортироваться как githubToolsSchemas, чтобы tools/index.ts мог собрать общий список.
+ * JSON- schemas tools  for OpenAI (function calling).
  */
 export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
       name: 'github_get_repo_structure',
-      description: 'Получить дерево файлов репозитория (GitHub).',
+      description: '     (GitHub).',
       parameters: {
         type: 'object',
         properties: {
           repo: {
             type: 'string',
-            description:
-              'Репозиторий в формате owner/name. Если не указан — используется BOTCOW_DEFAULT_REPO.',
+            description: 'owner/name.     BOTCOW_DEFAULT_REPO.',
           },
         },
       },
@@ -39,19 +42,18 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_files',
-      description: 'Список файлов/папок по пути (один уровень).',
+      description: ' /   ( ).',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Путь внутри репозитория.' },
+          path: { type: 'string', description: '  .' },
           repo: {
             type: 'string',
-            description:
-              'Репозиторий owner/name. Если не указан — BOTCOW_DEFAULT_REPO.',
+            description: 'owner/name.     BOTCOW_DEFAULT_REPO.',
           },
           ref: {
             type: 'string',
-            description: 'Ветка/тег/sha. Если не указан — default branch.',
+            description: '//sha.     default branch.',
           },
         },
       },
@@ -61,15 +63,14 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_file',
-      description: 'Прочитать файл по пути из репозитория.',
+      description: '      .',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Путь файла внутри репозитория.' },
+          path: { type: 'string', description: '  .' },
           repo: {
             type: 'string',
-            description:
-              'Репозиторий owner/name. Если не указан — BOTCOW_DEFAULT_REPO.',
+            description: 'owner/name.     BOTCOW_DEFAULT_REPO.',
           },
         },
         required: ['path'],
@@ -80,18 +81,17 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_search_in_repo',
-      description: 'Поиск по репозиторию.',
+      description: '  .',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Поисковый запрос.' },
-          path: { type: 'string', description: 'Ограничить поиск путём.' },
+          query: { type: 'string', description: ' .' },
+          path: { type: 'string', description: '  .' },
           repo: {
             type: 'string',
-            description:
-              'Репозиторий owner/name. Если не указан — BOTCOW_DEFAULT_REPO.',
+            description: 'owner/name.     BOTCOW_DEFAULT_REPO.',
           },
-          per_page: { type: 'number', description: 'Кол-во результатов (до 100).' },
+          per_page: { type: 'number', description: '- ( 100).' },
         },
         required: ['query'],
       },
@@ -101,7 +101,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_pull_request',
-      description: 'Создать Pull Request.',
+      description: ' Pull Request.',
       parameters: {
         type: 'object',
         properties: {
@@ -119,7 +119,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_merge_pull_request',
-      description: 'Замёржить Pull Request выбранным методом.',
+      description: ' Pull Request  .',
       parameters: {
         type: 'object',
         properties: {
@@ -135,7 +135,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_issue',
-      description: 'Создать Issue.',
+      description: ' Issue.',
       parameters: {
         type: 'object',
         properties: {
@@ -153,7 +153,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_update_issue',
-      description: 'Обновить Issue.',
+      description: ' Issue.',
       parameters: {
         type: 'object',
         properties: {
@@ -173,7 +173,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_issues',
-      description: 'Получить список Issues по фильтрам.',
+      description: '  Issues  .',
       parameters: {
         type: 'object',
         properties: {
@@ -184,11 +184,13 @@ export const githubToolsSchemas = [
       },
     },
   },
+
+  // Actions
   {
     type: 'function',
     function: {
       name: 'github_list_workflow_runs',
-      description: 'Получить список запусков GitHub Actions workflow для репозитория.',
+      description: '   GitHub Actions workflow  .',
       parameters: {
         type: 'object',
         properties: {
@@ -202,7 +204,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_run_jobs',
-      description: 'Получить список jobs для конкретного workflow run.',
+      description: '  jobs  workflow run.',
       parameters: {
         type: 'object',
         properties: {
@@ -217,7 +219,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_download_workflow_run_logs',
-      description: 'Скачать и распаковать логи workflow run.',
+      description: '  workflow run (zip  base64).',
       parameters: {
         type: 'object',
         properties: {
@@ -225,6 +227,69 @@ export const githubToolsSchemas = [
           repo: { type: 'string' },
         },
         required: ['run_id'],
+      },
+    },
+  },
+
+  // Diagnostics (Stage 1)
+  {
+    type: 'function',
+    function: {
+      name: 'github_get_workflow_run_logs_text',
+      description:
+        '    workflow run.    (txt  zip).',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: { type: 'string' },
+          maxChars: { type: 'number' },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_diagnose_workflow_run',
+      description:
+        ' CI  workflow run:     +     .',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: { type: 'string' },
+          maxChars: {
+            type: 'number',
+            description: '       .',
+          },
+          maxEvidence: {
+            type: 'number',
+            description: '    .',
+          },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_diagnose_latest_workflow_run',
+      description:
+        '   workflow run     (logs + failed jobs).',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string' },
+          workflow_id: { type: 'string' },
+          ref: { type: 'string' },
+          per_page: { type: 'number' },
+          maxChars: { type: 'number' },
+          maxEvidence: { type: 'number' },
+        },
+        required: [],
       },
     },
   },
@@ -240,7 +305,7 @@ type SearchArgs = {
 };
 
 /**
- * Хендлеры tools — дергаются роутером tools.
+ * Handlers.
  */
 export const githubToolHandlers = {
   async github_get_repo_structure(args: { repo?: string }) {
@@ -406,5 +471,49 @@ export const githubToolHandlers = {
     return downloadWorkflowRunLogs(
       args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
     );
+  },
+
+  async github_get_workflow_run_logs_text(args: {
+    run_id: number;
+    repo?: string;
+    maxChars?: number;
+  }) {
+    return githubGetWorkflowRunLogsText({
+      run_id: args.run_id,
+      repo: args.repo,
+      maxChars: args.maxChars,
+    });
+  },
+
+  async github_diagnose_workflow_run(args: {
+    run_id: number;
+    repo?: string;
+    maxChars?: number;
+    maxEvidence?: number;
+  }) {
+    return githubDiagnoseWorkflowRun({
+      run_id: args.run_id,
+      repo: args.repo,
+      maxChars: args.maxChars,
+      maxEvidence: args.maxEvidence,
+    });
+  },
+
+  async github_diagnose_latest_workflow_run(args: {
+    repo?: string;
+    workflow_id?: string;
+    ref?: string;
+    per_page?: number;
+    maxChars?: number;
+    maxEvidence?: number;
+  }) {
+    return githubDiagnoseLatestWorkflowRun({
+      repo: args.repo,
+      workflow_id: args.workflow_id,
+      ref: args.ref,
+      per_page: args.per_page,
+      maxChars: args.maxChars,
+      maxEvidence: args.maxEvidence,
+    });
   },
 };

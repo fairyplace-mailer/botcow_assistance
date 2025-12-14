@@ -47,6 +47,7 @@ repos:
 
 ## Notes
 
-- `BOTCOW_DEFAULT_REPO` env var is still supported for backward compatibility.
-  If set, it overrides `defaultRepo` from the config file.
+- `config/repos.yml` is the **single source of truth**.
 - If a repo is not listed in `repos`, BotCow will refuse to operate on it.
+- `BOTCOW_DEFAULT_REPO` is **not supported** (by design). If you need to change
+  the default repo, edit `config/repos.yml`.

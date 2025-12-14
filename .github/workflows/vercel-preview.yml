@@ -16,7 +16,13 @@ jobs:
   comment-existing-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Find latest Vercel deployment for this PR commit
+      - name: Wait for Vercel to start deployment
+        run: |
+          # Vercel Git Integration may start the deployment slightly after the PR event.
+          # A short wait reduces "not found" false negatives.
+          sleep 15
+
+      - name: Find latest Vercel deployment for this PR commit (with retries)
         id: find
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -41,15 +47,27 @@ jobs:
           fi
 
           echo "Query deployments: $url" >&2
-          curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "$url" > deployments.json
 
-          # Try to match by gitSource.sha first, then by meta.githubCommitSha.
-          dep=$(jq -c --arg sha "$SHA" '
-            .deployments
-            | map(select((.gitSource.sha? == $sha) or (.meta.githubCommitSha? == $sha)))
-            | sort_by(.createdAt) | reverse
-            | .[0] // empty
-          ' deployments.json)
+          dep=""
+          # Retry up to ~2 minutes.
+          for i in $(seq 1 8); do
+            curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "$url" > deployments.json
+
+            # Try to match by gitSource.sha first, then by meta.githubCommitSha.
+            dep=$(jq -c --arg sha "$SHA" '
+              .deployments
+              | map(select((.gitSource.sha? == $sha) or (.meta.githubCommitSha? == $sha)))
+              | sort_by(.createdAt) | reverse
+              | .[0] // empty
+            ' deployments.json)
+
+            if [ -n "$dep" ]; then
+              break
+            fi
+
+            echo "[$i/8] No deployment yet for sha=$SHA. Waiting..." >&2
+            sleep 15
+          done
 
           if [ -z "$dep" ]; then
             echo "No Vercel deployment found for sha=$SHA (searched latest 30)." >&2
@@ -61,9 +79,14 @@ jobs:
           state=$(echo "$dep" | jq -r '.readyState // .state // .status // empty')
           dep_url=$(echo "$dep" | jq -r '.url // empty')
 
+          # Best-effort: try to provide a logs URL.
+          # Vercel sometimes provides inspectorUrl; otherwise we link to the generic deployments page.
+          inspector=$(echo "$dep" | jq -r '.inspectorUrl // empty')
+
           echo "deployment_id=$id" >> "$GITHUB_OUTPUT"
           echo "deployment_state=$state" >> "$GITHUB_OUTPUT"
           echo "deployment_url=$dep_url" >> "$GITHUB_OUTPUT"
+          echo "deployment_inspector_url=$inspector" >> "$GITHUB_OUTPUT"
 
       - name: Upsert PR comment with preview URL
         if: ${{ steps.find.outputs.state != 'not_found' }}
@@ -75,6 +98,7 @@ jobs:
           DEPLOYMENT_ID: ${{ steps.find.outputs.deployment_id }}
           DEPLOYMENT_STATE: ${{ steps.find.outputs.deployment_state }}
           DEPLOYMENT_URL: ${{ steps.find.outputs.deployment_url }}
+          DEPLOYMENT_INSPECTOR_URL: ${{ steps.find.outputs.deployment_inspector_url }}
         run: |
           set -euo pipefail
 
@@ -94,13 +118,20 @@ jobs:
             details="https://vercel.com/deployments/${DEPLOYMENT_ID}"
           fi
 
+          logs=""
+          if [ -n "${DEPLOYMENT_INSPECTOR_URL:-}" ] && [ "${DEPLOYMENT_INSPECTOR_URL}" != "null" ]; then
+            logs="$DEPLOYMENT_INSPECTOR_URL"
+          elif [ -n "$details" ]; then
+            logs="$details"
+          fi
+
           body=$(cat <<EOF
           ${marker}
           **Vercel Preview**
 
           - Status: \`${DEPLOYMENT_STATE:-unknown}\`
           - Preview: ${preview}
-          - Details: ${details}
+          - Logs: ${logs}
           - Commit: ${SHA}
           EOF
           )
@@ -132,7 +163,7 @@ jobs:
           **Vercel Preview**
 
           Не нашёл деплой Vercel для коммита ${SHA} среди последних 30 деплоев проекта.
-          Подожди 1–2 минуты и сделай новый push в PR (или rerun workflow).
+          Подожди 1–2 минуты и сделай rerun workflow (или новый push в PR).
           EOF
           )
 

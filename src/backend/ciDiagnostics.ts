@@ -100,7 +100,11 @@ export async function diagnoseWorkflowRunFailure(args: {
 
   const failedJobs = jobs.jobs
     .filter((j: NormalizedJob) => j.conclusion === 'failure' || j.conclusion === 'cancelled')
-    .map((j: NormalizedJob) => ({ id: j.id, name: j.name, html_url: j.html_url }));
+    .flatMap((j: NormalizedJob) => {
+      const base = { id: j.id, name: j.name };
+      const url = j.html_url ?? undefined;
+      return url ? [{ ...base, html_url: url }] : [base];
+    });
 
   // Build args without `undefined` keys to satisfy exactOptionalPropertyTypes.
   const logsArgs = buildOptional({

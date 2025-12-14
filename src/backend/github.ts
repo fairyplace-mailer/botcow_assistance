@@ -525,9 +525,19 @@ export async function listWorkflowRunJobs(options: { run_id: number; repo?: stri
   return { total_count: res.data.total_count, jobs };
 }
 
+type OctokitRawRequestOptions = {
+  request?: {
+    /**
+     * Octokit has an undocumented flag `parseSuccessResponseBody`.
+     * We use it to receive the raw response (Buffer) for the logs zip.
+     */
+    parseSuccessResponseBody?: boolean;
+  };
+};
+
 /**
  * Скачать логи workflow run.
- * Возвращает строку (обычно zip; если zip — вернём base64+мета).
+ * Возвращает zip-архив в base64.
  */
 export async function downloadWorkflowRunLogs(options: {
   run_id: number;
@@ -535,7 +545,6 @@ export async function downloadWorkflowRunLogs(options: {
 }): Promise<{ format: 'zip-base64'; contentBase64: string } | { format: 'text'; content: string }> {
   const { owner, repo } = parseRepo(options.repo);
 
-  // Octokit по умолчанию парсит как JSON; нам нужен raw.
   const res = await github.request(
     'GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs',
     {
@@ -543,15 +552,13 @@ export async function downloadWorkflowRunLogs(options: {
       repo,
       run_id: options.run_id,
       request: {
-        // @ts-expect-error octokit typing
         parseSuccessResponseBody: false,
       },
-    },
+    } as any as OctokitRawRequestOptions,
   );
 
   const buf = Buffer.from(res.data as any);
 
-  // Logs endpoint returns a zip archive.
   return { format: 'zip-base64', contentBase64: buf.toString('base64') };
 }
 

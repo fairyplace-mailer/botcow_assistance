@@ -8,30 +8,23 @@ import {
   type WorkflowRunLogsText,
 } from './githubLogs';
 
-export type DiagnoseWorkflowRunFailureResult = {
-  run_id: number;
+export type CiFailureDiagnosis = {
+  runId: number;
   repo?: string;
-  failedJobs: Array<{
-    id: number;
-    name: string;
-    conclusion: string | null;
-    html_url?: string;
-  }>;
-  /** Short, human-readable explanation based on logs (best-effort). */
-  reason: string;
-  /** Raw extracted logs text (truncated). */
-  logsText: WorkflowRunLogsText;
+  failedJobs: Array<{ id: number; name: string; html_url?: string }>;
+  errorLines: string[];
+  logFiles: Array<{ path: string; size: number }>;
 };
 
-function summarizeFailedJobs(jobs: NormalizedJob[]) {
-  return jobs
-    .filter((j) => j.conclusion === 'failure' || j.conclusion === 'cancelled')
-    .map((j) => ({
-      id: j.id,
-      name: j.name,
-      conclusion: j.conclusion,
-      html_url: j.html_url,
-    }));
+function buildOptional<T extends Record<string, unknown>>(obj: T): {
+  [K in keyof T as undefined extends T[K] ? never : K]: T[K];
+} & Partial<T> {
+  // runtime: strip keys with undefined
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out as any;
 }
 
 export async function getWorkflowRunLogsText(args: {
@@ -43,58 +36,86 @@ export async function getWorkflowRunLogsText(args: {
     args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
   );
 
-  const extractOpts: { maxChars?: number } = {};
-  if (typeof args.maxChars === 'number') extractOpts.maxChars = args.maxChars;
+  const extractOpts = buildOptional({ maxChars: args.maxChars });
 
   return extractWorkflowRunLogsTextFromZipBase64(zip.contentBase64, extractOpts);
 }
 
-function pickReasonFromLogsText(text: WorkflowRunLogsText): string {
-  // Best-effort: choose first matching common error lines from the combined logs text.
-  const haystack = text.text ?? '';
-  if (!haystack) return 'No logs text extracted.';
+function extractErrorLinesFromLogs(text: string, maxLines = 60): string[] {
+  const lines = text.split(/\r?\n/);
 
-  const patterns: RegExp[] = [
-    /Failed to compile\./i,
-    /Type error:/i,
-    /error TS\d+:/i,
-    /Error: Process completed with exit code \d+/i,
-    /Command ".+" exited with \d+/i,
+  // Heuristics: common CI/build failure markers.
+  const patterns = [
+    /\bFailed to compile\b/i,
+    /\bType error:\b/i,
+    /\bError:\b/i,
+    /Process completed with exit code\s+\d+/i,
+    /Next\.js build worker exited with code/i,
     /ELIFECYCLE/i,
+    /npm ERR!/i,
+    /Command ".+" exited with/i,
   ];
 
-  const lines = haystack.split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (patterns.some((p) => p.test(trimmed))) return trimmed;
+  const hits: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (patterns.some((p) => p.test(l))) hits.push(i);
   }
 
-  return 'Could not automatically detect the exact failing line. Check extracted logs.';
+  if (hits.length === 0) return [];
+
+  // Return a compact window around the first few hits.
+  const windows: Array<[number, number]> = [];
+  for (const idx of hits.slice(0, 4)) {
+    windows.push([Math.max(0, idx - 3), Math.min(lines.length - 1, idx + 6)]);
+  }
+
+  // merge windows
+  windows.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const w of windows) {
+    const last = merged[merged.length - 1];
+    if (!last || w[0] > last[1] + 1) merged.push([...w]);
+    else last[1] = Math.max(last[1], w[1]);
+  }
+
+  const out: string[] = [];
+  for (const [a, b] of merged) {
+    for (let i = a; i <= b; i++) out.push(lines[i]);
+    out.push('');
+  }
+
+  return out.filter((l) => l.trim().length > 0).slice(0, maxLines);
 }
 
 export async function diagnoseWorkflowRunFailure(args: {
   run_id: number;
   repo?: string;
   maxChars?: number;
-}): Promise<DiagnoseWorkflowRunFailureResult> {
+}): Promise<CiFailureDiagnosis> {
   const jobs = await listWorkflowRunJobs(
     args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
   );
 
-  const logsText = await getWorkflowRunLogsText({
+  const failedJobs = jobs.jobs
+    .filter((j: NormalizedJob) => j.conclusion === 'failure' || j.conclusion === 'cancelled')
+    .map((j: NormalizedJob) => ({ id: j.id, name: j.name, html_url: j.html_url }));
+
+  // Build args without `undefined` keys to satisfy exactOptionalPropertyTypes.
+  const logsArgs = buildOptional({
     run_id: args.run_id,
     repo: args.repo,
     maxChars: args.maxChars,
   });
 
-  const reason = pickReasonFromLogsText(logsText);
+  const logsText = await getWorkflowRunLogsText(logsArgs);
+  const errorLines = extractErrorLinesFromLogs(logsText.text);
 
   return {
-    run_id: args.run_id,
+    runId: args.run_id,
     repo: args.repo,
-    failedJobs: summarizeFailedJobs(jobs),
-    reason,
-    logsText,
+    failedJobs,
+    errorLines,
+    logFiles: logsText.files,
   };
 }

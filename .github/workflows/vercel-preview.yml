@@ -16,7 +16,7 @@ jobs:
   deploy-and-comment:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Vercel preview deployment
+      - name: Trigger Vercel deployment
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -38,8 +38,12 @@ jobs:
           fi
 
           # Derive numeric repoId required by Vercel when using gitSource.type=github
-          repo_id=$(curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" \
-            "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}${VERCEL_TEAM_ID:+?teamId=${VERCEL_TEAM_ID}}" \
+          project_url="https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}"
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+            project_url="$project_url?teamId=$VERCEL_TEAM_ID"
+          fi
+
+          repo_id=$(curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "$project_url" \
             | jq -r '.link.repoId // empty')
 
           if [ -z "$repo_id" ] || [ "$repo_id" = "null" ]; then
@@ -50,14 +54,15 @@ jobs:
           # `name` is required by POST /v13/deployments
           name=$(echo "${REPO}" | tr '/' '-')
 
+          # NOTE: In this Vercel account/API, `target=preview` is rejected.
+          # Omitting `target` creates a non-production deployment by default.
           payload=$(jq -n \
             --arg name "$name" \
             --arg project "$VERCEL_PROJECT_ID" \
-            --arg target "preview" \
             --arg sha "$SHA" \
             --arg ref "$REF" \
             --arg repoId "$repo_id" \
-            '{name:$name, project:$project, target:$target, gitSource:{type:"github", repoId:$repoId, sha:$sha, ref:$ref}}')
+            '{name:$name, project:$project, gitSource:{type:"github", repoId:$repoId, sha:$sha, ref:$ref}}')
 
           url="https://api.vercel.com/v13/deployments"
           if [ -n "${VERCEL_TEAM_ID:-}" ]; then

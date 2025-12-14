@@ -3,6 +3,12 @@
 Продакшн-сервис для автоматизации CI/CD и GitHub-операций через чат-интерфейс.  
 Проект развёрнут на Vercel, использует Next.js 16, API-роуты, GitHub API, Vercel Blob и OpenAI.
 
+## Vercel Preview links in PRs
+
+В репозитории настроен workflow, который в PR автоматически оставляет/обновляет комментарий со статусом Vercel-деплоя и Preview URL.
+
+См. документацию: [`docs/vercel-preview.md`](docs/vercel-preview.md)
+
 ## Возможности
 
 - Общение с ассистентом (OpenAI)

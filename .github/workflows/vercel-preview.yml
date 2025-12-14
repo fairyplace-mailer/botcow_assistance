@@ -1,0 +1,177 @@
+name: Vercel Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: vercel-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  comment-existing-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Vercel to start deployment
+        run: |
+          # Vercel Git Integration may start the deployment slightly after the PR event.
+          # A short wait reduces "not found" false negatives.
+          sleep 15
+
+      - name: Find latest Vercel deployment for this PR commit (with retries)
+        id: find
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "Missing VERCEL_TOKEN" >&2
+            exit 1
+          fi
+          if [ -z "${VERCEL_PROJECT_ID:-}" ]; then
+            echo "Missing VERCEL_PROJECT_ID" >&2
+            exit 1
+          fi
+
+          url="https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&limit=30"
+          if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+            url="$url&teamId=${VERCEL_TEAM_ID}"
+          fi
+
+          echo "Query deployments: $url" >&2
+
+          dep=""
+          # Retry up to ~2 minutes.
+          for i in $(seq 1 8); do
+            curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "$url" > deployments.json
+
+            # Try to match by gitSource.sha first, then by meta.githubCommitSha.
+            dep=$(jq -c --arg sha "$SHA" '
+              .deployments
+              | map(select((.gitSource.sha? == $sha) or (.meta.githubCommitSha? == $sha)))
+              | sort_by(.createdAt) | reverse
+              | .[0] // empty
+            ' deployments.json)
+
+            if [ -n "$dep" ]; then
+              break
+            fi
+
+            echo "[$i/8] No deployment yet for sha=$SHA. Waiting..." >&2
+            sleep 15
+          done
+
+          if [ -z "$dep" ]; then
+            echo "No Vercel deployment found for sha=$SHA (searched latest 30)." >&2
+            echo "state=not_found" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          id=$(echo "$dep" | jq -r '.uid // .id // empty')
+          state=$(echo "$dep" | jq -r '.readyState // .state // .status // empty')
+          dep_url=$(echo "$dep" | jq -r '.url // empty')
+
+          # Best-effort: try to provide a logs URL.
+          # Vercel sometimes provides inspectorUrl; otherwise we link to the generic deployments page.
+          inspector=$(echo "$dep" | jq -r '.inspectorUrl // empty')
+
+          echo "deployment_id=$id" >> "$GITHUB_OUTPUT"
+          echo "deployment_state=$state" >> "$GITHUB_OUTPUT"
+          echo "deployment_url=$dep_url" >> "$GITHUB_OUTPUT"
+          echo "deployment_inspector_url=$inspector" >> "$GITHUB_OUTPUT"
+
+      - name: Upsert PR comment with preview URL
+        if: ${{ steps.find.outputs.state != 'not_found' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          DEPLOYMENT_ID: ${{ steps.find.outputs.deployment_id }}
+          DEPLOYMENT_STATE: ${{ steps.find.outputs.deployment_state }}
+          DEPLOYMENT_URL: ${{ steps.find.outputs.deployment_url }}
+          DEPLOYMENT_INSPECTOR_URL: ${{ steps.find.outputs.deployment_inspector_url }}
+        run: |
+          set -euo pipefail
+
+          marker="<!-- botcow:vercel-preview -->"
+
+          preview=""
+          if [ -n "${DEPLOYMENT_URL:-}" ] && [ "${DEPLOYMENT_URL}" != "null" ]; then
+            if echo "$DEPLOYMENT_URL" | grep -q '^https\?://'; then
+              preview="$DEPLOYMENT_URL"
+            else
+              preview="https://${DEPLOYMENT_URL}"
+            fi
+          fi
+
+          details=""
+          if [ -n "${DEPLOYMENT_ID:-}" ] && [ "${DEPLOYMENT_ID}" != "null" ]; then
+            details="https://vercel.com/deployments/${DEPLOYMENT_ID}"
+          fi
+
+          logs=""
+          if [ -n "${DEPLOYMENT_INSPECTOR_URL:-}" ] && [ "${DEPLOYMENT_INSPECTOR_URL}" != "null" ]; then
+            logs="$DEPLOYMENT_INSPECTOR_URL"
+          elif [ -n "$details" ]; then
+            logs="$details"
+          fi
+
+          body=$(cat <<EOF
+          ${marker}
+          **Vercel Preview**
+
+          - Status: \`${DEPLOYMENT_STATE:-unknown}\`
+          - Preview: ${preview}
+          - Logs: ${logs}
+          - Commit: ${SHA}
+          EOF
+          )
+
+          comments=$(gh api -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100")
+          existing_id=$(echo "$comments" | jq -r --arg m "$marker" '.[] | select(.body | contains($m)) | .id' | head -n 1)
+
+          if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
+            gh api -X PATCH -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${existing_id}" -f body="$body" > /dev/null
+            echo "Updated comment id=${existing_id} on PR #${PR_NUMBER}."
+          else
+            gh api -X POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$body" > /dev/null
+            echo "Created comment on PR #${PR_NUMBER}."
+          fi
+
+      - name: Comment when no deployment was found
+        if: ${{ steps.find.outputs.state == 'not_found' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          marker="<!-- botcow:vercel-preview -->"
+          body=$(cat <<EOF
+          ${marker}
+          **Vercel Preview**
+
+          Не нашёл деплой Vercel для коммита ${SHA} среди последних 30 деплоев проекта.
+          Подожди 1–2 минуты и сделай rerun workflow (или новый push в PR).
+          EOF
+          )
+
+          comments=$(gh api -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100")
+          existing_id=$(echo "$comments" | jq -r --arg m "$marker" '.[] | select(.body | contains($m)) | .id' | head -n 1)
+
+          if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
+            gh api -X PATCH -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/comments/${existing_id}" -f body="$body" > /dev/null
+          else
+            gh api -X POST -H "Accept: application/vnd.github+json" "/repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$body" > /dev/null
+          fi

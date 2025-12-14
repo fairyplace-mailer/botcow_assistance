@@ -50,8 +50,10 @@ export async function getWorkflowRunLogsText(args: {
 }
 
 function pickReasonFromLogsText(text: WorkflowRunLogsText): string {
-  // Best-effort: choose first matching common error lines from any file.
-  // We intentionally keep it simple and deterministic.
+  // Best-effort: choose first matching common error lines from the combined logs text.
+  const haystack = text.text ?? '';
+  if (!haystack) return 'No logs text extracted.';
+
   const patterns: RegExp[] = [
     /Failed to compile\./i,
     /Type error:/i,
@@ -61,14 +63,11 @@ function pickReasonFromLogsText(text: WorkflowRunLogsText): string {
     /ELIFECYCLE/i,
   ];
 
-  for (const file of text.files) {
-    const content = text.contents[file.path] ?? '';
-    const lines = content.split(/\r?\n/);
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      if (patterns.some((p) => p.test(trimmed))) return trimmed;
-    }
+  const lines = haystack.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (patterns.some((p) => p.test(trimmed))) return trimmed;
   }
 
   return 'Could not automatically detect the exact failing line. Check extracted logs.';

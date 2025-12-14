@@ -17,15 +17,12 @@ export type CiFailureDiagnosis = {
   logFiles: Array<{ path: string; size: number }>;
 };
 
-function buildOptional<T extends Record<string, unknown>>(obj: T): {
-  [K in keyof T as undefined extends T[K] ? never : K]: T[K];
-} & Partial<T> {
-  // runtime: strip keys with undefined
-  const out: Record<string, unknown> = {};
+function omitUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  const out: Partial<T> = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (v !== undefined) out[k] = v;
+    if (v !== undefined) (out as any)[k] = v;
   }
-  return out as any;
+  return out;
 }
 
 export async function githubGetWorkflowRunLogsText(args: {
@@ -37,7 +34,7 @@ export async function githubGetWorkflowRunLogsText(args: {
     args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
   );
 
-  const extractOpts = buildOptional({ maxChars: args.maxChars });
+  const extractOpts = omitUndefined({ maxChars: args.maxChars });
   return extractWorkflowRunLogsTextFromZipBase64(zip.contentBase64, extractOpts);
 }
 
@@ -106,24 +103,22 @@ export async function githubDiagnoseWorkflowRun(args: {
       return url ? [{ ...base, html_url: url }] : [base];
     });
 
-  // Build args without `undefined` keys to satisfy exactOptionalPropertyTypes.
-  const logsArgs = buildOptional({
+  const logsText = await githubGetWorkflowRunLogsText({
     run_id: args.run_id,
-    repo: args.repo,
-    maxChars: args.maxChars,
+    ...(args.repo ? { repo: args.repo } : {}),
+    ...(args.maxChars !== undefined ? { maxChars: args.maxChars } : {}),
   });
 
-  const logsText = await githubGetWorkflowRunLogsText(logsArgs);
   const errorLines = extractErrorLinesFromLogs(logsText.text);
 
-  const result = {
+  const baseResult = {
     runId: args.run_id,
     failedJobs,
     errorLines,
     logFiles: logsText.files,
   } satisfies Omit<CiFailureDiagnosis, 'repo'>;
 
-  return args.repo ? { ...result, repo: args.repo } : result;
+  return args.repo ? { ...baseResult, repo: args.repo } : baseResult;
 }
 
 export async function githubDiagnoseLatestWorkflowRun(args: {
@@ -135,26 +130,22 @@ export async function githubDiagnoseLatestWorkflowRun(args: {
 }): Promise<CiFailureDiagnosis> {
   const perPage = args.per_page ?? 10;
 
-  const runsRes = await listWorkflowRuns(
-    buildOptional({
-      repo: args.repo,
-      workflow_id: args.workflow_id,
-      branch: args.ref,
-      per_page: perPage,
-    }),
-  );
+  const runsRes = await listWorkflowRuns({
+    ...(args.repo ? { repo: args.repo } : {}),
+    ...(args.workflow_id ? { workflow_id: args.workflow_id } : {}),
+    ...(args.ref ? { branch: args.ref } : {}),
+    per_page: perPage,
+  });
 
   const first = runsRes.runs?.[0];
   if (!first) {
     throw new Error('No workflow runs found');
   }
 
-  // Avoid passing repo/maxChars with undefined values.
-  const diagnoseArgs = buildOptional({
+  // IMPORTANT: run_id is always required; do NOT build it via Partial helpers.
+  return githubDiagnoseWorkflowRun({
     run_id: first.id,
-    repo: args.repo,
-    maxChars: args.maxChars,
+    ...(args.repo ? { repo: args.repo } : {}),
+    ...(args.maxChars !== undefined ? { maxChars: args.maxChars } : {}),
   });
-
-  return githubDiagnoseWorkflowRun(diagnoseArgs);
 }

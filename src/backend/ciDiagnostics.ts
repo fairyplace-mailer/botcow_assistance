@@ -135,16 +135,16 @@ export async function githubDiagnoseLatestWorkflowRun(args: {
 }): Promise<CiFailureDiagnosis> {
   const perPage = args.per_page ?? 10;
 
-  const runs = await listWorkflowRuns(
+  const runsRes = await listWorkflowRuns(
     buildOptional({
       repo: args.repo,
       workflow_id: args.workflow_id,
-      ref: args.ref,
+      branch: args.ref,
       per_page: perPage,
     }),
   );
 
-  const first = runs.workflow_runs?.[0];
+  const first = runsRes.runs?.[0];
   if (!first) {
     throw new Error('No workflow runs found');
   }

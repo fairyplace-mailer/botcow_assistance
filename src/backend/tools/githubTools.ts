@@ -17,6 +17,7 @@ import {
   githubDiagnoseWorkflowRun,
   githubGetWorkflowRunLogsText,
 } from '../ciDiagnostics';
+import { githubDiagnoseActionsSetup } from '../diagnostics/actionsDiagnostics';
 
 /**
  * JSON schemas tools for OpenAI (function calling).
@@ -290,6 +291,24 @@ export const githubToolsSchemas = [
       },
     },
   },
+
+  // Diagnostics (Stage 2)
+  {
+    type: 'function',
+    function: {
+      name: 'github_diagnose_actions_setup',
+      description:
+        'Косвенная диагностика GitHub Actions (почему нет ран-ов, 403, permissions). Возвращает чеклист и подсказки.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string' },
+          ref: { type: 'string' },
+          workflow_id: { type: 'string' },
+        },
+      },
+    },
+  },
 ] as const;
 
 type ListFilesArgs = { path?: string; repo?: string; ref?: string };
@@ -532,5 +551,13 @@ export const githubToolHandlers = {
         maxChars: args.maxChars,
       }),
     );
+  },
+
+  async github_diagnose_actions_setup(args: {
+    repo?: string;
+    ref?: string;
+    workflow_id?: string;
+  }) {
+    return githubDiagnoseActionsSetup(args);
   },
 };

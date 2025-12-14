@@ -12,8 +12,8 @@ export const github = new Octokit({
 });
 
 function getDefaultRepo(): string {
-  // priority: explicit env (backward compatible) -> config file
-  return process.env.BOTCOW_DEFAULT_REPO || getDefaultRepoFromConfig();
+  // Source of truth: config/repos.yml
+  return getDefaultRepoFromConfig();
 }
 
 export function parseRepo(repo?: string) {

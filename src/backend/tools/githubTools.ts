@@ -3,7 +3,7 @@ import {
   createPullRequest,
   getFile,
   getRepoStructure,
-  getWorkflowRunLogs,
+  downloadWorkflowRunLogs,
   listIssues,
   listPullRequests,
   listRepoFiles,
@@ -110,6 +110,6 @@ export const githubTools = {
   },
 
   async github_download_workflow_run_logs(args: { run_id: number; repo?: string }) {
-    return getWorkflowRunLogs(args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id });
+    return downloadWorkflowRunLogs(args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id });
   },
 };

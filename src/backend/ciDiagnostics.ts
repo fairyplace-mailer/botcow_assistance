@@ -1,164 +1,100 @@
-import type { WorkflowRunLogsText } from './githubLogs';
 import {
   downloadWorkflowRunLogs,
   listWorkflowRunJobs,
-  listWorkflowRunsForRepo,
+  type WorkflowRunJob,
 } from './github';
-import { extractWorkflowRunLogsTextFromZipBase64 } from './githubLogs';
+import {
+  extractWorkflowRunLogsTextFromZipBase64,
+  type WorkflowRunLogsText,
+} from './githubLogs';
 
-export type CiFailureSummary = {
-  repo: string;
-  runId: number;
-  workflowId?: string;
-  status?: string;
-  conclusion?: string;
-  htmlUrl?: string;
-
-  /** Failed jobs (best-effort). */
-  failedJobs: Array<{ id: number; name: string; conclusion?: string | null }>;
-
-  /** Short human-readable failure reason (best-effort). */
-  reason: string;
-
-  /** Extracted evidence snippets (step errors / stack traces). */
-  evidence: Array<{ file: string; snippet: string }>;
-
-  /** Whether logs were truncated. */
-  logsTruncated?: boolean;
+export type FailedStepSummary = {
+  jobName: string;
+  stepName: string;
+  conclusion?: string | null;
 };
 
-function normalizeWhitespace(s: string) {
-  return s.replace(/\r\n/g, '\n');
+export type CiFailureDiagnosis = {
+  run_id: number;
+  repo?: string;
+  failedJobs: Array<{
+    id: number;
+    name: string;
+    conclusion?: string | null;
+    failedSteps: FailedStepSummary[];
+  }>;
+  logs?: {
+    files: WorkflowRunLogsText['files'];
+    textPreview: string;
+  };
+};
+
+function isFailedConclusion(conclusion?: string | null) {
+  return conclusion === 'failure' || conclusion === 'cancelled' || conclusion === 'timed_out';
 }
 
-function pickBestErrorSnippets(text: string, limit: number) {
-  const t = normalizeWhitespace(text);
-
-  // Heuristics: common failure markers
-  const markers: RegExp[] = [
-    /\bFailed to compile\b[\s\S]{0,2000}/g,
-    /\bError:\s[^\n]+[\s\S]{0,1500}/g,
-    /\bERR!\b[^\n]*[\s\S]{0,1500}/g,
-    /\bFAIL\b[^\n]*[\s\S]{0,1500}/g,
-    /\bType error:\s[^\n]+[\s\S]{0,1500}/g,
-  ];
-
-  const snippets: string[] = [];
-  for (const re of markers) {
-    let m: RegExpExecArray | null;
-    // eslint-disable-next-line no-cond-assign
-    while ((m = re.exec(t)) && snippets.length < limit) {
-      const raw = m[0];
-      const cleaned = raw.split('\n').slice(0, 60).join('\n');
-      snippets.push(cleaned);
-    }
-    if (snippets.length >= limit) break;
-  }
-
-  // Fallback: last ~80 lines
-  if (snippets.length === 0) {
-    const lines = t.split('\n');
-    snippets.push(lines.slice(Math.max(0, lines.length - 80)).join('\n'));
-  }
-
-  return snippets.slice(0, limit);
+function summarizeFailedSteps(job: WorkflowRunJob): FailedStepSummary[] {
+  const steps = job.steps ?? [];
+  return steps
+    .filter((s) => isFailedConclusion(s.conclusion))
+    .map((s) => ({
+      jobName: job.name,
+      stepName: s.name,
+      conclusion: s.conclusion,
+    }));
 }
 
-export async function githubGetWorkflowRunLogsText(args: {
+export async function getWorkflowRunLogsText(args: {
   run_id: number;
   repo?: string;
   maxChars?: number;
 }): Promise<WorkflowRunLogsText> {
-  const zip = await downloadWorkflowRunLogs({ run_id: args.run_id, repo: args.repo });
+  const zip = await downloadWorkflowRunLogs(
+    args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
+  );
   return extractWorkflowRunLogsTextFromZipBase64(zip.contentBase64, {
     maxChars: args.maxChars,
   });
 }
 
-export async function githubDiagnoseWorkflowRun(args: {
+export async function diagnoseWorkflowRunFailure(args: {
   run_id: number;
   repo?: string;
-  maxChars?: number;
-  maxEvidence?: number;
-}): Promise<CiFailureSummary> {
-  const maxEvidence = args.maxEvidence ?? 6;
-
-  const jobs = await listWorkflowRunJobs({ run_id: args.run_id, repo: args.repo });
-  const failedJobs = (jobs.jobs ?? [])
-    .filter((j: any) => j.conclusion === 'failure' || j.conclusion === 'cancelled')
-    .map((j: any) => ({ id: j.id, name: j.name, conclusion: j.conclusion }));
-
-  const logsText = await githubGetWorkflowRunLogsText({
-    run_id: args.run_id,
-    repo: args.repo,
-    maxChars: args.maxChars ?? 250_000,
-  });
-
-  const snippets = pickBestErrorSnippets(logsText.text, maxEvidence);
-
-  const evidence = snippets.map((s, idx) => ({
-    file: `logs#${idx + 1}`,
-    snippet: s,
-  }));
-
-  const reason = snippets[0]
-    ? snippets[0].split('\n')[0].slice(0, 180)
-    : 'CI failed (no error snippet found in logs).';
-
-  return {
-    repo: args.repo ?? '(default)',
-    runId: args.run_id,
-    failedJobs,
-    reason,
-    evidence,
-    logsTruncated: logsText.truncated,
-  };
-}
-
-export async function githubDiagnoseLatestWorkflowRun(args: {
-  repo?: string;
-  workflow_id?: string;
-  ref?: string;
-  per_page?: number;
-  maxChars?: number;
-  maxEvidence?: number;
-}): Promise<CiFailureSummary> {
-  const runs = await listWorkflowRunsForRepo({
-    repo: args.repo,
-    workflow_id: args.workflow_id,
-    ref: args.ref,
-    per_page: args.per_page ?? 20,
-  });
-
-  const run = (runs.workflow_runs ?? []).find(
-    (r: any) => r.conclusion === 'failure' || r.conclusion === 'cancelled',
+  includeLogs?: boolean;
+  maxLogChars?: number;
+}): Promise<CiFailureDiagnosis> {
+  const jobsResp = await listWorkflowRunJobs(
+    args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
   );
 
-  if (!run) {
-    return {
-      repo: args.repo ?? '(default)',
-      runId: -1,
-      workflowId: args.workflow_id,
-      status: 'completed',
-      conclusion: 'success',
-      failedJobs: [],
-      reason: 'No failed workflow runs found in the last runs.',
-      evidence: [],
+  const jobs = jobsResp.jobs ?? [];
+  const failedJobs = jobs
+    .filter((j) => isFailedConclusion(j.conclusion))
+    .map((j) => ({
+      id: j.id,
+      name: j.name,
+      conclusion: j.conclusion,
+      failedSteps: summarizeFailedSteps(j),
+    }));
+
+  const diagnosis: CiFailureDiagnosis = {
+    run_id: args.run_id,
+    repo: args.repo,
+    failedJobs,
+  };
+
+  if (args.includeLogs) {
+    const logsText = await getWorkflowRunLogsText({
+      run_id: args.run_id,
+      repo: args.repo,
+      maxChars: args.maxLogChars,
+    });
+
+    diagnosis.logs = {
+      files: logsText.files,
+      textPreview: logsText.text,
     };
   }
 
-  const summary = await githubDiagnoseWorkflowRun({
-    run_id: run.id,
-    repo: args.repo,
-    maxChars: args.maxChars,
-    maxEvidence: args.maxEvidence,
-  });
-
-  return {
-    ...summary,
-    workflowId: args.workflow_id,
-    status: run.status,
-    conclusion: run.conclusion,
-    htmlUrl: run.html_url,
-  };
+  return diagnosis;
 }

@@ -47,8 +47,18 @@ export type NormalizedRun = {
   workflow_id?: number | null;
 };
 
+export type NormalizedJob = {
+  id: number;
+  name: string;
+  status: string | null;
+  conclusion: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  html_url?: string | null;
+};
+
 /**
- * Получить содержимое файла (UTF-8 текст) по пути.
+ * Прочитать файл (UTF-8 текст) по пути.
  */
 export async function getFile(path: string, repo?: string, ref?: string) {
   const { owner, repo: repoName } = parseRepo(repo);
@@ -75,7 +85,6 @@ export async function getFile(path: string, repo?: string, ref?: string) {
 
 /**
  * Получить структуру репозитория (дерево файлов).
- * Использует git tree с recursive=1.
  */
 export async function getRepoStructure(options?: {
   repo?: string;
@@ -438,7 +447,7 @@ export async function mergePullRequest(options: {
 }
 
 /**
- * Запустить workflow (по умолчанию ci.yml на main).
+ * Запустить workflow.
  */
 export async function runWorkflow(options: {
   workflow_id?: string;
@@ -491,8 +500,63 @@ export async function getWorkflowStatus(options: {
 }
 
 /**
- * Список запусков workflow. Если указан workflow_id — использует
- * endpoint /actions/workflows/{workflow_id}/runs, иначе — /actions/runs.
+ * Получить список jobs для workflow run.
+ */
+export async function listWorkflowRunJobs(options: { run_id: number; repo?: string }) {
+  const { owner, repo } = parseRepo(options.repo);
+
+  const res = await github.actions.listJobsForWorkflowRun({
+    owner,
+    repo,
+    run_id: options.run_id,
+    per_page: 100,
+  });
+
+  const jobs = (res.data.jobs || []).map((j: any) => ({
+    id: j.id,
+    name: j.name,
+    status: j.status ?? null,
+    conclusion: j.conclusion ?? null,
+    started_at: j.started_at ?? null,
+    completed_at: j.completed_at ?? null,
+    html_url: j.html_url ?? null,
+  })) as NormalizedJob[];
+
+  return { total_count: res.data.total_count, jobs };
+}
+
+/**
+ * Скачать логи workflow run.
+ * Возвращает строку (обычно zip; если zip — вернём base64+мета).
+ */
+export async function downloadWorkflowRunLogs(options: {
+  run_id: number;
+  repo?: string;
+}): Promise<{ format: 'zip-base64'; contentBase64: string } | { format: 'text'; content: string }> {
+  const { owner, repo } = parseRepo(options.repo);
+
+  // Octokit по умолчанию парсит как JSON; нам нужен raw.
+  const res = await github.request(
+    'GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs',
+    {
+      owner,
+      repo,
+      run_id: options.run_id,
+      request: {
+        // @ts-expect-error octokit typing
+        parseSuccessResponseBody: false,
+      },
+    },
+  );
+
+  const buf = Buffer.from(res.data as any);
+
+  // Logs endpoint returns a zip archive.
+  return { format: 'zip-base64', contentBase64: buf.toString('base64') };
+}
+
+/**
+ * Список запусков workflow.
  */
 export async function listWorkflowRunsForRepo(args: {
   workflow_id?: string | null | undefined;

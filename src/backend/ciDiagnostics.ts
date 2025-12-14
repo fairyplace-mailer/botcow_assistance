@@ -116,11 +116,12 @@ export async function diagnoseWorkflowRunFailure(args: {
   const logsText = await getWorkflowRunLogsText(logsArgs);
   const errorLines = extractErrorLinesFromLogs(logsText.text);
 
-  return {
+  const result = {
     runId: args.run_id,
-    repo: args.repo,
     failedJobs,
     errorLines,
     logFiles: logsText.files,
-  };
+  } satisfies Omit<CiFailureDiagnosis, 'repo'>;
+
+  return args.repo ? { ...result, repo: args.repo } : result;
 }

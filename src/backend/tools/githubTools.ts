@@ -1,373 +1,38 @@
 import {
-  getFile,
-  createBranch,
-  commitFile,
+  createIssue,
   createPullRequest,
-  mergePullRequest,
-  runWorkflow,
-  getWorkflowStatus,
-  commentOnPullRequest,
-  listWorkflowRuns,
+  getFileFromRepo,
+  getRepoStructure,
+  getWorkflowRunLogs,
+  listIssues,
+  listPullRequests,
+  listRepoFiles,
   listWorkflowRunJobs,
-  downloadWorkflowRunLogs,
+  listWorkflowRuns,
+  mergePullRequest,
+  searchInRepo,
+  updateIssue,
 } from '../github';
 
-type WorkflowRunStatus =
-  | 'waiting'
-  | 'completed'
-  | 'action_required'
-  | 'cancelled'
-  | 'failure'
-  | 'neutral'
-  | 'skipped'
-  | 'stale'
-  | 'success'
-  | 'timed_out'
-  | 'in_progress'
-  | 'queued'
-  | 'requested'
-  | 'pending';
+export const githubTools = {
+  async github_get_repo_structure(args: { repo?: string }) {
+    return getRepoStructure({ repo: args.repo });
+  },
 
-export const githubToolsSchemas = [
-  {
-    type: 'function',
-    function: {
-      name: 'github_get_file',
-      description:
-        'Прочитать файл из репозитория по пути (используется по умолчанию BOTCOW_DEFAULT_REPO).',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Путь к файлу в репо, например "src/app/page.tsx".',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Полное имя репозитория "owner/repo". Если не указано, используется BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['path'],
-      },
-    },
+  async github_list_files(args: { path?: string; repo?: string }) {
+    return listRepoFiles({ path: args.path, repo: args.repo });
   },
-  {
-    type: 'function',
-    function: {
-      name: 'github_create_branch',
-      description:
-        'Создать новую ветку от базовой (по умолчанию main) в указанном репозитории.',
-      parameters: {
-        type: 'object',
-        properties: {
-          branchName: {
-            type: 'string',
-            description: 'Имя новой ветки.',
-          },
-          baseBranch: {
-            type: 'string',
-            description: 'Базовая ветка, по умолчанию main.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['branchName'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_commit_file',
-      description:
-        'Создать или обновить файл в ветке репозитория с коммитом (используется для фич/фиксов).',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Путь к файлу в репо.',
-          },
-          content: {
-            type: 'string',
-            description: 'Содержимое файла в виде текста.',
-          },
-          message: {
-            type: 'string',
-            description: 'Текст commit message.',
-          },
-          branch: {
-            type: 'string',
-            description: 'Ветка для коммита.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['path', 'content', 'message', 'branch'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_create_pull_request',
-      description:
-        'Создать Pull Request из ветки head в базовую ветку (обычно main).',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: {
-            type: 'string',
-            description: 'Заголовок PR.',
-          },
-          head: {
-            type: 'string',
-            description: 'Исходная ветка (head).',
-          },
-          base: {
-            type: 'string',
-            description: 'Целевая ветка (base), по умолчанию main.',
-          },
-          body: {
-            type: 'string',
-            description: 'Описание PR.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['title', 'head'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_comment_on_pull_request',
-      description: 'Оставить комментарий в Pull Request по номеру.',
-      parameters: {
-        type: 'object',
-        properties: {
-          pull_number: {
-            type: 'number',
-            description: 'Номер PR.',
-          },
-          body: {
-            type: 'string',
-            description: 'Текст комментария (markdown).',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['pull_number', 'body'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_merge_pull_request',
-      description: 'Смерджить Pull Request по номеру.',
-      parameters: {
-        type: 'object',
-        properties: {
-          pull_number: {
-            type: 'number',
-            description: 'Номер PR.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['pull_number'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_run_workflow',
-      description:
-        'Запустить GitHub Actions workflow (по умолчанию ci.yml на main).',
-      parameters: {
-        type: 'object',
-        properties: {
-          workflow_id: {
-            type: 'string',
-            description: 'Имя или ID workflow, например "ci.yml".',
-          },
-          ref: {
-            type: 'string',
-            description: 'Ветка/commit ref, по умолчанию main.',
-          },
-          repo: {
-            type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-          inputs: {
-            type: 'object',
-            additionalProperties: { type: 'string' },
-            description: 'Опциональные inputs для workflow.',
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_get_workflow_status',
-      description: 'Получить статус конкретного запуска workflow (run_id).',
-      parameters: {
-        type: 'object',
-        properties: {
-          run_id: {
-            type: 'number',
-            description: 'Идентификатор запуска workflow.',
-          },
-          repo: {
-            type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['run_id'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_list_workflow_runs',
-      description: 'Получить список запусков workflow по workflow_id или по репо.',
-      parameters: {
-        type: 'object',
-        properties: {
-          workflow_id: {
-            type: 'string',
-            description: 'Имя или ID workflow (например "ci.yml").',
-          },
-          branch: {
-            type: 'string',
-            description: 'Фильтр по ветке (head_branch).',
-          },
-          event: {
-            type: 'string',
-            description: 'Фильтр по событию (например "workflow_dispatch").',
-          },
-          status: {
-            type: 'string',
-            description: 'Фильтр по статусу workflow run.',
-            enum: [
-              'waiting',
-              'completed',
-              'action_required',
-              'cancelled',
-              'failure',
-              'neutral',
-              'skipped',
-              'stale',
-              'success',
-              'timed_out',
-              'in_progress',
-              'queued',
-              'requested',
-              'pending',
-            ],
-          },
-          per_page: {
-            type: 'number',
-            description: 'Число возвращаемых записей, по умолчанию 5.',
-          },
-          repo: {
-            type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_list_workflow_run_jobs',
-      description: 'Получить список jobs для указанного workflow run.',
-      parameters: {
-        type: 'object',
-        properties: {
-          run_id: { type: 'number' },
-          repo: {
-            type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['run_id'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'github_download_workflow_run_logs',
-      description:
-        'Скачать логи workflow run. Возвращает zip в base64 (формат zip-base64).',
-      parameters: {
-        type: 'object',
-        properties: {
-          run_id: { type: 'number' },
-          repo: {
-            type: 'string',
-            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
-          },
-        },
-        required: ['run_id'],
-      },
-    },
-  },
-] as const;
 
-export const githubToolHandlers = {
   async github_get_file(args: { path: string; repo?: string }) {
-    const content = await getFile(args.path, args.repo);
-    return { path: args.path, repo: args.repo, content };
+    return getFileFromRepo({ path: args.path, repo: args.repo });
   },
 
-  async github_create_branch(args: {
-    branchName: string;
-    baseBranch?: string;
-    repo?: string;
-  }) {
-    return createBranch(args.branchName, args.baseBranch, args.repo);
+  async github_search_in_repo(args: { query: string; path?: string; repo?: string }) {
+    return searchInRepo({ query: args.query, path: args.path, repo: args.repo });
   },
 
-  async github_commit_file(args: {
-    path: string;
-    content: string;
-    message: string;
-    branch: string;
-    repo?: string;
-  }) {
-    const { repo, ...rest } = args;
-
-    if (repo) {
-      return commitFile({ ...rest, repo });
-    }
-
-    return commitFile(rest);
+  async github_list_pull_requests(args: { repo?: string }) {
+    return listPullRequests({ repo: args.repo });
   },
 
   async github_create_pull_request(args: {
@@ -377,69 +42,72 @@ export const githubToolHandlers = {
     body?: string;
     repo?: string;
   }) {
-    return createPullRequest(args);
-  },
-
-  async github_comment_on_pull_request(args: {
-    pull_number: number;
-    body: string;
-    repo?: string;
-  }) {
-    return commentOnPullRequest(args);
+    return createPullRequest({
+      title: args.title,
+      head: args.head,
+      base: args.base,
+      body: args.body,
+      repo: args.repo,
+    });
   },
 
   async github_merge_pull_request(args: {
     pull_number: number;
+    method?: 'merge' | 'squash' | 'rebase';
     repo?: string;
   }) {
-    return mergePullRequest(args);
+    return mergePullRequest({ pull_number: args.pull_number, method: args.method, repo: args.repo });
   },
 
-  async github_run_workflow(args: {
-    workflow_id?: string;
-    ref?: string;
-    repo?: string;
-    inputs?: Record<string, string>;
-  }) {
-    return runWorkflow(args);
-  },
-
-  async github_get_workflow_status(args: { run_id: number; repo?: string }) {
-    return getWorkflowStatus(args);
-  },
-
-  async github_list_workflow_runs(args: {
-    workflow_id?: string;
-    branch?: string;
-    event?: string;
-    status?: WorkflowRunStatus | null;
-    per_page?: number;
+  async github_create_issue(args: {
+    title: string;
+    body?: string;
+    labels?: string[];
+    assignees?: string[];
     repo?: string;
   }) {
-    const runs = await listWorkflowRuns({
-      workflow_id: args.workflow_id ?? undefined,
-      branch: args.branch ?? undefined,
-      event: args.event ?? undefined,
-      status: args.status ?? undefined,
-      per_page: args.per_page ?? undefined,
-      repo: args.repo ?? undefined,
+    return createIssue({
+      title: args.title,
+      body: args.body,
+      labels: args.labels,
+      assignees: args.assignees,
+      repo: args.repo,
     });
+  },
 
-    return { runs };
+  async github_update_issue(args: {
+    issue_number: number;
+    title?: string;
+    body?: string;
+    state?: 'open' | 'closed';
+    labels?: string[];
+    assignees?: string[];
+    repo?: string;
+  }) {
+    return updateIssue({
+      issue_number: args.issue_number,
+      title: args.title,
+      body: args.body,
+      state: args.state,
+      labels: args.labels,
+      assignees: args.assignees,
+      repo: args.repo,
+    });
+  },
+
+  async github_list_issues(args: { state?: 'open' | 'closed' | 'all'; labels?: string[]; repo?: string }) {
+    return listIssues({ state: args.state, labels: args.labels, repo: args.repo });
+  },
+
+  async github_list_workflow_runs(args: { workflow_id?: string; repo?: string }) {
+    return listWorkflowRuns(args.repo ? { workflow_id: args.workflow_id, repo: args.repo } : { workflow_id: args.workflow_id });
   },
 
   async github_list_workflow_run_jobs(args: { run_id: number; repo?: string }) {
-    return listWorkflowRunJobs(
-      args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
-    );
+    return listWorkflowRunJobs(args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id });
   },
 
-  async github_download_workflow_run_logs(args: {
-    run_id: number;
-    repo?: string;
-  }) {
-    return downloadWorkflowRunLogs(
-      args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id },
-    );
+  async github_download_workflow_run_logs(args: { run_id: number; repo?: string }) {
+    return getWorkflowRunLogs(args.repo ? { run_id: args.run_id, repo: args.repo } : { run_id: args.run_id });
   },
 };

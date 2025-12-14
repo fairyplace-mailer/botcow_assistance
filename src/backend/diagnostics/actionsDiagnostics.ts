@@ -30,19 +30,16 @@ export async function githubDiagnoseActionsSetup(args: {
   // We only do safe, low-cost API probes.
   try {
     const runs = await listWorkflowRuns({
-      repo: args.repo,
-      branch: args.ref,
-      workflow_id: args.workflow_id,
+      ...(args.repo ? { repo: args.repo } : {}),
+      ...(args.ref ? { branch: args.ref } : {}),
+      ...(args.workflow_id ? { workflow_id: args.workflow_id } : {}),
       per_page: 5,
     });
 
     const count = runs.runs.length;
 
     if (count === 0) {
-      return {
-        repo: args.repo,
-        ref: args.ref,
-        workflow_id: args.workflow_id,
+      const base = {
         summary:
           'No workflow runs found for this repo/ref. Most likely: workflow trigger does not match your branch, Actions disabled, or workflow file not present on this branch.',
         hints: [
@@ -53,14 +50,18 @@ export async function githubDiagnoseActionsSetup(args: {
         ],
         checklistDoc,
         latestRunsFound: 0,
+      } satisfies Omit<ActionsSetupDiagnosis, 'repo' | 'ref' | 'workflow_id'>;
+
+      return {
+        ...base,
+        ...(args.repo ? { repo: args.repo } : {}),
+        ...(args.ref ? { ref: args.ref } : {}),
+        ...(args.workflow_id ? { workflow_id: args.workflow_id } : {}),
       };
     }
 
     // Runs exist -> Actions works. If user still complains, they probably need Stage 1 diagnostics (logs).
-    return {
-      repo: args.repo,
-      ref: args.ref,
-      workflow_id: args.workflow_id,
+    const base = {
       summary:
         'Workflow runs exist. If CI “fails”, use workflow-run diagnostics to fetch the failing job and error lines.',
       hints: [
@@ -70,13 +71,17 @@ export async function githubDiagnoseActionsSetup(args: {
       ],
       checklistDoc,
       latestRunsFound: count,
+    } satisfies Omit<ActionsSetupDiagnosis, 'repo' | 'ref' | 'workflow_id'>;
+
+    return {
+      ...base,
+      ...(args.repo ? { repo: args.repo } : {}),
+      ...(args.ref ? { ref: args.ref } : {}),
+      ...(args.workflow_id ? { workflow_id: args.workflow_id } : {}),
     };
   } catch (e) {
     if (isLikelyForbiddenError(e)) {
-      return {
-        repo: args.repo,
-        ref: args.ref,
-        workflow_id: args.workflow_id,
+      const base = {
         summary:
           'GitHub API returned 403 while trying to list workflow runs. This is usually Actions permissions / token permission issue.',
         hints: [
@@ -85,14 +90,18 @@ export async function githubDiagnoseActionsSetup(args: {
           `Follow checklist: ${checklistDoc}`,
         ],
         checklistDoc,
+      } satisfies Omit<ActionsSetupDiagnosis, 'repo' | 'ref' | 'workflow_id' | 'latestRunsFound'>;
+
+      return {
+        ...base,
+        ...(args.repo ? { repo: args.repo } : {}),
+        ...(args.ref ? { ref: args.ref } : {}),
+        ...(args.workflow_id ? { workflow_id: args.workflow_id } : {}),
       };
     }
 
     if (isLikelyNotFoundError(e)) {
-      return {
-        repo: args.repo,
-        ref: args.ref,
-        workflow_id: args.workflow_id,
+      const base = {
         summary:
           'GitHub API returned 404 while trying to list workflow runs. This can mean: wrong repo name, Actions disabled, or no access.',
         hints: [
@@ -101,18 +110,29 @@ export async function githubDiagnoseActionsSetup(args: {
           `Follow checklist: ${checklistDoc}`,
         ],
         checklistDoc,
+      } satisfies Omit<ActionsSetupDiagnosis, 'repo' | 'ref' | 'workflow_id' | 'latestRunsFound'>;
+
+      return {
+        ...base,
+        ...(args.repo ? { repo: args.repo } : {}),
+        ...(args.ref ? { ref: args.ref } : {}),
+        ...(args.workflow_id ? { workflow_id: args.workflow_id } : {}),
       };
     }
 
     // Unknown error
     const msg = e instanceof Error ? e.message : String(e);
-    return {
-      repo: args.repo,
-      ref: args.ref,
-      workflow_id: args.workflow_id,
+    const base = {
       summary: `Failed to probe Actions via API: ${msg}`,
       hints: [`Follow checklist: ${checklistDoc}`],
       checklistDoc,
+    } satisfies Omit<ActionsSetupDiagnosis, 'repo' | 'ref' | 'workflow_id' | 'latestRunsFound'>;
+
+    return {
+      ...base,
+      ...(args.repo ? { repo: args.repo } : {}),
+      ...(args.ref ? { ref: args.ref } : {}),
+      ...(args.workflow_id ? { workflow_id: args.workflow_id } : {}),
     };
   }
 }

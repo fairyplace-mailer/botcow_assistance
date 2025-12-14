@@ -19,20 +19,21 @@ import {
 } from '../ciDiagnostics';
 
 /**
- * JSON- schemas tools  for OpenAI (function calling).
+ * JSON schemas tools for OpenAI (function calling).
  */
 export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
       name: 'github_get_repo_structure',
-      description: '     (GitHub).',
+      description: 'Получить структуру репозитория (GitHub).',
       parameters: {
         type: 'object',
         properties: {
           repo: {
             type: 'string',
-            description: 'owner/name.     BOTCOW_DEFAULT_REPO.',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
           },
         },
       },
@@ -42,18 +43,19 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_files',
-      description: ' /   ( ).',
+      description: 'Список файлов/папок по пути (один уровень).',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '  .' },
+          path: { type: 'string', description: 'Путь внутри репозитория.' },
           repo: {
             type: 'string',
-            description: 'owner/name.     BOTCOW_DEFAULT_REPO.',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
           },
           ref: {
             type: 'string',
-            description: '//sha.     default branch.',
+            description: 'Ветка/тег/sha. Если не задано — default branch.',
           },
         },
       },
@@ -63,14 +65,15 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_file',
-      description: '      .',
+      description: 'Получить содержимое файла.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '  .' },
+          path: { type: 'string', description: 'Путь внутри репозитория.' },
           repo: {
             type: 'string',
-            description: 'owner/name.     BOTCOW_DEFAULT_REPO.',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
           },
         },
         required: ['path'],
@@ -81,17 +84,18 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_search_in_repo',
-      description: '  .',
+      description: 'Поиск по репозиторию.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: ' .' },
-          path: { type: 'string', description: '  .' },
+          query: { type: 'string', description: 'Поисковая строка.' },
+          path: { type: 'string', description: 'Ограничить поиск директорией.' },
           repo: {
             type: 'string',
-            description: 'owner/name.     BOTCOW_DEFAULT_REPO.',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
           },
-          per_page: { type: 'number', description: '- ( 100).' },
+          per_page: { type: 'number', description: 'Кол-во (до 100).' },
         },
         required: ['query'],
       },
@@ -101,7 +105,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_pull_request',
-      description: ' Pull Request.',
+      description: 'Создать Pull Request.',
       parameters: {
         type: 'object',
         properties: {
@@ -119,7 +123,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_merge_pull_request',
-      description: ' Pull Request  .',
+      description: 'Смержить Pull Request выбранным методом.',
       parameters: {
         type: 'object',
         properties: {
@@ -135,7 +139,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_issue',
-      description: ' Issue.',
+      description: 'Создать Issue.',
       parameters: {
         type: 'object',
         properties: {
@@ -153,7 +157,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_update_issue',
-      description: ' Issue.',
+      description: 'Обновить Issue.',
       parameters: {
         type: 'object',
         properties: {
@@ -173,7 +177,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_issues',
-      description: '  Issues  .',
+      description: 'Список Issues по фильтрам.',
       parameters: {
         type: 'object',
         properties: {
@@ -190,12 +194,14 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_runs',
-      description: '   GitHub Actions workflow  .',
+      description: 'Получить список GitHub Actions workflow runs.',
       parameters: {
         type: 'object',
         properties: {
           workflow_id: { type: 'string' },
           repo: { type: 'string' },
+          ref: { type: 'string' },
+          per_page: { type: 'number' },
         },
       },
     },
@@ -204,7 +210,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_run_jobs',
-      description: '  jobs  workflow run.',
+      description: 'Получить список jobs по workflow run id.',
       parameters: {
         type: 'object',
         properties: {
@@ -219,7 +225,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_download_workflow_run_logs',
-      description: '  workflow run (zip  base64).',
+      description: 'Скачать логи workflow run (zip base64).',
       parameters: {
         type: 'object',
         properties: {
@@ -237,7 +243,7 @@ export const githubToolsSchemas = [
     function: {
       name: 'github_get_workflow_run_logs_text',
       description:
-        '    workflow run.    (txt  zip).',
+        'Достать логи workflow run как текст (распаковка zip).',
       parameters: {
         type: 'object',
         properties: {
@@ -254,20 +260,13 @@ export const githubToolsSchemas = [
     function: {
       name: 'github_diagnose_workflow_run',
       description:
-        ' CI  workflow run:     +     .',
+        'Диагностика CI по workflow run: failed jobs + ключевые строки ошибок из логов.',
       parameters: {
         type: 'object',
         properties: {
           run_id: { type: 'number' },
           repo: { type: 'string' },
-          maxChars: {
-            type: 'number',
-            description: '       .',
-          },
-          maxEvidence: {
-            type: 'number',
-            description: '    .',
-          },
+          maxChars: { type: 'number' },
         },
         required: ['run_id'],
       },
@@ -278,7 +277,7 @@ export const githubToolsSchemas = [
     function: {
       name: 'github_diagnose_latest_workflow_run',
       description:
-        '   workflow run     (logs + failed jobs).',
+        'Диагностика последнего workflow run (logs + failed jobs).',
       parameters: {
         type: 'object',
         properties: {
@@ -287,9 +286,7 @@ export const githubToolsSchemas = [
           ref: { type: 'string' },
           per_page: { type: 'number' },
           maxChars: { type: 'number' },
-          maxEvidence: { type: 'number' },
         },
-        required: [],
       },
     },
   },
@@ -303,6 +300,16 @@ type SearchArgs = {
   repo?: string;
   per_page?: number;
 };
+
+function buildOptional<T extends Record<string, unknown>>(obj: T): {
+  [K in keyof T as undefined extends T[K] ? never : K]: T[K];
+} & Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out as any;
+}
 
 /**
  * Handlers.
@@ -453,11 +460,19 @@ export const githubToolHandlers = {
     return listIssues(options);
   },
 
-  async github_list_workflow_runs(args: { workflow_id?: string; repo?: string }) {
+  async github_list_workflow_runs(args: {
+    workflow_id?: string;
+    repo?: string;
+    ref?: string;
+    per_page?: number;
+  }) {
     return listWorkflowRuns(
-      args.repo
-        ? { workflow_id: args.workflow_id, repo: args.repo }
-        : { workflow_id: args.workflow_id },
+      buildOptional({
+        workflow_id: args.workflow_id,
+        repo: args.repo,
+        ref: args.ref,
+        per_page: args.per_page,
+      }),
     );
   },
 
@@ -478,25 +493,27 @@ export const githubToolHandlers = {
     repo?: string;
     maxChars?: number;
   }) {
-    return githubGetWorkflowRunLogsText({
-      run_id: args.run_id,
-      repo: args.repo,
-      maxChars: args.maxChars,
-    });
+    return githubGetWorkflowRunLogsText(
+      buildOptional({
+        run_id: args.run_id,
+        repo: args.repo,
+        maxChars: args.maxChars,
+      }),
+    );
   },
 
   async github_diagnose_workflow_run(args: {
     run_id: number;
     repo?: string;
     maxChars?: number;
-    maxEvidence?: number;
   }) {
-    return githubDiagnoseWorkflowRun({
-      run_id: args.run_id,
-      repo: args.repo,
-      maxChars: args.maxChars,
-      maxEvidence: args.maxEvidence,
-    });
+    return githubDiagnoseWorkflowRun(
+      buildOptional({
+        run_id: args.run_id,
+        repo: args.repo,
+        maxChars: args.maxChars,
+      }),
+    );
   },
 
   async github_diagnose_latest_workflow_run(args: {
@@ -505,15 +522,15 @@ export const githubToolHandlers = {
     ref?: string;
     per_page?: number;
     maxChars?: number;
-    maxEvidence?: number;
   }) {
-    return githubDiagnoseLatestWorkflowRun({
-      repo: args.repo,
-      workflow_id: args.workflow_id,
-      ref: args.ref,
-      per_page: args.per_page,
-      maxChars: args.maxChars,
-      maxEvidence: args.maxEvidence,
-    });
+    return githubDiagnoseLatestWorkflowRun(
+      buildOptional({
+        repo: args.repo,
+        workflow_id: args.workflow_id,
+        ref: args.ref,
+        per_page: args.per_page,
+        maxChars: args.maxChars,
+      }),
+    );
   },
 };

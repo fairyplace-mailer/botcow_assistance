@@ -1,9 +1,9 @@
 import {
   createIssue,
   createPullRequest,
+  downloadWorkflowRunLogs,
   getFile,
   getRepoStructure,
-  downloadWorkflowRunLogs,
   listFiles,
   listIssues,
   listWorkflowRunJobs,
@@ -15,11 +15,11 @@ import {
 
 export const githubTools = {
   async github_get_repo_structure(args: { repo?: string }) {
-    return getRepoStructure({ repo: args.repo });
+    return getRepoStructure(args.repo ? { repo: args.repo } : undefined);
   },
 
   async github_list_files(args: { path?: string; repo?: string }) {
-    return listFiles({ path: args.path, repo: args.repo });
+    return listFiles(args.repo ? { path: args.path, repo: args.repo } : { path: args.path });
   },
 
   async github_get_file(args: { path: string; repo?: string }) {
@@ -27,7 +27,7 @@ export const githubTools = {
   },
 
   async github_search_in_repo(args: { query: string; path?: string; repo?: string }) {
-    return searchInRepo({ query: args.query, path: args.path, repo: args.repo });
+    return searchInRepo(args.repo ? { query: args.query, path: args.path, repo: args.repo } : { query: args.query, path: args.path });
   },
 
   async github_create_pull_request(args: {

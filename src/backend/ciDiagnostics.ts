@@ -149,9 +149,12 @@ export async function githubDiagnoseLatestWorkflowRun(args: {
     throw new Error('No workflow runs found');
   }
 
-  return githubDiagnoseWorkflowRun({
+  // Avoid passing repo/maxChars with undefined values.
+  const diagnoseArgs = buildOptional({
     run_id: first.id,
     repo: args.repo,
     maxChars: args.maxChars,
   });
+
+  return githubDiagnoseWorkflowRun(diagnoseArgs);
 }

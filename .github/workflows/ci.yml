@@ -21,6 +21,42 @@ jobs:
         with:
           node-version: 20
 
+      - name: Diagnostics (token permissions + secrets presence)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "Repo: $GITHUB_REPOSITORY"
+          echo "Ref:  $GITHUB_REF"
+          echo "SHA:  $GITHUB_SHA"
+          echo "Actor: $GITHUB_ACTOR"
+          echo "Workflow: $GITHUB_WORKFLOW"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo ""
+
+          echo "== Secrets presence (no values printed) =="
+          check_var () {
+            local name="$1"
+            local val="${!name:-}"
+            if [ -n "$val" ]; then
+              echo "- $name: present"
+            else
+              echo "- $name: MISSING"
+            fi
+          }
+          check_var GITHUB_PAT_BOTCOW
+          check_var OPENAI_API_KEY
+          check_var BLOB_READ_WRITE_TOKEN
+          check_var BOTCOW_DEFAULT_REPO
+          echo ""
+
+          echo "== GITHUB_TOKEN capabilities (API probes) =="
+          echo "GET /repos/{owner}/{repo}"
+          gh api -H "Accept: application/vnd.github+json" "/repos/$GITHUB_REPOSITORY" >/dev/null && echo "- ok" || echo "- failed"
+
+          echo "GET /repos/{owner}/{repo}/actions/runs?per_page=1"
+          gh api -H "Accept: application/vnd.github+json" "/repos/$GITHUB_REPOSITORY/actions/runs?per_page=1" >/dev/null && echo "- ok" || echo "- failed"
+
       - name: Install deps
         run: npm ci
 

@@ -31,7 +31,7 @@ export async function githubDiagnoseActionsSetup(args: {
   try {
     const runs = await listWorkflowRuns({
       repo: args.repo,
-      ref: args.ref,
+      branch: args.ref,
       workflow_id: args.workflow_id,
       per_page: 5,
     });

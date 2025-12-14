@@ -8,6 +8,8 @@ import {
   getWorkflowStatus,
   commentOnPullRequest,
   listWorkflowRuns,
+  listWorkflowRunJobs,
+  downloadWorkflowRunLogs,
 } from '../github';
 
 type WorkflowRunStatus =
@@ -214,8 +216,7 @@ export const githubToolsSchemas = [
           },
           repo: {
             type: 'string',
-            description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REПО.',
+            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
           inputs: {
             type: 'object',
@@ -258,7 +259,7 @@ export const githubToolsSchemas = [
         properties: {
           workflow_id: {
             type: 'string',
-            description: 'Имя или ID workflow (например "ci.yml"). Если не указан — вернёт запуск по всему репо.',
+            description: 'Имя или ID workflow (например "ci.yml").',
           },
           branch: {
             type: 'string',
@@ -270,8 +271,7 @@ export const githubToolsSchemas = [
           },
           status: {
             type: 'string',
-            description:
-              'Фильтр по статусу workflow run. Допустимые: waiting, completed, action_required, cancelled, failure, neutral, skipped, stale, success, timed_out, in_progress, queued, requested, pending.',
+            description: 'Фильтр по статусу workflow run.',
             enum: [
               'waiting',
               'completed',
@@ -298,6 +298,43 @@ export const githubToolsSchemas = [
             description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
           },
         },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_workflow_run_jobs',
+      description: 'Получить список jobs для указанного workflow run.',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: {
+            type: 'string',
+            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+          },
+        },
+        required: ['run_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_download_workflow_run_logs',
+      description:
+        'Скачать логи workflow run. Возвращает zip в base64 (формат zip-base64).',
+      parameters: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'number' },
+          repo: {
+            type: 'string',
+            description: 'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+          },
+        },
+        required: ['run_id'],
       },
     },
   },
@@ -371,7 +408,7 @@ export const githubToolHandlers = {
     return getWorkflowStatus(args);
   },
 
-    async github_list_workflow_runs(args: {
+  async github_list_workflow_runs(args: {
     workflow_id?: string;
     branch?: string;
     event?: string;
@@ -389,5 +426,16 @@ export const githubToolHandlers = {
     });
 
     return { runs };
+  },
+
+  async github_list_workflow_run_jobs(args: { run_id: number; repo?: string }) {
+    return listWorkflowRunJobs({ run_id: args.run_id, repo: args.repo });
+  },
+
+  async github_download_workflow_run_logs(args: {
+    run_id: number;
+    repo?: string;
+  }) {
+    return downloadWorkflowRunLogs({ run_id: args.run_id, repo: args.repo });
   },
 };

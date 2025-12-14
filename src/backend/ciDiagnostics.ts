@@ -2,6 +2,7 @@ import {
   downloadWorkflowRunLogs,
   listWorkflowRunJobs,
   type NormalizedJob,
+  listWorkflowRuns,
 } from './github';
 import {
   extractWorkflowRunLogsTextFromZipBase64,
@@ -27,7 +28,7 @@ function buildOptional<T extends Record<string, unknown>>(obj: T): {
   return out as any;
 }
 
-export async function getWorkflowRunLogsText(args: {
+export async function githubGetWorkflowRunLogsText(args: {
   run_id: number;
   repo?: string;
   maxChars?: number;
@@ -37,7 +38,6 @@ export async function getWorkflowRunLogsText(args: {
   );
 
   const extractOpts = buildOptional({ maxChars: args.maxChars });
-
   return extractWorkflowRunLogsTextFromZipBase64(zip.contentBase64, extractOpts);
 }
 
@@ -89,7 +89,7 @@ function extractErrorLinesFromLogs(text: string, maxLines = 60): string[] {
   return out.filter((l) => l.trim().length > 0).slice(0, maxLines);
 }
 
-export async function diagnoseWorkflowRunFailure(args: {
+export async function githubDiagnoseWorkflowRun(args: {
   run_id: number;
   repo?: string;
   maxChars?: number;
@@ -113,7 +113,7 @@ export async function diagnoseWorkflowRunFailure(args: {
     maxChars: args.maxChars,
   });
 
-  const logsText = await getWorkflowRunLogsText(logsArgs);
+  const logsText = await githubGetWorkflowRunLogsText(logsArgs);
   const errorLines = extractErrorLinesFromLogs(logsText.text);
 
   const result = {
@@ -124,4 +124,34 @@ export async function diagnoseWorkflowRunFailure(args: {
   } satisfies Omit<CiFailureDiagnosis, 'repo'>;
 
   return args.repo ? { ...result, repo: args.repo } : result;
+}
+
+export async function githubDiagnoseLatestWorkflowRun(args: {
+  repo?: string;
+  workflow_id?: string;
+  ref?: string;
+  per_page?: number;
+  maxChars?: number;
+}): Promise<CiFailureDiagnosis> {
+  const perPage = args.per_page ?? 10;
+
+  const runs = await listWorkflowRuns(
+    buildOptional({
+      repo: args.repo,
+      workflow_id: args.workflow_id,
+      ref: args.ref,
+      per_page: perPage,
+    }),
+  );
+
+  const first = runs.workflow_runs?.[0];
+  if (!first) {
+    throw new Error('No workflow runs found');
+  }
+
+  return githubDiagnoseWorkflowRun({
+    run_id: first.id,
+    repo: args.repo,
+    maxChars: args.maxChars,
+  });
 }

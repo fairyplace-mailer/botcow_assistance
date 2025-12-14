@@ -61,13 +61,22 @@ export const githubTools = {
     body?: string;
     repo?: string;
   }) {
-    return createPullRequest({
+    const options: {
+      title: string;
+      head: string;
+      base?: string;
+      body?: string;
+      repo?: string;
+    } = {
       title: args.title,
       head: args.head,
-      base: args.base,
-      body: args.body,
-      repo: args.repo,
-    });
+    };
+
+    if (args.base !== undefined) options.base = args.base;
+    if (args.body !== undefined) options.body = args.body;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return createPullRequest(options);
   },
 
   async github_merge_pull_request(args: {
@@ -75,11 +84,18 @@ export const githubTools = {
     method?: 'merge' | 'squash' | 'rebase';
     repo?: string;
   }) {
-    return mergePullRequest({
+    const options: {
+      pull_number: number;
+      method?: 'merge' | 'squash' | 'rebase';
+      repo?: string;
+    } = {
       pull_number: args.pull_number,
-      method: args.method,
-      repo: args.repo,
-    });
+    };
+
+    if (args.method !== undefined) options.method = args.method;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return mergePullRequest(options);
   },
 
   async github_create_issue(args: {
@@ -89,13 +105,20 @@ export const githubTools = {
     assignees?: string[];
     repo?: string;
   }) {
-    return createIssue({
-      title: args.title,
-      body: args.body,
-      labels: args.labels,
-      assignees: args.assignees,
-      repo: args.repo,
-    });
+    const options: {
+      title: string;
+      body?: string;
+      labels?: string[];
+      assignees?: string[];
+      repo?: string;
+    } = { title: args.title };
+
+    if (args.body !== undefined) options.body = args.body;
+    if (args.labels !== undefined) options.labels = args.labels;
+    if (args.assignees !== undefined) options.assignees = args.assignees;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return createIssue(options);
   },
 
   async github_update_issue(args: {
@@ -107,15 +130,24 @@ export const githubTools = {
     assignees?: string[];
     repo?: string;
   }) {
-    return updateIssue({
-      issue_number: args.issue_number,
-      title: args.title,
-      body: args.body,
-      state: args.state,
-      labels: args.labels,
-      assignees: args.assignees,
-      repo: args.repo,
-    });
+    const options: {
+      issue_number: number;
+      title?: string;
+      body?: string;
+      state?: 'open' | 'closed';
+      labels?: string[];
+      assignees?: string[];
+      repo?: string;
+    } = { issue_number: args.issue_number };
+
+    if (args.title !== undefined) options.title = args.title;
+    if (args.body !== undefined) options.body = args.body;
+    if (args.state !== undefined) options.state = args.state;
+    if (args.labels !== undefined) options.labels = args.labels;
+    if (args.assignees !== undefined) options.assignees = args.assignees;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return updateIssue(options);
   },
 
   async github_list_issues(args: {
@@ -123,7 +155,17 @@ export const githubTools = {
     labels?: string[];
     repo?: string;
   }) {
-    return listIssues({ state: args.state, labels: args.labels, repo: args.repo });
+    const options: {
+      state?: 'open' | 'closed' | 'all';
+      labels?: string[];
+      repo?: string;
+    } = {};
+
+    if (args.state !== undefined) options.state = args.state;
+    if (args.labels !== undefined) options.labels = args.labels;
+    if (args.repo !== undefined) options.repo = args.repo;
+
+    return listIssues(options);
   },
 
   async github_list_workflow_runs(args: { workflow_id?: string; repo?: string }) {

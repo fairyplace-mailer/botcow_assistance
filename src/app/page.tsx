@@ -1,23 +1,17 @@
 'use client';
 
-import { useState, useRef, useLayoutEffect } from 'react';
+import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import type { FormEvent, ChangeEvent } from 'react';
-
-// ... (оставим без изменений импорты и типы)
+import { loadRecentMessages, saveRecentMessages, type Message } from './pwa/chatStore';
 
 type Role = 'user' | 'assistant';
 
-interface Message {
-  role: Role;
-  content: string;
-}
-
 export default function Page() {
-  // состояния и useState оставим как есть, дополнительно добавим индикацию загрузок и ошибки
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [isOffline, setIsOffline] = useState(false);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePath, setFilePath] = useState('');
@@ -42,38 +36,56 @@ export default function Page() {
 
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    loadRecentMessages().then((loaded) => {
+      if (loaded.length > 0) setMessages(loaded);
+    });
+
+    const updateOnline = () => setIsOffline(!navigator.onLine);
+    updateOnline();
+
+    window.addEventListener('online', updateOnline);
+    window.addEventListener('offline', updateOnline);
+
+    return () => {
+      window.removeEventListener('online', updateOnline);
+      window.removeEventListener('offline', updateOnline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    void saveRecentMessages(messages);
+  }, [messages]);
+
   function getMaxHeight(): number {
     const ta = taRef.current;
     if (!ta || typeof window === 'undefined') return 0;
     const style = window.getComputedStyle(ta);
-    // try to get numeric line-height, fallback to font-size * 1.2
     const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2) || 18;
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
     const borderTop = parseFloat(style.borderTopWidth) || 0;
     const borderBottom = parseFloat(style.borderBottomWidth) || 0;
-    // max height equals 6 lines + vertical paddings and borders
     return Math.round(lineHeight * 6 + paddingTop + paddingBottom + borderTop + borderBottom);
   }
 
   function adjustHeight() {
     const ta = taRef.current;
     if (!ta) return;
-    // reset to auto to measure scrollHeight correctly
     ta.style.height = 'auto';
     const maxH = getMaxHeight();
     const newH = Math.min(ta.scrollHeight, maxH || ta.scrollHeight);
     ta.style.height = `${newH}px`;
-    // if content exceeds max, keep scroll pinned to bottom
     if (ta.scrollHeight > (maxH || Infinity)) {
       ta.scrollTop = ta.scrollHeight;
     }
   }
 
   useLayoutEffect(() => {
-    // adjust when input changes (including mount)
     adjustHeight();
-    // also adjust on window resize as computed styles may change
     function onResize() {
       adjustHeight();
     }
@@ -84,6 +96,12 @@ export default function Page() {
   async function handleChatSubmit(e: FormEvent) {
     e.preventDefault();
     if (!input.trim() || chatLoading) return;
+
+    if (typeof window !== 'undefined' && !navigator.onLine) {
+      setIsOffline(true);
+      setChatError('Offline: cannot send message. Showing the last saved messages.');
+      return;
+    }
 
     const newMessage: Message = { role: 'user', content: input.trim() };
     const nextMessages = [...messages, newMessage];
@@ -229,7 +247,9 @@ export default function Page() {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      setWorkflowMessage(`Workflow запущен (id=${data.result?.workflow_id ?? workflowId}, ref=${data.result?.ref ?? workflowRef})`);
+      setWorkflowMessage(
+        `Workflow запущен (id=${data.result?.workflow_id ?? workflowId}, ref=${data.result?.ref ?? workflowRef})`,
+      );
     } catch (err: any) {
       setWorkflowError(err?.message || 'Run workflow failed');
     } finally {
@@ -281,43 +301,47 @@ export default function Page() {
       <div
         style={{
           maxWidth: 1400,
-          margin: '0 auto 0 40px',          // ближе к левому краю
+          margin: '0 auto 0 40px',
           display: 'grid',
-          gridTemplateColumns: 'auto minmax(320px, 1fr)', // левая колонка фикс, правая — остаток
+          gridTemplateColumns: 'auto minmax(320px, 1fr)',
           gap: 24,
         }}
-       >
-        {/* Левая колонка: чат + просмотр файла */}
+      >
         <section
           style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          width: 880,        // фиксированная ширина
-          maxWidth: 880,
-          flexShrink: 0,     // не даём сжиматься/расползаться
-        }}
-       >
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+            width: 880,
+            maxWidth: 880,
+            flexShrink: 0,
+          }}
+        >
           <div className="card">
-            <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>
-              BotCow Code Assistant
-            </h1>
+            <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>BotCow Code Assistant</h1>
             <p className="small-muted" style={{ margin: 0 }}>
               Чат-ассистент для работы с кодом и GitHub.
             </p>
           </div>
 
-          {/* Чат */}
+          {isOffline && (
+            <div className="card" style={{ border: '1px solid var(--border)', background: 'var(--muted)' }}>
+              <div style={{ fontSize: 13, color: 'var(--muted-fg)' }}>
+                Offline: showing the last saved 20 messages. Online features are disabled.
+              </div>
+            </div>
+          )}
+
           <div
             className="card"
             style={{
               display: 'flex',
               flexDirection: 'column',
               height: 420,
-              width: '100%',   // занимает всю левую колонку, но не больше 880
+              width: '100%',
               boxSizing: 'border-box',
             }}
-           >
+          >
             <div
               style={{
                 flex: 1,
@@ -348,12 +372,10 @@ export default function Page() {
                       color: m.role === 'user' ? 'var(--primary-fg)' : 'var(--fg)',
                       whiteSpace: 'pre-wrap',
                       maxWidth: '100%',
-                      wordBreak: 'break-word',    // или overflowWrap: 'anywhere'
+                      wordBreak: 'break-word',
                     }}
                   >
-                    <strong>
-                      {m.role === 'user' ? 'Ты' : 'Ассистент'}:{' '}
-                    </strong>
+                    <strong>{m.role === 'user' ? 'Ты' : 'Ассистент'}: </strong>
                     {m.content}
                   </div>
                 </div>
@@ -361,13 +383,7 @@ export default function Page() {
             </div>
 
             {chatError && (
-              <div
-                style={{
-                  color: 'var(--error)',
-                  fontSize: 13,
-                  marginBottom: 4,
-                }}
-              >
+              <div style={{ color: 'var(--error)', fontSize: 13, marginBottom: 4 }}>
                 Ошибка: {chatError}
               </div>
             )}
@@ -379,30 +395,30 @@ export default function Page() {
                 gap: 8,
                 width: '100%',
               }}
-             >
-               <textarea
-                 ref={taRef}
-                 rows={1}
-                 value={input}
-                 onChange={(e) => setInput(e.target.value)}
-                 onInput={adjustHeight}
-                 placeholder="Напиши запрос ассистенту..."
-                 style={{
-                   flex: '1 1 0',
-                   minWidth: 0,          // не вытягивает карту
-                   padding: 8,
-                   borderRadius: 4,
-                   border: '1px solid var(--border)',
-                   fontSize: 14,
-                   resize: 'none',
-                   overflow: 'auto',
-                   boxSizing: 'border-box',
-                 }}
-               />
+            >
+              <textarea
+                ref={taRef}
+                rows={1}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onInput={adjustHeight}
+                placeholder="Напиши запрос ассистенту..."
+                style={{
+                  flex: '1 1 0',
+                  minWidth: 0,
+                  padding: 8,
+                  borderRadius: 4,
+                  border: '1px solid var(--border)',
+                  fontSize: 14,
+                  resize: 'none',
+                  overflow: 'auto',
+                  boxSizing: 'border-box',
+                }}
+              />
               <button
                 type="submit"
                 disabled={chatLoading || !input.trim()}
-                className={"button button-primary"}
+                className="button button-primary"
                 style={{
                   cursor: chatLoading ? 'default' : 'pointer',
                   opacity: chatLoading ? 0.6 : 1,
@@ -414,7 +430,6 @@ export default function Page() {
             </form>
           </div>
 
-          {/* Окно просмотра файла */}
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
@@ -446,16 +461,7 @@ export default function Page() {
               </button>
             </div>
 
-            {viewError && (
-              <div
-                style={{
-                  color: 'var(--error)',
-                  fontSize: 13,
-                }}
-              >
-                Ошибка: {viewError}
-              </div>
-            )}
+            {viewError && <div style={{ color: 'var(--error)', fontSize: 13 }}>Ошибка: {viewError}</div>}
 
             <div
               style={{
@@ -470,7 +476,7 @@ export default function Page() {
                 maxHeight: 220,
                 overflow: 'auto',
                 whiteSpace: 'pre',
-                color: 'var(--fg)'
+                color: 'var(--fg)',
               }}
             >
               {viewContent || 'Содержимое файла будет показано здесь.'}
@@ -478,15 +484,9 @@ export default function Page() {
           </div>
         </section>
 
-        {/* Правая колонка: загрузка файлов, GitHub действия, workflow */}
-        <section
-          style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
-        >
-          {/* Загрузка файла и commit */}
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h2 style={{ fontSize: 16, margin: 0 }}>
-              Загрузка файла → GitHub commit
-            </h2>
+            <h2 style={{ fontSize: 16, margin: 0 }}>Загрузка файла → GitHub commit</h2>
 
             <input type="file" onChange={handleFileChange} />
 
@@ -519,12 +519,7 @@ export default function Page() {
               onClick={handleCommitFile}
               disabled={commitLoading}
               className="button button-primary"
-              style={{
-                cursor: commitLoading ? 'default' : 'pointer',
-                opacity: commitLoading ? 0.6 : 1,
-                fontSize: 14,
-                alignSelf: 'flex-start',
-              }}
+              style={{ cursor: commitLoading ? 'default' : 'pointer', opacity: commitLoading ? 0.6 : 1, fontSize: 14 }}
             >
               {commitLoading ? 'Коммитим…' : 'Отправить коммит'}
             </button>
@@ -533,7 +528,6 @@ export default function Page() {
             {commitResult && <div style={{ color: 'var(--success)', fontSize: 13 }}>{commitResult}</div>}
           </div>
 
-          {/* GitHub Actions workflow */}
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <h2 style={{ fontSize: 16, margin: 0 }}>GitHub Actions workflow</h2>
 
@@ -558,12 +552,7 @@ export default function Page() {
               onClick={handleRunWorkflow}
               disabled={workflowLoading}
               className="button button-secondary"
-              style={{
-                cursor: workflowLoading ? 'default' : 'pointer',
-                opacity: workflowLoading ? 0.6 : 1,
-                fontSize: 14,
-                alignSelf: 'flex-start',
-              }}
+              style={{ cursor: workflowLoading ? 'default' : 'pointer', opacity: workflowLoading ? 0.6 : 1, fontSize: 14 }}
             >
               {workflowLoading ? 'Запуск…' : 'Запустить workflow'}
             </button>
@@ -581,12 +570,7 @@ export default function Page() {
               onClick={handleCheckWorkflowStatus}
               disabled={workflowStatusLoading}
               className="button button-secondary"
-              style={{
-                cursor: workflowStatusLoading ? 'default' : 'pointer',
-                opacity: workflowStatusLoading ? 0.6 : 1,
-                fontSize: 14,
-                alignSelf: 'flex-start',
-              }}
+              style={{ cursor: workflowStatusLoading ? 'default' : 'pointer', opacity: workflowStatusLoading ? 0.6 : 1, fontSize: 14 }}
             >
               {workflowStatusLoading ? 'Проверяем…' : 'Проверить статус'}
             </button>

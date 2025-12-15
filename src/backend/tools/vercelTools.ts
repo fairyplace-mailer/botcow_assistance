@@ -5,25 +5,41 @@ import {
   redeploy,
   type VercelTarget,
 } from '../vercel';
+import {
+  getVercelContextFromRepo,
+  diagnoseVercelDeployment,
+} from '../diagnostics/vercelDiagnostics';
 
 export interface VercelGetLatestDeploymentsArgs {
   target: VercelTarget;
   limit?: number;
+  repo?: string;
 }
 
 export interface VercelGetDeploymentStatusArgs {
   deployment_id: string;
+  repo?: string;
 }
 
 export interface VercelTriggerDeployArgs {
   project_id?: string;
   git_commit_sha?: string;
   target?: VercelTarget;
+  repo?: string;
 }
 
 export interface VercelRedeployArgs {
   deployment_id: string;
   target?: VercelTarget;
+  repo?: string;
+}
+
+export interface VercelDiagnoseDeploymentArgs {
+  repo?: string;
+  git_sha?: string;
+  branch?: string;
+  target?: VercelTarget;
+  timeWindowMinutes?: number;
 }
 
 export interface NormalizedVercelDeployment {
@@ -79,8 +95,7 @@ function normalizeDeployment(raw: any): NormalizedVercelDeployment {
 
   const name = typeof raw.name === 'string' ? raw.name : null;
 
-  const projectId =
-    typeof raw.projectId === 'string' ? raw.projectId : null;
+  const projectId = typeof raw.projectId === 'string' ? raw.projectId : null;
 
   const inspectorUrl =
     typeof raw.inspectorUrl === 'string' ? raw.inspectorUrl : null;
@@ -104,6 +119,12 @@ function normalizeDeployment(raw: any): NormalizedVercelDeployment {
   };
 }
 
+function getVercelCtxFromRepo(repo?: string) {
+  if (!repo) return undefined;
+  const ctx = getVercelContextFromRepo(repo);
+  return ctx;
+}
+
 /**
  * JSON-схемы tools для OpenAI (function calling).
  */
@@ -112,18 +133,23 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_get_latest_deployments',
-      description: 'Получить последние деплои на Vercel (production или preview).',
+      description: 'Получить последние деплои Vercel (production или preview).',
       parameters: {
         type: 'object',
         properties: {
           target: {
             type: 'string',
             enum: ['production', 'preview'],
-            description: 'Целевая среда деплоя.',
+            description: 'Целевое окружение деплоя.',
           },
           limit: {
             type: 'number',
-            description: 'Максимальное количество записей (по умолчанию 5).',
+            description: 'Сколько деплоев вернуть (по умолчанию 5).',
+          },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если задан — берём Vercel project/team из config/repos.yml.',
           },
         },
         required: ['target'],
@@ -134,13 +160,18 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_get_deployment_status',
-      description: 'Получить статус конкретного деплоя по deployment_id.',
+      description: 'Получить статус деплоя Vercel по deployment_id.',
       parameters: {
         type: 'object',
         properties: {
           deployment_id: {
             type: 'string',
-            description: 'Идентификатор деплоя в Vercel.',
+            description: 'ID деплоя Vercel.',
+          },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если задан — берём Vercel team/project из config/repos.yml.',
           },
         },
         required: ['deployment_id'],
@@ -152,25 +183,28 @@ export const vercelToolsSchemas = [
     function: {
       name: 'vercel_trigger_deploy',
       description:
-        'Запустить новый деплой проекта на Vercel (опционально привязать к git-коммиту и окружению).',
+        'Запустить деплой в Vercel (опционально указав git sha и/или project_id).',
       parameters: {
         type: 'object',
         properties: {
           project_id: {
             type: 'string',
             description:
-              'Идентификатор проекта Vercel. Если не указан, используется VERCEL_PROJECT_ID.',
+              'Vercel projectId (override). Если не задан — берём из repo config/env.',
           },
           git_commit_sha: {
             type: 'string',
-            description:
-              'SHA git-коммита, который нужно задеплоить (используется для github-линков).',
+            description: 'Git commit SHA (для привязки/диагностики).',
           },
           target: {
             type: 'string',
             enum: ['production', 'preview'],
+            description: 'Окружение (по умолчанию production).',
+          },
+          repo: {
+            type: 'string',
             description:
-              'Целевая среда деплоя. Если не указано, по умолчанию production.',
+              'owner/name. Если задан — берём Vercel project/team из config/repos.yml.',
           },
         },
       },
@@ -180,40 +214,77 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_redeploy',
-      description:
-        'Пере-деплой готового деплоя по его deployment_id (с возможностью указать окружение).',
+      description: 'Перезапустить деплой в Vercel по deployment_id.',
       parameters: {
         type: 'object',
         properties: {
           deployment_id: {
             type: 'string',
-            description: 'Идентификатор исходного деплоя в Vercel.',
+            description: 'ID деплоя Vercel.',
           },
           target: {
             type: 'string',
             enum: ['production', 'preview'],
+            description: 'Окружение (по умолчанию production).',
+          },
+          repo: {
+            type: 'string',
             description:
-              'Целевая среда деплоя. Если не указано, по умолчанию production.',
+              'owner/name. Если задан — берём Vercel project/team из config/repos.yml.',
           },
         },
         required: ['deployment_id'],
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'vercel_diagnose_deployment',
+      description:
+        'Diagnose Vercel deployment for a given git sha. Guarantees returning inspector/logs URL when available. Uses documented fallback: branch + time window.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: {
+            type: 'string',
+            description: 'owner/name; used to resolve Vercel project/team from config.',
+          },
+          git_sha: {
+            type: 'string',
+            description: 'Git commit SHA to match deployment by metadata.',
+          },
+          branch: {
+            type: 'string',
+            description: 'Fallback branch name to match deployments in a time window.',
+          },
+          target: {
+            type: 'string',
+            enum: ['production', 'preview'],
+            description: 'Deployment target environment.',
+          },
+          timeWindowMinutes: {
+            type: 'number',
+            description:
+              'Fallback time window (minutes) when matching by branch. Default 180.',
+          },
+        },
+      },
+    },
+  },
 ] as const;
 
 /**
- * Хендлеры tools — их будем дергать из общего router-а tools.
+ * Обработчики tools.
  */
 export const vercelToolHandlers = {
-  async vercel_get_latest_deployments(
-    args: VercelGetLatestDeploymentsArgs,
-  ) {
+  async vercel_get_latest_deployments(args: VercelGetLatestDeploymentsArgs) {
     const limit = args.limit ?? 5;
     const env: VercelTarget =
       args.target === 'preview' ? 'preview' : 'production';
 
-    const data = await getLatestDeployments(env);
+    const ctx = getVercelCtxFromRepo(args.repo);
+    const data = await getLatestDeployments(env, ctx, limit);
 
     const deploymentsRaw = Array.isArray((data as any).deployments)
       ? (data as any).deployments
@@ -235,10 +306,9 @@ export const vercelToolHandlers = {
     };
   },
 
-  async vercel_get_deployment_status(
-    args: VercelGetDeploymentStatusArgs,
-  ) {
-    const raw = await getDeploymentStatus(args.deployment_id);
+  async vercel_get_deployment_status(args: VercelGetDeploymentStatusArgs) {
+    const ctx = getVercelCtxFromRepo(args.repo);
+    const raw = await getDeploymentStatus(args.deployment_id, ctx);
     return normalizeDeployment(raw as any);
   },
 
@@ -246,10 +316,12 @@ export const vercelToolHandlers = {
     const target: VercelTarget =
       args.target === 'preview' ? 'preview' : 'production';
 
+    const ctx = getVercelCtxFromRepo(args.repo);
     const raw = await triggerDeploy(
       args.project_id,
       args.git_commit_sha,
       target,
+      ctx,
     );
     return normalizeDeployment(raw as any);
   },
@@ -258,7 +330,20 @@ export const vercelToolHandlers = {
     const target: VercelTarget =
       args.target === 'preview' ? 'preview' : 'production';
 
-    const raw = await redeploy(args.deployment_id, target);
+    const ctx = getVercelCtxFromRepo(args.repo);
+    const raw = await redeploy(args.deployment_id, target, ctx);
     return normalizeDeployment(raw as any);
+  },
+
+  async vercel_diagnose_deployment(args: VercelDiagnoseDeploymentArgs) {
+    return diagnoseVercelDeployment({
+      ...(args.repo ? { repo: args.repo } : {}),
+      ...(args.git_sha ? { git_sha: args.git_sha } : {}),
+      ...(args.branch ? { branch: args.branch } : {}),
+      ...(args.target ? { target: args.target } : {}),
+      ...(args.timeWindowMinutes !== undefined
+        ? { timeWindowMinutes: args.timeWindowMinutes }
+        : {}),
+    });
   },
 };

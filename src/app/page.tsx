@@ -4,12 +4,9 @@ import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import type { FormEvent, ChangeEvent } from 'react';
 import { loadRecentMessages, saveRecentMessages, type Message } from './pwa/chatStore';
 
-// ... (																																																								)
-
 type Role = 'user' | 'assistant';
 
 export default function Page() {
-  // 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
@@ -42,7 +39,6 @@ export default function Page() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    // Load last messages from IndexedDB (best-effort).
     loadRecentMessages().then((loaded) => {
       if (loaded.length > 0) setMessages(loaded);
     });
@@ -59,7 +55,6 @@ export default function Page() {
     };
   }, []);
 
-  // Persist messages (best-effort)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     void saveRecentMessages(messages);
@@ -69,34 +64,28 @@ export default function Page() {
     const ta = taRef.current;
     if (!ta || typeof window === 'undefined') return 0;
     const style = window.getComputedStyle(ta);
-    // try to get numeric line-height, fallback to font-size * 1.2
     const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2) || 18;
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
     const borderTop = parseFloat(style.borderTopWidth) || 0;
     const borderBottom = parseFloat(style.borderBottomWidth) || 0;
-    // max height equals 6 lines + vertical paddings and borders
     return Math.round(lineHeight * 6 + paddingTop + paddingBottom + borderTop + borderBottom);
   }
 
   function adjustHeight() {
     const ta = taRef.current;
     if (!ta) return;
-    // reset to auto to measure scrollHeight correctly
     ta.style.height = 'auto';
     const maxH = getMaxHeight();
     const newH = Math.min(ta.scrollHeight, maxH || ta.scrollHeight);
     ta.style.height = `${newH}px`;
-    // if content exceeds max, keep scroll pinned to bottom
     if (ta.scrollHeight > (maxH || Infinity)) {
       ta.scrollTop = ta.scrollHeight;
     }
   }
 
   useLayoutEffect(() => {
-    // adjust when input changes (including mount)
     adjustHeight();
-    // also adjust on window resize as computed styles may change
     function onResize() {
       adjustHeight();
     }
@@ -110,7 +99,7 @@ export default function Page() {
 
     if (typeof window !== 'undefined' && !navigator.onLine) {
       setIsOffline(true);
-      setChatError('');
+      setChatError('Offline: cannot send message. Showing the last saved messages.');
       return;
     }
 
@@ -158,19 +147,19 @@ export default function Page() {
 
   async function handleCommitFile() {
     if (!selectedFile) {
-      setCommitError('');
+      setCommitError('Файл не выбран');
       return;
     }
     if (!filePath.trim()) {
-      setCommitError('');
+      setCommitError('Укажите путь в репо (path)');
       return;
     }
     if (!commitMessage.trim()) {
-      setCommitError('');
+      setCommitError('Укажите commit message');
       return;
     }
     if (!branchName.trim()) {
-      setCommitError('');
+      setCommitError('Укажите ветку');
       return;
     }
 
@@ -198,7 +187,7 @@ export default function Page() {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      setCommitResult('');
+      setCommitResult('Commit успешно отправлен в GitHub');
     } catch (err: any) {
       setCommitError(err?.message || 'Commit failed');
     } finally {
@@ -208,7 +197,7 @@ export default function Page() {
 
   async function handleViewFile() {
     if (!viewPath.trim()) {
-      setViewError('');
+      setViewError('Укажите путь файла');
       return;
     }
 
@@ -258,7 +247,9 @@ export default function Page() {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      setWorkflowMessage(`Workflow `);
+      setWorkflowMessage(
+        `Workflow запущен (id=${data.result?.workflow_id ?? workflowId}, ref=${data.result?.ref ?? workflowRef})`,
+      );
     } catch (err: any) {
       setWorkflowError(err?.message || 'Run workflow failed');
     } finally {
@@ -269,7 +260,7 @@ export default function Page() {
   async function handleCheckWorkflowStatus() {
     const id = Number(workflowRunId);
     if (!Number.isFinite(id)) {
-      setWorkflowError('');
+      setWorkflowError('run_id должен быть числом');
       return;
     }
 
@@ -290,7 +281,7 @@ export default function Page() {
       }
 
       const status = data.result?.status ?? data.result?.conclusion ?? 'unknown';
-      setWorkflowMessage(` ${status}`);
+      setWorkflowMessage(`Статус workflow (run_id=${id}): ${status}`);
     } catch (err: any) {
       setWorkflowError(err?.message || 'Get workflow status failed');
     } finally {
@@ -316,7 +307,6 @@ export default function Page() {
           gap: 24,
         }}
       >
-        {/*  */}
         <section
           style={{
             display: 'flex',
@@ -330,25 +320,18 @@ export default function Page() {
           <div className="card">
             <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>BotCow Code Assistant</h1>
             <p className="small-muted" style={{ margin: 0 }}>
-              
+              Чат-ассистент для работы с кодом и GitHub.
             </p>
           </div>
 
           {isOffline && (
-            <div
-              className="card"
-              style={{
-                border: '1px solid var(--border)',
-                background: 'var(--muted)',
-              }}
-            >
+            <div className="card" style={{ border: '1px solid var(--border)', background: 'var(--muted)' }}>
               <div style={{ fontSize: 13, color: 'var(--muted-fg)' }}>
-                
+                Offline: showing the last saved 20 messages. Online features are disabled.
               </div>
             </div>
           )}
 
-          {/*  */}
           <div
             className="card"
             style={{
@@ -369,7 +352,7 @@ export default function Page() {
             >
               {messages.length === 0 && (
                 <div style={{ color: 'var(--muted-fg)' }}>
-                  
+                  Начни диалог. Я — код-ассистент.
                 </div>
               )}
               {messages.map((m, i) => (
@@ -392,7 +375,7 @@ export default function Page() {
                       wordBreak: 'break-word',
                     }}
                   >
-                    <strong>{m.role === 'user' ? '' : ''}: </strong>
+                    <strong>{m.role === 'user' ? 'Ты' : 'Ассистент'}: </strong>
                     {m.content}
                   </div>
                 </div>
@@ -400,14 +383,8 @@ export default function Page() {
             </div>
 
             {chatError && (
-              <div
-                style={{
-                  color: 'var(--error)',
-                  fontSize: 13,
-                  marginBottom: 4,
-                }}
-              >
-                 {chatError}
+              <div style={{ color: 'var(--error)', fontSize: 13, marginBottom: 4 }}>
+                Ошибка: {chatError}
               </div>
             )}
 
@@ -425,7 +402,7 @@ export default function Page() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onInput={adjustHeight}
-                placeholder=""
+                placeholder="Напиши запрос ассистенту..."
                 style={{
                   flex: '1 1 0',
                   minWidth: 0,
@@ -441,26 +418,25 @@ export default function Page() {
               <button
                 type="submit"
                 disabled={chatLoading || !input.trim()}
-                className={"button button-primary"}
+                className="button button-primary"
                 style={{
                   cursor: chatLoading ? 'default' : 'pointer',
                   opacity: chatLoading ? 0.6 : 1,
                   fontSize: 14,
                 }}
               >
-                {chatLoading ? '' : ''}
+                {chatLoading ? 'Ждём...' : 'Отправить'}
               </button>
             </form>
           </div>
 
-          {/*  */}
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
                 type="text"
                 value={viewPath}
                 onChange={(e) => setViewPath(e.target.value)}
-                placeholder=""
+                placeholder="Путь файла в репо (например, src/app/page.tsx)"
                 style={{
                   flex: 1,
                   padding: 6,
@@ -481,11 +457,11 @@ export default function Page() {
                   whiteSpace: 'nowrap',
                 }}
               >
-                {viewLoading ? '' : ''}
+                {viewLoading ? 'Чтение...' : 'Показать файл'}
               </button>
             </div>
 
-            {viewError && <div style={{ color: 'var(--error)', fontSize: 13 }}> {viewError}</div>}
+            {viewError && <div style={{ color: 'var(--error)', fontSize: 13 }}>Ошибка: {viewError}</div>}
 
             <div
               style={{
@@ -503,15 +479,14 @@ export default function Page() {
                 color: 'var(--fg)',
               }}
             >
-              {viewContent || ''}
+              {viewContent || 'Содержимое файла будет показано здесь.'}
             </div>
           </div>
         </section>
 
-        {/*  */}
         <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h2 style={{ fontSize: 16, margin: 0 }}></h2>
+            <h2 style={{ fontSize: 16, margin: 0 }}>Загрузка файла → GitHub commit</h2>
 
             <input type="file" onChange={handleFileChange} />
 
@@ -519,7 +494,7 @@ export default function Page() {
               type="text"
               value={filePath}
               onChange={(e) => setFilePath(e.target.value)}
-              placeholder=""
+              placeholder="Путь в репо (например, docs/ARCHITECTURE.md)"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -527,7 +502,7 @@ export default function Page() {
               type="text"
               value={commitMessage}
               onChange={(e) => setCommitMessage(e.target.value)}
-              placeholder=""
+              placeholder="Commit message"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -535,7 +510,7 @@ export default function Page() {
               type="text"
               value={branchName}
               onChange={(e) => setBranchName(e.target.value)}
-              placeholder=""
+              placeholder="Ветка (например, botcow-assistant)"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -544,14 +519,9 @@ export default function Page() {
               onClick={handleCommitFile}
               disabled={commitLoading}
               className="button button-primary"
-              style={{
-                cursor: commitLoading ? 'default' : 'pointer',
-                opacity: commitLoading ? 0.6 : 1,
-                fontSize: 14,
-                alignSelf: 'flex-start',
-              }}
+              style={{ cursor: commitLoading ? 'default' : 'pointer', opacity: commitLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {commitLoading ? '' : ''}
+              {commitLoading ? 'Коммитим…' : 'Отправить коммит'}
             </button>
 
             {commitError && <div style={{ color: 'var(--error)', fontSize: 13 }}>{commitError}</div>}
@@ -559,13 +529,13 @@ export default function Page() {
           </div>
 
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h2 style={{ fontSize: 16, margin: 0 }}></h2>
+            <h2 style={{ fontSize: 16, margin: 0 }}>GitHub Actions workflow</h2>
 
             <input
               type="text"
               value={workflowId}
               onChange={(e) => setWorkflowId(e.target.value)}
-              placeholder=""
+              placeholder="workflow_id (например, ci.yml)"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -573,7 +543,7 @@ export default function Page() {
               type="text"
               value={workflowRef}
               onChange={(e) => setWorkflowRef(e.target.value)}
-              placeholder=""
+              placeholder="ref (ветка, по умолчанию main)"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -582,21 +552,16 @@ export default function Page() {
               onClick={handleRunWorkflow}
               disabled={workflowLoading}
               className="button button-secondary"
-              style={{
-                cursor: workflowLoading ? 'default' : 'pointer',
-                opacity: workflowLoading ? 0.6 : 1,
-                fontSize: 14,
-                alignSelf: 'flex-start',
-              }}
+              style={{ cursor: workflowLoading ? 'default' : 'pointer', opacity: workflowLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {workflowLoading ? '' : ''}
+              {workflowLoading ? 'Запуск…' : 'Запустить workflow'}
             </button>
 
             <input
               type="text"
               value={workflowRunId}
               onChange={(e) => setWorkflowRunId(e.target.value)}
-              placeholder=""
+              placeholder="run_id для проверки статуса"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -605,14 +570,9 @@ export default function Page() {
               onClick={handleCheckWorkflowStatus}
               disabled={workflowStatusLoading}
               className="button button-secondary"
-              style={{
-                cursor: workflowStatusLoading ? 'default' : 'pointer',
-                opacity: workflowStatusLoading ? 0.6 : 1,
-                fontSize: 14,
-                alignSelf: 'flex-start',
-              }}
+              style={{ cursor: workflowStatusLoading ? 'default' : 'pointer', opacity: workflowStatusLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {workflowStatusLoading ? '' : ''}
+              {workflowStatusLoading ? 'Проверяем…' : 'Проверить статус'}
             </button>
 
             {workflowError && <div style={{ color: 'var(--error)', fontSize: 13 }}>{workflowError}</div>}

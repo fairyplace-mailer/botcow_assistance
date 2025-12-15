@@ -25,7 +25,8 @@ export type VercelDeploymentDiagnosis = {
   hints: string[];
 };
 
-function getVercelContextFromRepo(repo?: string): VercelContext {
+// Exported for tools layer: allows resolving per-repo Vercel project/team overrides.
+export function getVercelContextFromRepo(repo?: string): VercelContext {
   if (!repo) return {};
   const cfg = getRepoConfig(repo);
   const projectIdEnv = cfg?.vercel?.projectIdEnv;

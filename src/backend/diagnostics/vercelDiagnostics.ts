@@ -31,9 +31,13 @@ function getVercelContextFromRepo(repo?: string): VercelContext {
   const projectIdEnv = cfg?.vercel?.projectIdEnv;
   const teamIdEnv = cfg?.vercel?.teamIdEnv;
 
+  const projectId = projectIdEnv ? process.env[projectIdEnv] : undefined;
+  const teamId = teamIdEnv ? process.env[teamIdEnv] : undefined;
+
+  // exactOptionalPropertyTypes: do not pass keys with undefined
   return {
-    projectId: projectIdEnv ? process.env[projectIdEnv] : undefined,
-    teamId: teamIdEnv ? process.env[teamIdEnv] : undefined,
+    ...(projectId ? { projectId } : {}),
+    ...(teamId ? { teamId } : {}),
   };
 }
 

@@ -24,6 +24,5 @@ repos:
   - repo: fairyplace-mailer/botcat_chat
     defaultBranch: feature/ui
     vercel:
-      # When running BotCow against botcat_chat, set these env vars (or map them in Vercel)
       projectIdEnv: VERCEL_PROJECT_ID
       teamIdEnv: VERCEL_TEAM_ID

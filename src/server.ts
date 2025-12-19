@@ -1,11 +1,17 @@
 import express from 'express';
+import { app } from './serverBase';
+import { callTool, getTools } from './backend/api/tools';
 
-export const app = express();
+// Ensure json middleware is enabled
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
+
+// Tools proxy endpoints
+app.get('/tools', getTools);
+app.post('/tools/call', callTool);
 
 // Start server only outside tests to avoid open handle issues
 if (process.env.NODE_ENV !== 'test') {

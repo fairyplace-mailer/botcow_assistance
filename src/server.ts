@@ -1,9 +1,5 @@
-import express from 'express';
 import { app } from './serverBase';
 import { callTool, getTools } from './backend/api/tools';
-
-// Ensure json middleware is enabled
-app.use(express.json());
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

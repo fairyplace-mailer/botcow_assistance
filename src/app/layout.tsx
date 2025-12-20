@@ -4,10 +4,11 @@ import type { Metadata, Viewport } from 'next';
 import { SwRegister } from './SwRegister';
 import ThemeToggle from '../components/ThemeToggle';
 import { OnlineStatus } from './OnlineStatus';
+import { NewChatButton } from './NewChatButton';
 
 export const metadata: Metadata = {
   title: 'BotCow Code Assistant',
-  description: '',
+  description: 'PWA чат и инструменты для BotCow',
   manifest: '/manifest.json',
 };
 
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             gap: 12,
           }}
         >
+          <NewChatButton />
           <OnlineStatus />
           <ThemeToggle />
         </header>

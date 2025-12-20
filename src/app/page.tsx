@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import type { FormEvent, ChangeEvent } from 'react';
-import { loadRecentMessages, saveRecentMessages, type Message } from './pwa/chatStore';
+import { clearRecentMessages, loadRecentMessages, saveRecentMessages, type Message } from './pwa/chatStore';
 
 type Role = 'user' | 'assistant';
 
@@ -53,6 +53,21 @@ export default function Page() {
       window.removeEventListener('online', updateOnline);
       window.removeEventListener('offline', updateOnline);
     };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    function onNewChat() {
+      setMessages([]);
+      setInput('');
+      setChatError(null);
+      setChatLoading(false);
+      void clearRecentMessages();
+    }
+
+    window.addEventListener('botcow:new-chat', onNewChat);
+    return () => window.removeEventListener('botcow:new-chat', onNewChat);
   }, []);
 
   useEffect(() => {
@@ -352,7 +367,7 @@ export default function Page() {
             >
               {messages.length === 0 && (
                 <div style={{ color: 'var(--muted-fg)' }}>
-                  Начни диалог. Я — код-ассистент.
+                  Начни диалог. Я ИИ код-ассистент.
                 </div>
               )}
               {messages.map((m, i) => (
@@ -521,7 +536,7 @@ export default function Page() {
               className="button button-primary"
               style={{ cursor: commitLoading ? 'default' : 'pointer', opacity: commitLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {commitLoading ? 'Коммитим…' : 'Отправить коммит'}
+              {commitLoading ? 'Коммитим?' : 'Отправить коммит'}
             </button>
 
             {commitError && <div style={{ color: 'var(--error)', fontSize: 13 }}>{commitError}</div>}
@@ -554,7 +569,7 @@ export default function Page() {
               className="button button-secondary"
               style={{ cursor: workflowLoading ? 'default' : 'pointer', opacity: workflowLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {workflowLoading ? 'Запуск…' : 'Запустить workflow'}
+              {workflowLoading ? 'Запуск?' : 'Запустить workflow'}
             </button>
 
             <input
@@ -572,7 +587,7 @@ export default function Page() {
               className="button button-secondary"
               style={{ cursor: workflowStatusLoading ? 'default' : 'pointer', opacity: workflowStatusLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {workflowStatusLoading ? 'Проверяем…' : 'Проверить статус'}
+              {workflowStatusLoading ? 'Проверяем?' : 'Проверить статус'}
             </button>
 
             {workflowError && <div style={{ color: 'var(--error)', fontSize: 13 }}>{workflowError}</div>}

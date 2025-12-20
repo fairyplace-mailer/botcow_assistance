@@ -4,6 +4,10 @@ import {
   type VercelTarget,
 } from '../vercel';
 import { commentOnPullRequest } from '../github';
+import {
+  normalizeVercelDeployment,
+  type NormalizedVercelDeployment,
+} from '../vercelNormalize';
 
 export interface DeploymentWaitForPreviewArgs {
   pull_number: number;
@@ -12,19 +16,6 @@ export interface DeploymentWaitForPreviewArgs {
   repo?: string;
   timeout_seconds?: number;
   poll_interval_seconds?: number;
-}
-
-export interface NormalizedVercelDeployment {
-  id: string;
-  url: string | null;
-  state: string | null;
-  readyState: string | null;
-  createdAt: number | null;
-  target: string | null;
-  name: string | null;
-  projectId: string | null;
-  inspectorUrl: string | null;
-  meta: Record<string, unknown> | null;
 }
 
 interface DeploymentWaitForPreviewResult {
@@ -39,68 +30,7 @@ interface DeploymentWaitForPreviewResult {
 }
 
 function normalizeDeployment(raw: any): NormalizedVercelDeployment {
-  if (!raw || typeof raw !== 'object') {
-    return {
-      id: '',
-      url: null,
-      state: null,
-      readyState: null,
-      createdAt: null,
-      target: null,
-      name: null,
-      projectId: null,
-      inspectorUrl: null,
-      meta: null,
-    };
-  }
-
-  const id =
-    (typeof raw.id === 'string' && raw.id) ||
-    (typeof raw.uid === 'string' && raw.uid) ||
-    '';
-
-  const url = typeof raw.url === 'string' ? raw.url : null;
-
-  const createdAt =
-    (typeof raw.createdAt === 'number' && raw.createdAt) ||
-    (typeof raw.created === 'number' && raw.created) ||
-    null;
-
-  const state =
-    (typeof raw.state === 'string' && raw.state) ||
-    (typeof raw.status === 'string' && raw.status) ||
-    null;
-
-  const readyState =
-    (typeof raw.readyState === 'string' && raw.readyState) || state;
-
-  const target = typeof raw.target === 'string' ? raw.target : null;
-
-  const name = typeof raw.name === 'string' ? raw.name : null;
-
-  const projectId =
-    typeof raw.projectId === 'string' ? raw.projectId : null;
-
-  const inspectorUrl =
-    typeof raw.inspectorUrl === 'string' ? raw.inspectorUrl : null;
-
-  const meta =
-    raw.meta && typeof raw.meta === 'object'
-      ? (raw.meta as Record<string, unknown>)
-      : null;
-
-  return {
-    id,
-    url,
-    state,
-    readyState,
-    createdAt,
-    target,
-    name,
-    projectId,
-    inspectorUrl,
-    meta,
-  };
+  return normalizeVercelDeployment(raw);
 }
 
 function delay(ms: number) {
@@ -127,9 +57,7 @@ function matchesGitSha(raw: any, gitSha: string): boolean {
 
       if (
         typeof value === 'string' &&
-        ['githubCommitSha', 'gitCommitSha', 'commitSha', 'commit'].includes(
-          key,
-        ) &&
+        ['githubCommitSha', 'gitCommitSha', 'commitSha', 'commit'].includes(key) &&
         value.toLowerCase() === needle
       ) {
         return true;
@@ -193,8 +121,7 @@ export const deploymentToolHandlers = {
   ): Promise<DeploymentWaitForPreviewResult> {
     const pullNumber = args.pull_number;
     const gitSha = args.git_commit_sha;
-    const target: VercelTarget =
-      args.target === 'production' ? 'production' : 'preview';
+    const target: VercelTarget = args.target === 'production' ? 'production' : 'preview';
 
     const timeoutMs = (args.timeout_seconds ?? 600) * 1000;
     const intervalMs = (args.poll_interval_seconds ?? 15) * 1000;
@@ -210,9 +137,7 @@ export const deploymentToolHandlers = {
           ? (data as any).deployments
           : [];
 
-        const foundRaw = rawDeployments.find((d: any) =>
-          matchesGitSha(d, gitSha),
-        );
+        const foundRaw = rawDeployments.find((d: any) => matchesGitSha(d, gitSha));
 
         if (foundRaw) {
           const idOrUid =
@@ -220,24 +145,15 @@ export const deploymentToolHandlers = {
             (typeof foundRaw.uid === 'string' && foundRaw.uid) ||
             '';
 
-          const detailed = idOrUid
-            ? await getDeploymentStatus(idOrUid)
-            : foundRaw;
+          const detailed = idOrUid ? await getDeploymentStatus(idOrUid) : foundRaw;
 
           const normalized = normalizeDeployment(detailed);
           lastDeployment = normalized;
 
-          const stateRaw =
-            (normalized.readyState || normalized.state || '').toLowerCase();
+          const stateRaw = (normalized.readyState || normalized.state || '').toLowerCase();
 
-          if (
-            stateRaw === 'ready' ||
-            stateRaw === 'completed' ||
-            stateRaw === 'success'
-          ) {
-            const url = normalized.url
-              ? `https://${normalized.url}`
-              : null;
+          if (stateRaw === 'ready' || stateRaw === 'completed' || stateRaw === 'success') {
+            const url = normalized.url ? `https://${normalized.url}` : null;
 
             const envLabel = normalized.target || target;
 
@@ -245,9 +161,7 @@ export const deploymentToolHandlers = {
               `Vercel ${envLabel} deployment is ready.`,
               '',
               url ? `- URL: ${url}` : '- URL: (not available)',
-              `- Status: ${
-                normalized.readyState ?? normalized.state ?? 'unknown'
-              }`,
+              `- Status: ${normalized.readyState ?? normalized.state ?? 'unknown'}`,
               `- Commit: \`${gitSha}\``,
             ];
 
@@ -306,9 +220,7 @@ export const deploymentToolHandlers = {
       status: 'timeout',
       deployment: lastDeployment,
       comment: null,
-      error:
-        lastError ??
-        'Timed out waiting for deployment to become ready or fail.',
+      error: lastError ?? 'Timed out waiting for deployment to become ready or fail.',
     };
   },
 };

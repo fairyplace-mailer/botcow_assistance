@@ -13,6 +13,11 @@ if (!token) {
 export type VercelContext = {
   projectId?: string;
   teamId?: string;
+  /**
+   * Default git ref (branch) to use when triggering a deploy with gitSha.
+   * This is needed because different repos may have different default branches.
+   */
+  gitRef?: string;
 };
 
 function buildHeaders() {
@@ -31,6 +36,10 @@ function withTeam(url: URL, teamId?: string) {
 
 function resolveProjectId(ctx?: VercelContext): string | undefined {
   return ctx?.projectId ?? defaultProjectId;
+}
+
+function resolveGitRef(ctx?: VercelContext): string {
+  return ctx?.gitRef ?? 'main';
 }
 
 export async function getLatestDeployments(
@@ -105,7 +114,7 @@ export async function triggerDeploy(
   if (gitSha) {
     body.gitSource = {
       type: 'github',
-      ref: 'main',
+      ref: resolveGitRef(ctx),
       sha: gitSha,
     };
   }

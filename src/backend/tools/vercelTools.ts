@@ -1,3 +1,4 @@
+import { getRepoConfig } from '../config/repos';
 import {
   getLatestDeployments,
   getDeploymentStatus,
@@ -121,35 +122,44 @@ function normalizeDeployment(raw: any): NormalizedVercelDeployment {
 
 function getVercelCtxFromRepo(repo?: string) {
   if (!repo) return undefined;
+
   const ctx = getVercelContextFromRepo(repo);
-  return ctx;
+  const cfg = getRepoConfig(repo);
+
+  // Note: cfg is guaranteed here because getVercelContextFromRepo(repo) throws if repo isn't configured.
+  const gitRef = cfg?.defaultBranch;
+
+  return {
+    ...ctx,
+    ...(gitRef ? { gitRef } : {}),
+  };
 }
 
 /**
- * JSON-схемы tools для OpenAI (function calling).
+ * JSON- tools  OpenAI (function calling).
  */
 export const vercelToolsSchemas = [
   {
     type: 'function',
     function: {
       name: 'vercel_get_latest_deployments',
-      description: 'Получить последние деплои Vercel (production или preview).',
+      description: ' Vercel (production  preview).',
       parameters: {
         type: 'object',
         properties: {
           target: {
             type: 'string',
             enum: ['production', 'preview'],
-            description: 'Целевое окружение деплоя.',
+            description: '.',
           },
           limit: {
             type: 'number',
-            description: 'Сколько деплоев вернуть (по умолчанию 5).',
+            description: '  (  5).',
           },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если задан — берём Vercel project/team из config/repos.yml.',
+              'owner/name.    Vercel project/team  config/repos.yml.',
           },
         },
         required: ['target'],
@@ -160,18 +170,18 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_get_deployment_status',
-      description: 'Получить статус деплоя Vercel по deployment_id.',
+      description: '  Vercel  deployment_id.',
       parameters: {
         type: 'object',
         properties: {
           deployment_id: {
             type: 'string',
-            description: 'ID деплоя Vercel.',
+            description: 'ID  Vercel.',
           },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если задан — берём Vercel team/project из config/repos.yml.',
+              'owner/name.    Vercel team/project  config/repos.yml.',
           },
         },
         required: ['deployment_id'],
@@ -183,28 +193,28 @@ export const vercelToolsSchemas = [
     function: {
       name: 'vercel_trigger_deploy',
       description:
-        'Запустить деплой в Vercel (опционально указав git sha и/или project_id).',
+        '   Vercel (  git sha  project_id).',
       parameters: {
         type: 'object',
         properties: {
           project_id: {
             type: 'string',
             description:
-              'Vercel projectId (override). Если не задан — берём из repo config/env.',
+              'Vercel projectId (override).      repo config/env.',
           },
           git_commit_sha: {
             type: 'string',
-            description: 'Git commit SHA (для привязки/диагностики).',
+            description: 'Git commit SHA ( /).',
           },
           target: {
             type: 'string',
             enum: ['production', 'preview'],
-            description: 'Окружение (по умолчанию production).',
+            description: ' (  production).',
           },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если задан — берём Vercel project/team из config/repos.yml.',
+              'owner/name.    Vercel project/team  config/repos.yml.',
           },
         },
       },
@@ -214,23 +224,23 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_redeploy',
-      description: 'Перезапустить деплой в Vercel по deployment_id.',
+      description: '   Vercel  deployment_id.',
       parameters: {
         type: 'object',
         properties: {
           deployment_id: {
             type: 'string',
-            description: 'ID деплоя Vercel.',
+            description: 'ID  Vercel.',
           },
           target: {
             type: 'string',
             enum: ['production', 'preview'],
-            description: 'Окружение (по умолчанию production).',
+            description: ' (  production).',
           },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если задан — берём Vercel project/team из config/repos.yml.',
+              'owner/name.    Vercel project/team  config/repos.yml.',
           },
         },
         required: ['deployment_id'],
@@ -275,7 +285,7 @@ export const vercelToolsSchemas = [
 ] as const;
 
 /**
- * Обработчики tools.
+ *  tools.
  */
 export const vercelToolHandlers = {
   async vercel_get_latest_deployments(args: VercelGetLatestDeploymentsArgs) {

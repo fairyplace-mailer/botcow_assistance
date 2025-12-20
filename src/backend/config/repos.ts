@@ -144,3 +144,66 @@ export function getRepoConfig(repo: string): RepoConfig | undefined {
   const cfg = loadReposConfig();
   return cfg.repos.find((r) => r.repo === repo);
 }
+
+function toYaml(cfg: ReposConfig): string {
+  // Keep writer in the same style as config/repos.yml comments.
+  const lines: string[] = [];
+  lines.push('# BotCow multi-repo configuration');
+  lines.push('#');
+  lines.push('# This file is the source of truth for which repositories BotCow may operate on,');
+  lines.push('# and how to map them to Vercel projects.');
+  lines.push('#');
+  lines.push('# Notes:');
+  lines.push('# - repo: GitHub repository in the form "owner/name"');
+  lines.push('# - defaultBranch: default branch used when not specified');
+  lines.push('# - vercel:');
+  lines.push('#   - projectId/teamId are Vercel identifiers (stored in env for the running app as needed)');
+  lines.push('#   - if you don\'t use a team, teamId can be omitted or left empty');
+  lines.push('');
+  lines.push(`version: ${cfg.version}`);
+  lines.push('');
+  lines.push(`defaultRepo: ${cfg.defaultRepo}`);
+  lines.push('');
+  lines.push('repos:');
+
+  for (const r of cfg.repos) {
+    lines.push(`  - repo: ${r.repo}`);
+    if (r.defaultBranch) {
+      lines.push(`    defaultBranch: ${r.defaultBranch}`);
+    }
+    if (r.vercel) {
+      lines.push('    vercel:');
+      if (r.vercel.projectIdEnv) {
+        lines.push(`      projectIdEnv: ${r.vercel.projectIdEnv}`);
+      }
+      if (r.vercel.teamIdEnv) {
+        lines.push(`      teamIdEnv: ${r.vercel.teamIdEnv}`);
+      }
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+export function upsertRepoConfig(next: RepoConfig): {
+  ok: true;
+  action: 'added' | 'updated';
+  repo: string;
+} {
+  const cfg = loadReposConfig();
+
+  const idx = cfg.repos.findIndex((r) => r.repo === next.repo);
+  const nextCfg: ReposConfig = {
+    ...cfg,
+    repos: idx >= 0 ? cfg.repos.map((r, i) => (i === idx ? next : r)) : [...cfg.repos, next],
+  };
+
+  fs.writeFileSync(CONFIG_PATH, toYaml(nextCfg), 'utf8');
+
+  return {
+    ok: true,
+    action: idx >= 0 ? 'updated' : 'added',
+    repo: next.repo,
+  };
+}

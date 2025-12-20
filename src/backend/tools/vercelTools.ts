@@ -10,10 +10,7 @@ import {
   getVercelContextFromRepo,
   diagnoseVercelDeployment,
 } from '../diagnostics/vercelDiagnostics';
-import {
-  normalizeVercelDeployment,
-  type NormalizedVercelDeployment,
-} from '../vercelNormalize';
+import { normalizeVercelDeployment } from '../vercelNormalize';
 
 export interface VercelGetLatestDeploymentsArgs {
   target?: VercelTarget;
@@ -47,10 +44,6 @@ export interface VercelDiagnoseDeploymentArgs {
   timeWindowMinutes?: number;
 }
 
-function normalizeDeployment(raw: any): NormalizedVercelDeployment {
-  return normalizeVercelDeployment(raw);
-}
-
 function getVercelCtxFromRepo(repo?: string) {
   if (!repo) return undefined;
 
@@ -74,14 +67,14 @@ function requirePreviewTarget(target?: VercelTarget): VercelTarget {
 }
 
 /**
- * JSON- tools  OpenAI (function calling).
+ * JSON-tools schemas.
  */
 export const vercelToolsSchemas = [
   {
     type: 'function',
     function: {
       name: 'vercel_get_latest_deployments',
-      description: '   Vercel (preview only).',
+      description: 'Get latest deployments from Vercel (preview only).',
       parameters: {
         type: 'object',
         properties: {
@@ -92,12 +85,12 @@ export const vercelToolsSchemas = [
           },
           limit: {
             type: 'number',
-            description: '   (  5).',
+            description: 'How many deployments to return (default 5).',
           },
           repo: {
             type: 'string',
             description:
-              'owner/name. If set  use Vercel project/team from config/repos.yml.',
+              'owner/name. If set — use Vercel project/team from config/repos.yml.',
           },
         },
         required: [],
@@ -108,7 +101,7 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_get_deployment_status',
-      description: '   Vercel  deployment_id.',
+      description: 'Get Vercel deployment status by deployment_id.',
       parameters: {
         type: 'object',
         properties: {
@@ -119,7 +112,7 @@ export const vercelToolsSchemas = [
           repo: {
             type: 'string',
             description:
-              'owner/name. If set  use Vercel team/project from config/repos.yml.',
+              'owner/name. If set — use Vercel team/project from config/repos.yml.',
           },
         },
         required: ['deployment_id'],
@@ -138,7 +131,7 @@ export const vercelToolsSchemas = [
           project_id: {
             type: 'string',
             description:
-              'Vercel projectId (override). If omitted  resolved from repo config/env.',
+              'Vercel projectId (override). If omitted — resolved from repo config/env.',
           },
           git_commit_sha: {
             type: 'string',
@@ -152,7 +145,7 @@ export const vercelToolsSchemas = [
           repo: {
             type: 'string',
             description:
-              'owner/name. If set  use Vercel project/team from config/repos.yml.',
+              'owner/name. If set — use Vercel project/team from config/repos.yml.',
           },
         },
       },
@@ -178,7 +171,7 @@ export const vercelToolsSchemas = [
           repo: {
             type: 'string',
             description:
-              'owner/name. If set  use Vercel project/team from config/repos.yml.',
+              'owner/name. If set — use Vercel team/project from config/repos.yml.',
           },
         },
         required: ['deployment_id'],
@@ -189,8 +182,7 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_diagnose_deployment',
-      description:
-        'Diagnose Vercel deployment for a given git sha (preview only).',
+      description: 'Diagnose Vercel deployment for a given git sha (preview only).',
       parameters: {
         type: 'object',
         properties: {
@@ -231,21 +223,18 @@ export const vercelToolHandlers = {
     const env: VercelTarget = requirePreviewTarget(args.target);
 
     const ctx = getVercelCtxFromRepo(args.repo);
-    const data = await getLatestDeployments(env, ctx, limit);
-
-    // backend/vercel.getLatestDeployments already returns normalized deployments
-    const deployments = (Array.isArray(data) ? data : []).slice(0, limit);
+    const deployments = await getLatestDeployments(env, ctx, limit);
 
     return {
       target: env,
-      deployments,
+      deployments: (Array.isArray(deployments) ? deployments : []).slice(0, limit),
     };
   },
 
   async vercel_get_deployment_status(args: VercelGetDeploymentStatusArgs) {
     const ctx = getVercelCtxFromRepo(args.repo);
     const raw = await getDeploymentStatus(args.deployment_id, ctx);
-    return normalizeDeployment(raw as any);
+    return normalizeVercelDeployment(raw as any);
   },
 
   async vercel_trigger_deploy(args: VercelTriggerDeployArgs) {
@@ -258,7 +247,7 @@ export const vercelToolHandlers = {
       target,
       ctx,
     );
-    return normalizeDeployment(raw as any);
+    return normalizeVercelDeployment(raw as any);
   },
 
   async vercel_redeploy(args: VercelRedeployArgs) {
@@ -266,7 +255,7 @@ export const vercelToolHandlers = {
 
     const ctx = getVercelCtxFromRepo(args.repo);
     const raw = await redeploy(args.deployment_id, target, ctx);
-    return normalizeDeployment(raw as any);
+    return normalizeVercelDeployment(raw as any);
   },
 
   async vercel_diagnose_deployment(args: VercelDiagnoseDeploymentArgs) {

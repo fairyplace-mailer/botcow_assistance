@@ -1,14 +1,10 @@
-import { normalizeVercelDeployment, type NormalizedVercelDeployment } from './vercelNormalize';
-
-const token = process.env.VERCEL_TOKEN;
+import { normalizeVercelDeployment, type NormalizedVercelDeployment, type VercelTarget } from './vercelNormalize';
 
 function getVercelTokenOrThrow(): string {
   const t = process.env.VERCEL_TOKEN;
   if (!t) throw new Error('VERCEL_TOKEN is not set');
   return t;
 }
-
-export type VercelTarget = 'preview' | 'production';
 
 export type VercelContext = {
   projectId?: string;
@@ -25,7 +21,11 @@ function buildHeaders() {
   };
 }
 
-function buildUrl(path: string, ctx?: VercelContext, query?: Record<string, string | number | undefined>) {
+function buildUrl(
+  path: string,
+  ctx?: VercelContext,
+  query?: Record<string, string | number | undefined>,
+) {
   const url = new URL(`https://api.vercel.com${path}`);
 
   const teamId = ctx?.teamId ?? process.env.VERCEL_TEAM_ID;
@@ -202,7 +202,8 @@ export async function findDeploymentByGit(
       const b = d.meta?.githubCommitRef;
       if (typeof b !== 'string') return false;
       if (b !== branch) return false;
-      const createdAt = typeof d.createdAt === 'number' ? d.createdAt : Date.parse(String(d.createdAt));
+      const createdAt = d.createdAt;
+      if (typeof createdAt !== 'number') return false;
       return Math.abs(now - createdAt) <= windowMs;
     });
     if (candidate) return candidate;

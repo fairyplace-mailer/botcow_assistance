@@ -162,19 +162,19 @@ export default function Page() {
 
   async function handleCommitFile() {
     if (!selectedFile) {
-      setCommitError('2430393b 3d35 324b3140303d');
+      setCommitError('Файл не выбран');
       return;
     }
     if (!filePath.trim()) {
-      setCommitError('233a3036384235 3f43424c 32 40353f3e (path)');
+      setCommitError('Укажите путь в репо (path)');
       return;
     }
     if (!commitMessage.trim()) {
-      setCommitError('233a3036384235 commit message');
+      setCommitError('Укажите commit message');
       return;
     }
     if (!branchName.trim()) {
-      setCommitError('233a3036384235 3235423a43');
+      setCommitError('Укажите ветку');
       return;
     }
 
@@ -202,7 +202,7 @@ export default function Page() {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      setCommitResult('Commit 43413f35483d3e 3e423f4030323b353d 32 GitHub');
+      setCommitResult('Commit успешно отправлен в GitHub');
     } catch (err: any) {
       setCommitError(err?.message || 'Commit failed');
     } finally {
@@ -212,7 +212,7 @@ export default function Page() {
 
   async function handleViewFile() {
     if (!viewPath.trim()) {
-      setViewError('233a3036384235 3f43424c 4430393b30');
+      setViewError('Укажите путь файла');
       return;
     }
 
@@ -263,7 +263,7 @@ export default function Page() {
       }
 
       setWorkflowMessage(
-        `Workflow 37303f4349353d (id=${data.result?.workflow_id ?? workflowId}, ref=${data.result?.ref ?? workflowRef})`,
+        `Workflow запущен (id=${data.result?.workflow_id ?? workflowId}, ref=${data.result?.ref ?? workflowRef})`,
       );
     } catch (err: any) {
       setWorkflowError(err?.message || 'Run workflow failed');
@@ -275,7 +275,7 @@ export default function Page() {
   async function handleCheckWorkflowStatus() {
     const id = Number(workflowRunId);
     if (!Number.isFinite(id)) {
-      setWorkflowError('run_id 343e3b36353d 314b424c 4738413b3e3c');
+      setWorkflowError('run_id должен быть числом');
       return;
     }
 
@@ -296,7 +296,7 @@ export default function Page() {
       }
 
       const status = data.result?.status ?? data.result?.conclusion ?? 'unknown';
-      setWorkflowMessage(`214230424341 workflow (run_id=${id}): ${status}`);
+      setWorkflowMessage(`Статус workflow (run_id=${id}): ${status}`);
     } catch (err: any) {
       setWorkflowError(err?.message || 'Get workflow status failed');
     } finally {
@@ -335,7 +335,7 @@ export default function Page() {
           <div className="card">
             <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>BotCow Code Assistant</h1>
             <p className="small-muted" style={{ margin: 0 }}>
-              273042-304141384142353d42 343b4f 4030313e424b 41 3a3e343e3c 38 GitHub.
+              Чат-ассистент для работы с кодом и GitHub.
             </p>
           </div>
 
@@ -367,7 +367,7 @@ export default function Page() {
             >
               {messages.length === 0 && (
                 <div style={{ color: 'var(--muted-fg)' }}>
-                  1d30473d38 3438303b3e33. 2f 14 3a3e34-304141384142353d42.
+                  Начни диалог. Я ИИ код-ассистент.
                 </div>
               )}
               {messages.map((m, i) => (
@@ -390,7 +390,7 @@ export default function Page() {
                       wordBreak: 'break-word',
                     }}
                   >
-                    <strong>{m.role === 'user' ? '224b' : '104141384142353d42'}: </strong>
+                    <strong>{m.role === 'user' ? 'Ты' : 'Ассистент'}: </strong>
                     {m.content}
                   </div>
                 </div>
@@ -399,7 +399,7 @@ export default function Page() {
 
             {chatError && (
               <div style={{ color: 'var(--error)', fontSize: 13, marginBottom: 4 }}>
-                1e4838313a30: {chatError}
+                Ошибка: {chatError}
               </div>
             )}
 
@@ -417,7 +417,7 @@ export default function Page() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onInput={adjustHeight}
-                placeholder="1d303f384838 37303f403e41 304141384142353d4243..."
+                placeholder="Напиши запрос ассистенту..."
                 style={{
                   flex: '1 1 0',
                   minWidth: 0,
@@ -440,7 +440,7 @@ export default function Page() {
                   fontSize: 14,
                 }}
               >
-                {chatLoading ? '1634513c...' : '1e423f40303238424c'}
+                {chatLoading ? 'Ждём...' : 'Отправить'}
               </button>
             </form>
           </div>
@@ -451,7 +451,7 @@ export default function Page() {
                 type="text"
                 value={viewPath}
                 onChange={(e) => setViewPath(e.target.value)}
-                placeholder="1f43424c 4430393b30 32 40353f3e (3d303f40383c3540, src/app/page.tsx)"
+                placeholder="Путь файла в репо (например, src/app/page.tsx)"
                 style={{
                   flex: 1,
                   padding: 6,
@@ -472,11 +472,11 @@ export default function Page() {
                   whiteSpace: 'nowrap',
                 }}
               >
-                {viewLoading ? '2742353d3835...' : '1f3e3a303730424c 4430393b'}
+                {viewLoading ? 'Чтение...' : 'Показать файл'}
               </button>
             </div>
 
-            {viewError && <div style={{ color: 'var(--error)', fontSize: 13 }}>1e4838313a30: {viewError}</div>}
+            {viewError && <div style={{ color: 'var(--error)', fontSize: 13 }}>Ошибка: {viewError}</div>}
 
             <div
               style={{
@@ -494,14 +494,14 @@ export default function Page() {
                 color: 'var(--fg)',
               }}
             >
-              {viewContent || '213e34354036383c3e35 4430393b30 3143343542 3f3e3a3037303d3e 373435414c.'}
+              {viewContent || 'Содержимое файла будет показано здесь.'}
             </div>
           </div>
         </section>
 
         <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h2 style={{ fontSize: 16, margin: 0 }}>1730334043373a30 4430393b30  3e GitHub commit</h2>
+            <h2 style={{ fontSize: 16, margin: 0 }}>Загрузка файла → GitHub commit</h2>
 
             <input type="file" onChange={handleFileChange} />
 
@@ -509,7 +509,7 @@ export default function Page() {
               type="text"
               value={filePath}
               onChange={(e) => setFilePath(e.target.value)}
-              placeholder="1f43424c 32 40353f3e (3d303f40383c3540, docs/ARCHITECTURE.md)"
+              placeholder="Путь в репо (например, docs/ARCHITECTURE.md)"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -525,7 +525,7 @@ export default function Page() {
               type="text"
               value={branchName}
               onChange={(e) => setBranchName(e.target.value)}
-              placeholder="1235423a30 (3d303f40383c3540, botcow-assistant)"
+              placeholder="Ветка (например, botcow-assistant)"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -536,7 +536,7 @@ export default function Page() {
               className="button button-primary"
               style={{ cursor: commitLoading ? 'default' : 'pointer', opacity: commitLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {commitLoading ? '1a3e3c3c3842383c 3f' : '1e423f40303238424c 3a3e3c3c3842'}
+              {commitLoading ? 'Коммитим?' : 'Отправить коммит'}
             </button>
 
             {commitError && <div style={{ color: 'var(--error)', fontSize: 13 }}>{commitError}</div>}
@@ -550,7 +550,7 @@ export default function Page() {
               type="text"
               value={workflowId}
               onChange={(e) => setWorkflowId(e.target.value)}
-              placeholder="workflow_id (3d303f40383c3540, ci.yml)"
+              placeholder="workflow_id (например, ci.yml)"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -558,7 +558,7 @@ export default function Page() {
               type="text"
               value={workflowRef}
               onChange={(e) => setWorkflowRef(e.target.value)}
-              placeholder="ref (3235423a30, 3f3e 433c3e3b47303d384e main)"
+              placeholder="ref (ветка, по умолчанию main)"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -569,14 +569,14 @@ export default function Page() {
               className="button button-secondary"
               style={{ cursor: workflowLoading ? 'default' : 'pointer', opacity: workflowLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {workflowLoading ? '17303f43413a 3f' : '17303f43414238424c workflow'}
+              {workflowLoading ? 'Запуск?' : 'Запустить workflow'}
             </button>
 
             <input
               type="text"
               value={workflowRunId}
               onChange={(e) => setWorkflowRunId(e.target.value)}
-              placeholder="run_id 343b4f 3f403e3235403a38 41423042434130"
+              placeholder="run_id для проверки статуса"
               style={{ padding: 6, borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
             />
 
@@ -587,7 +587,7 @@ export default function Page() {
               className="button button-secondary"
               style={{ cursor: workflowStatusLoading ? 'default' : 'pointer', opacity: workflowStatusLoading ? 0.6 : 1, fontSize: 14 }}
             >
-              {workflowStatusLoading ? '1f403e3235404f353c 3f' : '1f403e32354038424c 414230424341'}
+              {workflowStatusLoading ? 'Проверяем?' : 'Проверить статус'}
             </button>
 
             {workflowError && <div style={{ color: 'var(--error)', fontSize: 13 }}>{workflowError}</div>}

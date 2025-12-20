@@ -1,6 +1,6 @@
 import type { RepoConfig } from '../config/repos';
 import { upsertRepoConfig } from '../config/repos';
-import { githubFetchJson } from '../github';
+import { github, parseRepo } from '../github';
 
 export type RepoRegistrationArgs = {
   repo: string; // owner/name
@@ -26,9 +26,10 @@ function normalizeRepo(repo: string): string {
   return `${parts[0]}/${parts[1]}`;
 }
 
-async function getRepoOwnerLogin(repo: string): Promise<string> {
-  const data = await githubFetchJson(`/repos/${repo}`);
-  const ownerLogin = (data as any)?.owner?.login;
+async function getRepoOwnerLogin(repoFullName: string): Promise<string> {
+  const [owner, repo] = repoFullName.split('/');
+  const res = await github.repos.get({ owner, repo });
+  const ownerLogin = res.data?.owner?.login;
   if (typeof ownerLogin !== 'string' || !ownerLogin) {
     throw new Error('Failed to determine repo owner from GitHub API response');
   }
@@ -36,10 +37,10 @@ async function getRepoOwnerLogin(repo: string): Promise<string> {
 }
 
 async function getAuthenticatedUserLogin(): Promise<string> {
-  const data = await githubFetchJson('/user');
-  const login = (data as any)?.login;
+  const res = await github.users.getAuthenticated();
+  const login = res.data?.login;
   if (typeof login !== 'string' || !login) {
-    throw new Error('Failed to determine authenticated GitHub user from /user');
+    throw new Error('Failed to determine authenticated GitHub user');
   }
   return login;
 }
@@ -91,8 +92,8 @@ export async function repo_register(args: RepoRegistrationArgs) {
     assertNonEmpty('vercel.teamIdEnv', args.vercel.teamIdEnv);
   }
 
-  // Security: allow registering only repos owned by the same GitHub user/token.
-  // The spec requires: repo must belong to owner.
+  // Security (per spec): only allow registering repos that belong to the same owner
+  // as the authenticated GitHub token.
   const [repoOwner, authedLogin] = await Promise.all([
     getRepoOwnerLogin(repo),
     getAuthenticatedUserLogin(),
@@ -103,6 +104,10 @@ export async function repo_register(args: RepoRegistrationArgs) {
       `Refusing to register repo "${repo}" because it is owned by "${repoOwner}" while authenticated GitHub user is "${authedLogin}".`,
     );
   }
+
+  // Also ensure repo is syntactically valid in our internal parser.
+  // This does NOT need to be allowlisted yet.
+  parseRepo(repo);
 
   const nextEntry: RepoConfig = {
     repo,

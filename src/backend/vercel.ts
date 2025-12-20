@@ -1,122 +1,125 @@
-const VERCEL_API_BASE = 'https://api.vercel.com';
+import { normalizeVercelDeployment, type NormalizedVercelDeployment } from './vercelNormalize';
 
-const defaultProjectId = process.env.VERCEL_PROJECT_ID;
-const defaultTeamId = process.env.VERCEL_TEAM_ID;
+const token = process.env.VERCEL_TOKEN;
 
-export type VercelTarget = 'production' | 'preview';
+function getVercelTokenOrThrow(): string {
+  const t = process.env.VERCEL_TOKEN;
+  if (!t) throw new Error('VERCEL_TOKEN is not set');
+  return t;
+}
 
 export type VercelContext = {
   projectId?: string;
   teamId?: string;
-  /**
-   * Default git ref (branch) to use when triggering a deploy with gitSha.
-   * This is needed because different repos may have different default branches.
-   */
+  /** Git ref (branch) used for gitSource deployments */
   gitRef?: string;
 };
 
-function getVercelTokenOrThrow(): string {
-  const token = process.env.VERCEL_TOKEN;
-  if (!token) {
-    throw new Error('VERCEL_TOKEN is not set');
-  }
-  return token;
-}
-
 function buildHeaders() {
-  const token = getVercelTokenOrThrow();
+  const t = getVercelTokenOrThrow();
   return {
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${t}`,
     'Content-Type': 'application/json',
   };
 }
 
-function withTeam(url: URL, teamId?: string) {
-  const tid = teamId ?? defaultTeamId;
-  if (tid) {
-    url.searchParams.set('teamId', tid);
+function buildUrl(path: string, ctx?: VercelContext, query?: Record<string, string | number | undefined>) {
+  const url = new URL(`https://api.vercel.com${path}`);
+
+  const teamId = ctx?.teamId ?? process.env.VERCEL_TEAM_ID;
+  if (teamId) url.searchParams.set('teamId', teamId);
+
+  if (query) {
+    for (const [k, v] of Object.entries(query)) {
+      if (v === undefined) continue;
+      url.searchParams.set(k, String(v));
+    }
   }
+
+  return url;
 }
 
-function resolveProjectId(ctx?: VercelContext): string | undefined {
-  return ctx?.projectId ?? defaultProjectId;
-}
+async function vercelFetchJson<T>(
+  path: string,
+  init: RequestInit,
+  ctx?: VercelContext,
+  query?: Record<string, string | number | undefined>,
+): Promise<T> {
+  const url = buildUrl(path, ctx, query);
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      ...buildHeaders(),
+      ...(init.headers ?? {}),
+    },
+  });
 
-function resolveGitRef(ctx?: VercelContext): string {
-  return ctx?.gitRef ?? 'main';
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Vercel ${init.method ?? 'GET'} ${path} failed: ${res.status} ${text}`);
+  }
+
+  return text ? (JSON.parse(text) as T) : ({} as T);
 }
 
 export async function getLatestDeployments(
-  env: VercelTarget | 'all' = 'production',
+  env: 'preview' | 'production',
   ctx?: VercelContext,
-  limit = 5,
-) {
-  const url = new URL('/v6/deployments', VERCEL_API_BASE);
+  limit = 10,
+): Promise<NormalizedVercelDeployment[]> {
+  const projectId = ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
 
-  const projectId = resolveProjectId(ctx);
-  if (projectId) {
-    url.searchParams.set('projectId', projectId);
-  }
+  const query: Record<string, string | number | undefined> = {
+    limit,
+    target: env,
+  };
+  if (projectId) query.projectId = projectId;
 
-  withTeam(url, ctx?.teamId);
-  url.searchParams.set('limit', String(limit));
+  const data = await vercelFetchJson<{ deployments: any[] }>(
+    '/v6/deployments',
+    { method: 'GET' },
+    ctx,
+    query,
+  );
 
-  if (env === 'production') {
-    url.searchParams.set('target', 'production');
-  } else if (env === 'preview') {
-    url.searchParams.set('target', 'preview');
-  }
-
-  const res = await fetch(url, { headers: buildHeaders() });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Vercel getLatestDeployments failed: ${res.status} ${text}`);
-  }
-
-  return res.json();
+  return (data.deployments ?? []).map(normalizeVercelDeployment);
 }
 
 export async function getDeploymentStatus(
   deploymentId: string,
   ctx?: VercelContext,
-) {
-  const url = new URL(`/v13/deployments/${deploymentId}`, VERCEL_API_BASE);
-  withTeam(url, ctx?.teamId);
+): Promise<NormalizedVercelDeployment> {
+  const data = await vercelFetchJson<any>(`/v13/deployments/${deploymentId}`, { method: 'GET' }, ctx);
+  return normalizeVercelDeployment(data);
+}
 
-  const res = await fetch(url, { headers: buildHeaders() });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Vercel getDeploymentStatus failed: ${res.status} ${text}`);
-  }
-
-  return res.json();
+function resolveGitRef(ctx?: VercelContext): string {
+  return ctx?.gitRef || 'main';
 }
 
 export async function triggerDeploy(
-  projectIdOverride?: string,
-  gitSha?: string,
-  target: VercelTarget = 'production',
+  projectIdOverride: string | undefined,
+  gitSha: string | undefined,
+  target: 'preview' | 'production',
   ctx?: VercelContext,
-) {
-  const pid = projectIdOverride ?? resolveProjectId(ctx);
+): Promise<NormalizedVercelDeployment> {
+  const project = projectIdOverride ?? ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
+  if (!project) throw new Error('Vercel projectId is not set');
 
-  if (!pid) {
-    throw new Error('VERCEL_PROJECT_ID is not set');
-  }
-
-  const url = new URL('/v13/deployments', VERCEL_API_BASE);
-  withTeam(url, ctx?.teamId);
-
-  // Vercel Deployments API requires `files` to be an array.
-  // We don't upload files here (we trigger a build from gitSource), so we pass an empty array.
+  // IMPORTANT:
+  // Vercel Deployments API (POST /v13/deployments) does NOT accept target='preview'.
+  // It accepts target='production' | 'staging' | custom environment id.
+  // For preview deployments we must omit `target`.
   const body: any = {
-    name: pid,
-    project: pid,
-    target,
+    name: project,
+    project,
     files: [],
   };
+
+  if (target === 'production') {
+    // Note: production is expected to be blocked at tool layer; this is a safety net.
+    body.target = 'production';
+  }
 
   if (gitSha) {
     body.gitSource = {
@@ -126,137 +129,74 @@ export async function triggerDeploy(
     };
   }
 
-  const res = await fetch(url, {
+  const data = await vercelFetchJson<any>('/v13/deployments', {
     method: 'POST',
-    headers: buildHeaders(),
     body: JSON.stringify(body),
-  });
+  }, ctx);
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Vercel triggerDeploy failed: ${res.status} ${text}`);
-  }
-
-  return res.json();
+  return normalizeVercelDeployment(data);
 }
 
 export async function redeploy(
   deploymentId: string,
-  target: VercelTarget = 'production',
+  target: 'preview' | 'production',
   ctx?: VercelContext,
-) {
-  const projectId = resolveProjectId(ctx);
-  if (!projectId) {
-    throw new Error('VERCEL_PROJECT_ID is not set');
-  }
+): Promise<NormalizedVercelDeployment> {
+  const project = ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
+  if (!project) throw new Error('Vercel projectId is not set');
 
-  const url = new URL('/v13/deployments', VERCEL_API_BASE);
-  withTeam(url, ctx?.teamId);
+  const body: any = {
+    deploymentId,
+    project,
+  };
 
-  const res = await fetch(url, {
+  // Same rule as triggerDeploy: omit target for preview.
+  if (target === 'production') body.target = 'production';
+
+  const data = await vercelFetchJson<any>('/v13/deployments', {
     method: 'POST',
-    headers: buildHeaders(),
-    body: JSON.stringify({
-      name: projectId,
-      project: projectId,
-      target,
-      deploymentId,
-    }),
-  });
+    body: JSON.stringify(body),
+  }, ctx);
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Vercel redeploy failed: ${res.status} ${text}`);
-  }
-
-  return res.json();
-}
-
-export type FindDeploymentByGitArgs = {
-  gitSha: string;
-  target?: VercelTarget;
-  branch?: string;
-  // time window in minutes for fallback
-  timeWindowMinutes?: number;
-  limit?: number;
-};
-
-export type FoundDeployment = {
-  deployment: any;
-  matchedBy: 'sha' | 'branch_time_window' | 'latest';
-};
-
-function getDeploymentGitMeta(depl: any):
-  | {
-      sha?: string;
-      ref?: string;
-    }
-  | undefined {
-  const meta = depl?.meta;
-  if (!meta || typeof meta !== 'object') return undefined;
-  const sha =
-    typeof (meta as any).githubCommitSha === 'string'
-      ? (meta as any).githubCommitSha
-      : typeof (meta as any).gitSha === 'string'
-        ? (meta as any).gitSha
-        : undefined;
-  const ref =
-    typeof (meta as any).githubCommitRef === 'string'
-      ? (meta as any).githubCommitRef
-      : typeof (meta as any).gitBranch === 'string'
-        ? (meta as any).gitBranch
-        : undefined;
-  return { sha, ref };
+  return normalizeVercelDeployment(data);
 }
 
 export async function findDeploymentByGit(
-  args: FindDeploymentByGitArgs,
+  params: {
+    gitSha?: string;
+    target?: 'preview' | 'production';
+    branch?: string;
+    timeWindowMinutes?: number;
+    limit?: number;
+  },
   ctx?: VercelContext,
-): Promise<FoundDeployment | null> {
-  const target = args.target ?? 'preview';
-  const limit = args.limit ?? 20;
+): Promise<NormalizedVercelDeployment | null> {
+  const { gitSha, target = 'preview', branch, timeWindowMinutes = 60, limit = 20 } = params;
 
-  const data = await getLatestDeployments(target, ctx, limit);
-  const deployments = Array.isArray((data as any).deployments)
-    ? (data as any).deployments
-    : [];
+  const deployments = await getLatestDeployments(target, ctx, limit);
 
-  // 1) exact match by sha
-  for (const d of deployments) {
-    const meta = getDeploymentGitMeta(d);
-    if (meta?.sha && meta.sha.toLowerCase() === args.gitSha.toLowerCase()) {
-      return { deployment: d, matchedBy: 'sha' };
-    }
+  if (!deployments.length) return null;
+
+  if (gitSha) {
+    const exact = deployments.find((d) => {
+      const sha = d.meta?.githubCommitSha ?? d.meta?.gitSha;
+      return typeof sha === 'string' && sha.toLowerCase() === gitSha.toLowerCase();
+    });
+    if (exact) return exact;
   }
 
-  // 2) fallback by branch + time window
-  if (args.branch) {
-    const windowMin = args.timeWindowMinutes ?? 180;
+  if (branch) {
     const now = Date.now();
-    const minTs = now - windowMin * 60 * 1000;
-
-    for (const d of deployments) {
-      const meta = getDeploymentGitMeta(d);
-      const createdAt: number | undefined =
-        typeof d?.createdAt === 'number'
-          ? d.createdAt
-          : typeof d?.created === 'number'
-            ? d.created
-            : undefined;
-
-      if (!createdAt) continue;
-      if (createdAt < minTs) continue;
-
-      if (meta?.ref && meta.ref === args.branch) {
-        return { deployment: d, matchedBy: 'branch_time_window' };
-      }
-    }
+    const windowMs = timeWindowMinutes * 60 * 1000;
+    const candidate = deployments.find((d) => {
+      const b = d.meta?.githubCommitRef;
+      if (typeof b !== 'string') return false;
+      if (b !== branch) return false;
+      const createdAt = typeof d.createdAt === 'number' ? d.createdAt : Date.parse(String(d.createdAt));
+      return Math.abs(now - createdAt) <= windowMs;
+    });
+    if (candidate) return candidate;
   }
 
-  // 3) last resort: latest
-  if (deployments.length > 0) {
-    return { deployment: deployments[0], matchedBy: 'latest' };
-  }
-
-  return null;
+  return deployments[0] ?? null;
 }

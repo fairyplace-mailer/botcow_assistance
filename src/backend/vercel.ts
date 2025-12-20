@@ -1,43 +1,35 @@
-import { normalizeVercelDeployment, type NormalizedVercelDeployment, type VercelTarget } from './vercelNormalize';
+import {
+  normalizeVercelDeployment,
+  type NormalizedVercelDeployment,
+  type VercelTarget,
+} from './vercelNormalize';
+
+export type { VercelTarget };
 
 function getVercelTokenOrThrow(): string {
-  const t = process.env.VERCEL_TOKEN;
-  if (!t) throw new Error('VERCEL_TOKEN is not set');
-  return t;
+  const token = process.env.VERCEL_TOKEN;
+  if (!token) throw new Error('VERCEL_TOKEN is not set');
+  return token;
 }
 
 export type VercelContext = {
   projectId?: string;
   teamId?: string;
-  /** Git ref (branch) used for gitSource deployments */
+  /** Git ref (branch) for deployments created via gitSource */
   gitRef?: string;
 };
 
-function buildHeaders() {
-  const t = getVercelTokenOrThrow();
-  return {
-    Authorization: `Bearer ${t}`,
-    'Content-Type': 'application/json',
+type VercelApiError = {
+  error?: {
+    code?: string;
+    message?: string;
   };
-}
+};
 
-function buildUrl(
-  path: string,
-  ctx?: VercelContext,
-  query?: Record<string, string | number | undefined>,
-) {
+function buildUrl(path: string, ctx?: VercelContext) {
   const url = new URL(`https://api.vercel.com${path}`);
-
   const teamId = ctx?.teamId ?? process.env.VERCEL_TEAM_ID;
   if (teamId) url.searchParams.set('teamId', teamId);
-
-  if (query) {
-    for (const [k, v] of Object.entries(query)) {
-      if (v === undefined) continue;
-      url.searchParams.set(k, String(v));
-    }
-  }
-
   return url;
 }
 
@@ -45,43 +37,45 @@ async function vercelFetchJson<T>(
   path: string,
   init: RequestInit,
   ctx?: VercelContext,
-  query?: Record<string, string | number | undefined>,
 ): Promise<T> {
-  const url = buildUrl(path, ctx, query);
+  const token = getVercelTokenOrThrow();
+  const url = buildUrl(path, ctx);
+
   const res = await fetch(url, {
     ...init,
     headers: {
-      ...buildHeaders(),
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
       ...(init.headers ?? {}),
     },
   });
 
-  const text = await res.text();
   if (!res.ok) {
-    throw new Error(`Vercel ${init.method ?? 'GET'} ${path} failed: ${res.status} ${text}`);
+    const text = await res.text();
+    throw new Error(
+      `Vercel ${init.method ?? 'GET'} ${path} failed: ${res.status} ${text}`,
+    );
   }
 
-  return text ? (JSON.parse(text) as T) : ({} as T);
+  return (await res.json()) as T;
 }
 
 export async function getLatestDeployments(
-  env: VercelTarget,
+  target: VercelTarget,
   ctx?: VercelContext,
-  limit = 10,
+  limit = 20,
 ): Promise<NormalizedVercelDeployment[]> {
   const projectId = ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
 
-  const query: Record<string, string | number | undefined> = {
-    limit,
-    target: env,
-  };
-  if (projectId) query.projectId = projectId;
+  const search = new URLSearchParams();
+  search.set('limit', String(limit));
+  if (projectId) search.set('projectId', projectId);
+  if (target) search.set('target', target);
 
   const data = await vercelFetchJson<{ deployments: any[] }>(
-    '/v6/deployments',
+    `/v6/deployments?${search.toString()}`,
     { method: 'GET' },
     ctx,
-    query,
   );
 
   return (data.deployments ?? []).map(normalizeVercelDeployment);
@@ -91,11 +85,15 @@ export async function getDeploymentStatus(
   deploymentId: string,
   ctx?: VercelContext,
 ): Promise<NormalizedVercelDeployment> {
-  const data = await vercelFetchJson<any>(`/v13/deployments/${deploymentId}`, { method: 'GET' }, ctx);
+  const data = await vercelFetchJson<any>(
+    `/v13/deployments/${deploymentId}`,
+    { method: 'GET' },
+    ctx,
+  );
   return normalizeVercelDeployment(data);
 }
 
-function resolveGitRef(ctx?: VercelContext): string {
+function resolveGitRef(ctx?: VercelContext) {
   return ctx?.gitRef || 'main';
 }
 
@@ -105,21 +103,18 @@ export async function triggerDeploy(
   target: VercelTarget,
   ctx?: VercelContext,
 ): Promise<NormalizedVercelDeployment> {
-  const project = projectIdOverride ?? ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
-  if (!project) throw new Error('Vercel projectId is not set');
+  const projectId = projectIdOverride ?? ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
+  if (!projectId) throw new Error('Vercel projectId is not configured');
 
-  // IMPORTANT:
-  // Vercel Deployments API (POST /v13/deployments) does NOT accept target='preview'.
-  // It accepts target='production' | 'staging' | custom environment id.
-  // For preview deployments we must omit `target`.
+  // Vercel Deployments API requires "files" field to be an array.
+  // For preview deploys, do NOT send "target" (API expects production/staging/custom env).
   const body: any = {
-    name: project,
-    project,
+    name: 'botcow-triggered-deploy',
+    project: projectId,
     files: [],
   };
 
   if (target === 'production') {
-    // Note: production is expected to be blocked at tool layer; this is a safety net.
     body.target = 'production';
   }
 
@@ -132,11 +127,8 @@ export async function triggerDeploy(
   }
 
   const data = await vercelFetchJson<any>(
-    '/v13/deployments',
-    {
-      method: 'POST',
-      body: JSON.stringify(body),
-    },
+    `/v13/deployments`,
+    { method: 'POST', body: JSON.stringify(body) },
     ctx,
   );
 
@@ -148,23 +140,15 @@ export async function redeploy(
   target: VercelTarget,
   ctx?: VercelContext,
 ): Promise<NormalizedVercelDeployment> {
-  const project = ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
-  if (!project) throw new Error('Vercel projectId is not set');
-
+  // For preview redeploys, do NOT send "target".
   const body: any = {
     deploymentId,
-    project,
   };
-
-  // Same rule as triggerDeploy: omit target for preview.
   if (target === 'production') body.target = 'production';
 
   const data = await vercelFetchJson<any>(
-    '/v13/deployments',
-    {
-      method: 'POST',
-      body: JSON.stringify(body),
-    },
+    `/v13/deployments`,
+    { method: 'POST', body: JSON.stringify(body) },
     ctx,
   );
 
@@ -172,7 +156,7 @@ export async function redeploy(
 }
 
 export async function findDeploymentByGit(
-  params: {
+  opts: {
     gitSha?: string;
     target?: VercelTarget;
     branch?: string;
@@ -181,32 +165,43 @@ export async function findDeploymentByGit(
   },
   ctx?: VercelContext,
 ): Promise<NormalizedVercelDeployment | null> {
-  const { gitSha, target = 'preview', branch, timeWindowMinutes = 60, limit = 20 } = params;
+  const {
+    gitSha,
+    target = 'preview',
+    branch,
+    timeWindowMinutes = 120,
+    limit = 50,
+  } = opts;
 
   const deployments = await getLatestDeployments(target, ctx, limit);
-
   if (!deployments.length) return null;
 
   if (gitSha) {
-    const exact = deployments.find((d) => {
-      const sha = d.meta?.githubCommitSha ?? d.meta?.gitSha;
-      return typeof sha === 'string' && sha.toLowerCase() === gitSha.toLowerCase();
+    const bySha = deployments.find((d) => {
+      const meta = d.meta ?? {};
+      const sha =
+        (typeof meta.githubCommitSha === 'string' && meta.githubCommitSha) ||
+        (typeof meta.gitSha === 'string' && meta.gitSha) ||
+        '';
+      return sha.toLowerCase() === gitSha.toLowerCase();
     });
-    if (exact) return exact;
+    if (bySha) return bySha;
   }
 
   if (branch) {
     const now = Date.now();
     const windowMs = timeWindowMinutes * 60 * 1000;
-    const candidate = deployments.find((d) => {
-      const b = d.meta?.githubCommitRef;
-      if (typeof b !== 'string') return false;
-      if (b !== branch) return false;
-      const createdAt = d.createdAt;
-      if (typeof createdAt !== 'number') return false;
-      return Math.abs(now - createdAt) <= windowMs;
+    const byBranchAndTime = deployments.find((d) => {
+      const createdAtMs = d.createdAt ? new Date(d.createdAt).getTime() : 0;
+      const within = Math.abs(now - createdAtMs) <= windowMs;
+      const meta = d.meta ?? {};
+      const b =
+        (typeof meta.githubCommitRef === 'string' && meta.githubCommitRef) ||
+        (typeof meta.gitRef === 'string' && meta.gitRef) ||
+        '';
+      return within && b === branch;
     });
-    if (candidate) return candidate;
+    if (byBranchAndTime) return byBranchAndTime;
   }
 
   return deployments[0] ?? null;

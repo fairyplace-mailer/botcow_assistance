@@ -1,12 +1,12 @@
-#   (BotCow)
+# Spec (BotCow)
 
-> :        .     .
+> Source of truth: this document defines the required behavior and constraints for this project.
 
 ---
 
-##    
+## 1) Security
 
-### BOTCOW_ADMIN_TOKEN
+### 1.1 BOTCOW_ADMIN_TOKEN
 
 Tools endpoints are **owner-only** and require Bearer auth.
 
@@ -17,11 +17,11 @@ Endpoints:
 - `GET /tools`
 - `POST /tools/call`
 
-If `BOTCOW_ADMIN_TOKEN` is not configured  endpoints **fail closed** (return 500).
+If `BOTCOW_ADMIN_TOKEN` is not configured — endpoints **fail closed** (return 500).
 
 ---
 
-## Vercel tools policy (preview only)
+## 2) Vercel tools policy (preview only)
 
 All Vercel tools must operate in **preview** target only.
 
@@ -36,7 +36,7 @@ Applies to:
 
 ---
 
-## Repo allowlist and registration
+## 3) Repo allowlist and registration
 
 The bot operates only on repositories explicitly listed in `config/repos.yml`.
-New repositories can be added via the owner-only `repo_register` tool (see section 7.3.5).
+New repositories can be added via the owner-only `repo_register` tool.

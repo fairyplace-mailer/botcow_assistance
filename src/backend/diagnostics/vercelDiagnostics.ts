@@ -68,7 +68,8 @@ export async function diagnoseVercelDeployment(args: {
   target?: VercelTarget;
   timeWindowMinutes?: number;
 }): Promise<VercelDeploymentDiagnosis> {
-  const target: VercelTarget = args.target === 'production' ? 'production' : 'preview';
+  // Per docs/spec.md: all Vercel tools operate in preview only.
+  const target: VercelTarget = 'preview';
   const ctx = getVercelContextFromRepo(args.repo);
 
   if (!args.git_sha) {

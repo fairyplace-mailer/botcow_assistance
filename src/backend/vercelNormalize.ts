@@ -1,4 +1,4 @@
-export type VercelTarget = 'preview' | 'production';
+export type VercelTarget = 'preview';
 
 /**
  * Normalized Vercel deployment shape used across backend layers.

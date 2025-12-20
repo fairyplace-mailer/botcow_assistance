@@ -12,6 +12,7 @@ import {
 export interface DeploymentWaitForPreviewArgs {
   pull_number: number;
   git_commit_sha: string;
+  /** preview only; kept for backward compatibility, but production is rejected */
   target?: VercelTarget;
   repo?: string;
   timeout_seconds?: number;
@@ -29,12 +30,15 @@ interface DeploymentWaitForPreviewResult {
   error?: string;
 }
 
-function normalizeDeployment(raw: any): NormalizedVercelDeployment {
-  return normalizeVercelDeployment(raw);
-}
-
 function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function requirePreviewTarget(target?: VercelTarget): VercelTarget {
+  // Default is preview; production is explicitly disabled per spec.
+  if (!target) return 'preview';
+  if (target === 'preview') return 'preview';
+  throw new Error('Production deploys are disabled (preview only)');
 }
 
 function matchesGitSha(raw: any, gitSha: string): boolean {
@@ -74,39 +78,38 @@ export const deploymentToolsSchemas = [
     function: {
       name: 'deployment_wait_for_preview_and_comment_pr',
       description:
-        'Подождать Vercel preview/production деплой для указанного git commit SHA и оставить комментарий в Pull Request с ссылкой и статусом.',
+        'Wait for a Vercel preview deployment for the given git commit SHA and comment on the Pull Request with the URL and status (preview only).',
       parameters: {
         type: 'object',
         properties: {
           pull_number: {
             type: 'number',
-            description: 'Номер Pull Request в GitHub.',
+            description: 'Pull Request number in GitHub.',
           },
           git_commit_sha: {
             type: 'string',
             description:
-              'SHA git-коммита, для которого нужно найти Vercel деплой.',
+              'SHA of the git commit for which we should find the Vercel deployment.',
           },
           target: {
             type: 'string',
-            enum: ['production', 'preview'],
-            description:
-              'Целевая среда деплоя. По умолчанию preview.',
+            enum: ['preview'],
+            description: 'Target environment. Only preview is allowed.',
           },
           repo: {
             type: 'string',
             description:
-              'Репозиторий owner/repo, по умолчанию BOTCOW_DEFAULT_REPO.',
+              'Repository owner/repo (optional; defaults to BOTCOW_DEFAULT_REPO).',
           },
           timeout_seconds: {
             type: 'number',
             description:
-              'Максимальное время ожидания деплоя в секундах (по умолчанию 600).',
+              'Maximum waiting time in seconds (default 600).',
           },
           poll_interval_seconds: {
             type: 'number',
             description:
-              'Интервал между проверками в секундах (по умолчанию 15).',
+              'Polling interval in seconds (default 15).',
           },
         },
         required: ['pull_number', 'git_commit_sha'],
@@ -121,7 +124,7 @@ export const deploymentToolHandlers = {
   ): Promise<DeploymentWaitForPreviewResult> {
     const pullNumber = args.pull_number;
     const gitSha = args.git_commit_sha;
-    const target: VercelTarget = args.target === 'production' ? 'production' : 'preview';
+    const target: VercelTarget = requirePreviewTarget(args.target);
 
     const timeoutMs = (args.timeout_seconds ?? 600) * 1000;
     const intervalMs = (args.poll_interval_seconds ?? 15) * 1000;
@@ -132,22 +135,16 @@ export const deploymentToolHandlers = {
 
     while (Date.now() < deadline) {
       try {
-        const data = await getLatestDeployments(target);
-        const rawDeployments = Array.isArray((data as any).deployments)
-          ? (data as any).deployments
-          : [];
+        const deployments = await getLatestDeployments(target);
 
-        const foundRaw = rawDeployments.find((d: any) => matchesGitSha(d, gitSha));
+        // For matching by git SHA we need raw-ish meta/gitSource fields.
+        // `getLatestDeployments` returns normalized deployments, so we match against normalized meta only.
+        const found = deployments.find((d: any) => matchesGitSha(d, gitSha));
 
-        if (foundRaw) {
-          const idOrUid =
-            (typeof foundRaw.id === 'string' && foundRaw.id) ||
-            (typeof foundRaw.uid === 'string' && foundRaw.uid) ||
-            '';
+        if (found) {
+          const detailed = found.id ? await getDeploymentStatus(found.id) : found;
 
-          const detailed = idOrUid ? await getDeploymentStatus(idOrUid) : foundRaw;
-
-          const normalized = normalizeDeployment(detailed);
+          const normalized = normalizeVercelDeployment(detailed as any);
           lastDeployment = normalized;
 
           const stateRaw = (normalized.readyState || normalized.state || '').toLowerCase();

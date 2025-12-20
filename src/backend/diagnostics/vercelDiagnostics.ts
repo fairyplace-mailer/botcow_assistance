@@ -28,16 +28,35 @@ export type VercelDeploymentDiagnosis = {
 // Exported for tools layer: allows resolving per-repo Vercel project/team overrides.
 export function getVercelContextFromRepo(repo?: string): VercelContext {
   if (!repo) return {};
-  const cfg = getRepoConfig(repo);
-  const projectIdEnv = cfg?.vercel?.projectIdEnv;
-  const teamIdEnv = cfg?.vercel?.teamIdEnv;
 
-  const projectId = projectIdEnv ? process.env[projectIdEnv] : undefined;
+  const cfg = getRepoConfig(repo);
+  if (!cfg) {
+    throw new Error(
+      `Repo "${repo}" is not configured in config/repos.yml. Add it to the allowlist to enable Vercel operations.`,
+    );
+  }
+
+  const projectIdEnv = cfg.vercel?.projectIdEnv;
+  const teamIdEnv = cfg.vercel?.teamIdEnv;
+
+  if (!projectIdEnv) {
+    throw new Error(
+      `Repo "${repo}" has no vercel.projectIdEnv in config/repos.yml. Configure it to enable Vercel operations.`,
+    );
+  }
+
+  const projectId = process.env[projectIdEnv];
+  if (!projectId) {
+    throw new Error(
+      `Missing env ${projectIdEnv} for repo "${repo}". Set it on the Vercel project running BotCow backend.`,
+    );
+  }
+
   const teamId = teamIdEnv ? process.env[teamIdEnv] : undefined;
 
   // exactOptionalPropertyTypes: do not pass keys with undefined
   return {
-    ...(projectId ? { projectId } : {}),
+    projectId,
     ...(teamId ? { teamId } : {}),
   };
 }

@@ -8,7 +8,7 @@ import { NewChatButton } from './NewChatButton';
 
 export const metadata: Metadata = {
   title: 'BotCow Code Assistant',
-  description: '',
+  description: 'PWA чат и инструменты для BotCow',
   manifest: '/manifest.json',
 };
 

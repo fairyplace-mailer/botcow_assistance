@@ -84,3 +84,17 @@ export async function saveRecentMessages(messages: Message[]): Promise<void> {
     // ignore (best-effort)
   }
 }
+
+export async function clearRecentMessages(): Promise<void> {
+  try {
+    await withStore('readwrite', (store) => {
+      return new Promise<void>((resolve, reject) => {
+        const req = store.delete(KEY);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    });
+  } catch {
+    // ignore (best-effort)
+  }
+}

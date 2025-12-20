@@ -3,8 +3,8 @@ import {
   findDeploymentByGit,
   getDeploymentStatus,
   type VercelContext,
-  type VercelTarget,
 } from '../vercel';
+import type { VercelTarget } from '../vercelNormalize';
 
 export type VercelDeploymentDiagnosis = {
   repo?: string;
@@ -115,22 +115,10 @@ export async function diagnoseVercelDeployment(args: {
   const deploymentId = found.id;
   const details = deploymentId ? await getDeploymentStatus(deploymentId, ctx) : found;
 
-  const url = typeof (details as any).url === 'string' ? (details as any).url : null;
-  const state =
-    typeof (details as any).state === 'string'
-      ? (details as any).state
-      : typeof (details as any).status === 'string'
-        ? (details as any).status
-        : null;
-  const readyState =
-    typeof (details as any).readyState === 'string'
-      ? (details as any).readyState
-      : state;
-
-  const inspectorUrl =
-    typeof (details as any).inspectorUrl === 'string'
-      ? (details as any).inspectorUrl
-      : null;
+  const url = details.url;
+  const state = details.state;
+  const readyState = details.readyState;
+  const inspectorUrl = details.inspectorUrl;
 
   const hints: string[] = [];
   if (!inspectorUrl) {

@@ -100,23 +100,20 @@ function resolveGitRef(ctx?: VercelContext) {
 export async function triggerDeploy(
   projectIdOverride: string | undefined,
   gitSha: string | undefined,
-  target: VercelTarget,
+  // preview only per spec
+  _target: VercelTarget,
   ctx?: VercelContext,
 ): Promise<NormalizedVercelDeployment> {
   const projectId = projectIdOverride ?? ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
   if (!projectId) throw new Error('Vercel projectId is not configured');
 
   // Vercel Deployments API requires "files" field to be an array.
-  // For preview deploys, do NOT send "target" (API expects production/staging/custom env).
+  // For preview deploys, do NOT send "target".
   const body: any = {
     name: 'botcow-triggered-deploy',
     project: projectId,
     files: [],
   };
-
-  if (target === 'production') {
-    body.target = 'production';
-  }
 
   if (gitSha) {
     body.gitSource = {
@@ -137,14 +134,14 @@ export async function triggerDeploy(
 
 export async function redeploy(
   deploymentId: string,
-  target: VercelTarget,
+  // preview only per spec
+  _target: VercelTarget,
   ctx?: VercelContext,
 ): Promise<NormalizedVercelDeployment> {
   // For preview redeploys, do NOT send "target".
   const body: any = {
     deploymentId,
   };
-  if (target === 'production') body.target = 'production';
 
   const data = await vercelFetchJson<any>(
     `/v13/deployments`,
@@ -180,8 +177,8 @@ export async function findDeploymentByGit(
     const bySha = deployments.find((d) => {
       const meta = d.meta ?? {};
       const sha =
-        (typeof meta.githubCommitSha === 'string' && meta.githubCommitSha) ||
-        (typeof meta.gitSha === 'string' && meta.gitSha) ||
+        (typeof (meta as any).githubCommitSha === 'string' && (meta as any).githubCommitSha) ||
+        (typeof (meta as any).gitSha === 'string' && (meta as any).gitSha) ||
         '';
       return sha.toLowerCase() === gitSha.toLowerCase();
     });
@@ -196,8 +193,8 @@ export async function findDeploymentByGit(
       const within = Math.abs(now - createdAtMs) <= windowMs;
       const meta = d.meta ?? {};
       const b =
-        (typeof meta.githubCommitRef === 'string' && meta.githubCommitRef) ||
-        (typeof meta.gitRef === 'string' && meta.gitRef) ||
+        (typeof (meta as any).githubCommitRef === 'string' && (meta as any).githubCommitRef) ||
+        (typeof (meta as any).gitRef === 'string' && (meta as any).gitRef) ||
         '';
       return within && b === branch;
     });

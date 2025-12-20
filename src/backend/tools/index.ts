@@ -1,20 +1,21 @@
-import { githubToolsSchemas, githubToolHandlers } from './githubTools';
-import { vercelToolsSchemas, vercelToolHandlers } from './vercelTools';
+import { githubToolHandlers, githubToolsSchemas } from './githubTools';
+import { vercelToolHandlers, vercelToolsSchemas } from './vercelTools';
+import { deploymentToolHandlers, deploymentToolsSchemas } from './deploymentTools';
 import {
-  deploymentToolsSchemas,
-  deploymentToolHandlers,
-} from './deploymentTools';
+  repo_register,
+  repoRegistrationToolSchema,
+} from './repoRegistrationTools';
 
-export const toolSchemas = [
+export const toolsSchemas = [
   ...githubToolsSchemas,
   ...vercelToolsSchemas,
   ...deploymentToolsSchemas,
+  repoRegistrationToolSchema,
 ] as const;
 
-export const toolHandlers = {
+export const toolsHandlers = {
   ...githubToolHandlers,
   ...vercelToolHandlers,
   ...deploymentToolHandlers,
-};
-
-export type ToolName = keyof typeof toolHandlers;
+  repo_register,
+} as const;

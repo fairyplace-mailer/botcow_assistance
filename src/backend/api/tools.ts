@@ -1,18 +1,20 @@
 import type { Request, Response } from 'express';
-import { toolSchemas, toolHandlers, type ToolName } from '../tools/index';
+import { toolsSchemas, toolsHandlers } from '../tools/index';
 
 /**
  * GET /tools
  * Returns OpenAI-compatible tool schemas.
  */
 export function getTools(_req: Request, res: Response) {
-  res.json({ tools: toolSchemas });
+  res.json({ tools: toolsSchemas });
 }
 
 type ToolCallBody = {
   name: string;
   arguments?: unknown;
 };
+
+type ToolName = keyof typeof toolsHandlers;
 
 /**
  * POST /tools/call
@@ -28,7 +30,7 @@ export async function callTool(req: Request, res: Response) {
     return;
   }
 
-  const handler = toolHandlers[name];
+  const handler = toolsHandlers[name];
   if (!handler) {
     res.status(404).json({ ok: false, error: 'Unknown tool', name });
     return;

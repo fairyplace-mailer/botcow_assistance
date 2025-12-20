@@ -1,21 +1,30 @@
 const VERCEL_API_BASE = 'https://api.vercel.com';
 
-const token = process.env.VERCEL_TOKEN;
 const defaultProjectId = process.env.VERCEL_PROJECT_ID;
 const defaultTeamId = process.env.VERCEL_TEAM_ID;
 
 export type VercelTarget = 'production' | 'preview';
 
-if (!token) {
-  throw new Error('VERCEL_TOKEN is not set');
-}
-
 export type VercelContext = {
   projectId?: string;
   teamId?: string;
+  /**
+   * Default git ref (branch) to use when triggering a deploy with gitSha.
+   * This is needed because different repos may have different default branches.
+   */
+  gitRef?: string;
 };
 
+function getVercelTokenOrThrow(): string {
+  const token = process.env.VERCEL_TOKEN;
+  if (!token) {
+    throw new Error('VERCEL_TOKEN is not set');
+  }
+  return token;
+}
+
 function buildHeaders() {
+  const token = getVercelTokenOrThrow();
   return {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
@@ -31,6 +40,10 @@ function withTeam(url: URL, teamId?: string) {
 
 function resolveProjectId(ctx?: VercelContext): string | undefined {
   return ctx?.projectId ?? defaultProjectId;
+}
+
+function resolveGitRef(ctx?: VercelContext): string {
+  return ctx?.gitRef ?? 'main';
 }
 
 export async function getLatestDeployments(
@@ -105,7 +118,7 @@ export async function triggerDeploy(
   if (gitSha) {
     body.gitSource = {
       type: 'github',
-      ref: 'main',
+      ref: resolveGitRef(ctx),
       sha: gitSha,
     };
   }
@@ -178,16 +191,18 @@ function getDeploymentGitMeta(depl: any):
   | undefined {
   const meta = depl?.meta;
   if (!meta || typeof meta !== 'object') return undefined;
-  const sha = typeof (meta as any).githubCommitSha === 'string'
-    ? (meta as any).githubCommitSha
-    : typeof (meta as any).gitSha === 'string'
-      ? (meta as any).gitSha
-      : undefined;
-  const ref = typeof (meta as any).githubCommitRef === 'string'
-    ? (meta as any).githubCommitRef
-    : typeof (meta as any).gitBranch === 'string'
-      ? (meta as any).gitBranch
-      : undefined;
+  const sha =
+    typeof (meta as any).githubCommitSha === 'string'
+      ? (meta as any).githubCommitSha
+      : typeof (meta as any).gitSha === 'string'
+        ? (meta as any).gitSha
+        : undefined;
+  const ref =
+    typeof (meta as any).githubCommitRef === 'string'
+      ? (meta as any).githubCommitRef
+      : typeof (meta as any).gitBranch === 'string'
+        ? (meta as any).gitBranch
+        : undefined;
   return { sha, ref };
 }
 

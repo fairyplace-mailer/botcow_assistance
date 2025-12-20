@@ -1,3 +1,4 @@
+import { getRepoConfig } from '../config/repos';
 import {
   getLatestDeployments,
   getDeploymentStatus,
@@ -121,8 +122,17 @@ function normalizeDeployment(raw: any): NormalizedVercelDeployment {
 
 function getVercelCtxFromRepo(repo?: string) {
   if (!repo) return undefined;
+
   const ctx = getVercelContextFromRepo(repo);
-  return ctx;
+  const cfg = getRepoConfig(repo);
+
+  // Note: cfg is guaranteed here because getVercelContextFromRepo(repo) throws if repo isn't configured.
+  const gitRef = cfg?.defaultBranch;
+
+  return {
+    ...ctx,
+    ...(gitRef ? { gitRef } : {}),
+  };
 }
 
 /**

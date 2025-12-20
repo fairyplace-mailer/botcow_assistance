@@ -35,14 +35,14 @@ repos:
   - repo: fairyplace-mailer/botcow_assistance
     defaultBranch: botcow-prevectus
     vercel:
-      projectIdEnv: VERCEL_PROJECT_ID
-      teamIdEnv: VERCEL_TEAM_ID
+      projectIdEnv: VERCEL_PROJECT_ID_BOTCOW
+      teamIdEnv: VERCEL_TEAM_ID_BOTCOW
 
   - repo: fairyplace-mailer/botcat_chat
     defaultBranch: main
     vercel:
       projectIdEnv: VERCEL_PROJECT_ID_BOTCAT_CHAT
-      teamIdEnv: VERCEL_TEAM_ID
+      teamIdEnv: VERCEL_TEAM_ID_BOTCOW
 ```
 
 ## Notes

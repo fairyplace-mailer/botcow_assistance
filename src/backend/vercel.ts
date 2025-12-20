@@ -109,10 +109,13 @@ export async function triggerDeploy(
   const url = new URL('/v13/deployments', VERCEL_API_BASE);
   withTeam(url, ctx?.teamId);
 
+  // Vercel Deployments API requires `files` to be an array.
+  // We don't upload files here (we trigger a build from gitSource), so we pass an empty array.
   const body: any = {
     name: pid,
     project: pid,
     target,
+    files: [],
   };
 
   if (gitSha) {

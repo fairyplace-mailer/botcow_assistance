@@ -1,5 +1,6 @@
 import type { RepoConfig } from '../config/repos';
 import { upsertRepoConfig } from '../config/repos';
+import { githubFetchJson } from '../github';
 
 export type RepoRegistrationArgs = {
   repo: string; // owner/name
@@ -23,6 +24,24 @@ function normalizeRepo(repo: string): string {
     throw new Error('repo must be in the form "owner/name"');
   }
   return `${parts[0]}/${parts[1]}`;
+}
+
+async function getRepoOwnerLogin(repo: string): Promise<string> {
+  const data = await githubFetchJson(`/repos/${repo}`);
+  const ownerLogin = (data as any)?.owner?.login;
+  if (typeof ownerLogin !== 'string' || !ownerLogin) {
+    throw new Error('Failed to determine repo owner from GitHub API response');
+  }
+  return ownerLogin;
+}
+
+async function getAuthenticatedUserLogin(): Promise<string> {
+  const data = await githubFetchJson('/user');
+  const login = (data as any)?.login;
+  if (typeof login !== 'string' || !login) {
+    throw new Error('Failed to determine authenticated GitHub user from /user');
+  }
+  return login;
 }
 
 export const repoRegistrationToolSchema = {
@@ -70,6 +89,19 @@ export async function repo_register(args: RepoRegistrationArgs) {
   assertNonEmpty('vercel.projectIdEnv', args.vercel?.projectIdEnv);
   if (args.vercel?.teamIdEnv !== undefined) {
     assertNonEmpty('vercel.teamIdEnv', args.vercel.teamIdEnv);
+  }
+
+  // Security: allow registering only repos owned by the same GitHub user/token.
+  // The spec requires: repo must belong to owner.
+  const [repoOwner, authedLogin] = await Promise.all([
+    getRepoOwnerLogin(repo),
+    getAuthenticatedUserLogin(),
+  ]);
+
+  if (repoOwner !== authedLogin) {
+    throw new Error(
+      `Refusing to register repo "${repo}" because it is owned by "${repoOwner}" while authenticated GitHub user is "${authedLogin}".`,
+    );
   }
 
   const nextEntry: RepoConfig = {

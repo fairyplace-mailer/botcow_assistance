@@ -8,6 +8,8 @@ function getVercelTokenOrThrow(): string {
   return t;
 }
 
+export type VercelTarget = 'preview' | 'production';
+
 export type VercelContext = {
   projectId?: string;
   teamId?: string;
@@ -63,7 +65,7 @@ async function vercelFetchJson<T>(
 }
 
 export async function getLatestDeployments(
-  env: 'preview' | 'production',
+  env: VercelTarget,
   ctx?: VercelContext,
   limit = 10,
 ): Promise<NormalizedVercelDeployment[]> {
@@ -100,7 +102,7 @@ function resolveGitRef(ctx?: VercelContext): string {
 export async function triggerDeploy(
   projectIdOverride: string | undefined,
   gitSha: string | undefined,
-  target: 'preview' | 'production',
+  target: VercelTarget,
   ctx?: VercelContext,
 ): Promise<NormalizedVercelDeployment> {
   const project = projectIdOverride ?? ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
@@ -129,17 +131,21 @@ export async function triggerDeploy(
     };
   }
 
-  const data = await vercelFetchJson<any>('/v13/deployments', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  }, ctx);
+  const data = await vercelFetchJson<any>(
+    '/v13/deployments',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    ctx,
+  );
 
   return normalizeVercelDeployment(data);
 }
 
 export async function redeploy(
   deploymentId: string,
-  target: 'preview' | 'production',
+  target: VercelTarget,
   ctx?: VercelContext,
 ): Promise<NormalizedVercelDeployment> {
   const project = ctx?.projectId ?? process.env.VERCEL_PROJECT_ID;
@@ -153,10 +159,14 @@ export async function redeploy(
   // Same rule as triggerDeploy: omit target for preview.
   if (target === 'production') body.target = 'production';
 
-  const data = await vercelFetchJson<any>('/v13/deployments', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  }, ctx);
+  const data = await vercelFetchJson<any>(
+    '/v13/deployments',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    ctx,
+  );
 
   return normalizeVercelDeployment(data);
 }
@@ -164,7 +174,7 @@ export async function redeploy(
 export async function findDeploymentByGit(
   params: {
     gitSha?: string;
-    target?: 'preview' | 'production';
+    target?: VercelTarget;
     branch?: string;
     timeWindowMinutes?: number;
     limit?: number;

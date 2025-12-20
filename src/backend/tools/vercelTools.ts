@@ -10,6 +10,10 @@ import {
   getVercelContextFromRepo,
   diagnoseVercelDeployment,
 } from '../diagnostics/vercelDiagnostics';
+import {
+  normalizeVercelDeployment,
+  type NormalizedVercelDeployment,
+} from '../vercelNormalize';
 
 export interface VercelGetLatestDeploymentsArgs {
   target?: VercelTarget;
@@ -43,81 +47,8 @@ export interface VercelDiagnoseDeploymentArgs {
   timeWindowMinutes?: number;
 }
 
-export interface NormalizedVercelDeployment {
-  id: string;
-  url: string | null;
-  state: string | null;
-  readyState: string | null;
-  createdAt: number | null;
-  target: string | null;
-  name: string | null;
-  projectId: string | null;
-  inspectorUrl: string | null;
-  meta: Record<string, unknown> | null;
-}
-
 function normalizeDeployment(raw: any): NormalizedVercelDeployment {
-  if (!raw || typeof raw !== 'object') {
-    return {
-      id: '',
-      url: null,
-      state: null,
-      readyState: null,
-      createdAt: null,
-      target: null,
-      name: null,
-      projectId: null,
-      inspectorUrl: null,
-      meta: null,
-    };
-  }
-
-  const id =
-    (typeof raw.id === 'string' && raw.id) ||
-    (typeof raw.uid === 'string' && raw.uid) ||
-    '';
-
-  const url = typeof raw.url === 'string' ? raw.url : null;
-
-  const createdAt =
-    (typeof raw.createdAt === 'number' && raw.createdAt) ||
-    (typeof raw.created === 'number' && raw.created) ||
-    null;
-
-  const state =
-    (typeof raw.state === 'string' && raw.state) ||
-    (typeof raw.status === 'string' && raw.status) ||
-    null;
-
-  const readyState =
-    (typeof raw.readyState === 'string' && raw.readyState) || state;
-
-  const target = typeof raw.target === 'string' ? raw.target : null;
-
-  const name = typeof raw.name === 'string' ? raw.name : null;
-
-  const projectId = typeof raw.projectId === 'string' ? raw.projectId : null;
-
-  const inspectorUrl =
-    typeof raw.inspectorUrl === 'string' ? raw.inspectorUrl : null;
-
-  const meta =
-    raw.meta && typeof raw.meta === 'object'
-      ? (raw.meta as Record<string, unknown>)
-      : null;
-
-  return {
-    id,
-    url,
-    state,
-    readyState,
-    createdAt,
-    target,
-    name,
-    projectId,
-    inspectorUrl,
-    meta,
-  };
+  return normalizeVercelDeployment(raw);
 }
 
 function getVercelCtxFromRepo(repo?: string) {
@@ -302,23 +233,12 @@ export const vercelToolHandlers = {
     const ctx = getVercelCtxFromRepo(args.repo);
     const data = await getLatestDeployments(env, ctx, limit);
 
-    const deploymentsRaw = Array.isArray((data as any).deployments)
-      ? (data as any).deployments
-      : [];
-
-    const deployments = deploymentsRaw
-      .slice(0, limit)
-      .map((d: any) => normalizeDeployment(d));
-
-    const pagination =
-      (data as any).pagination && typeof (data as any).pagination === 'object'
-        ? (data as any).pagination
-        : undefined;
+    // backend/vercel.getLatestDeployments already returns normalized deployments
+    const deployments = (Array.isArray(data) ? data : []).slice(0, limit);
 
     return {
       target: env,
       deployments,
-      ...(pagination ? { pagination } : {}),
     };
   },
 

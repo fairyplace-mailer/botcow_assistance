@@ -1,14 +1,9 @@
 const VERCEL_API_BASE = 'https://api.vercel.com';
 
-const token = process.env.VERCEL_TOKEN;
 const defaultProjectId = process.env.VERCEL_PROJECT_ID;
 const defaultTeamId = process.env.VERCEL_TEAM_ID;
 
 export type VercelTarget = 'production' | 'preview';
-
-if (!token) {
-  throw new Error('VERCEL_TOKEN is not set');
-}
 
 export type VercelContext = {
   projectId?: string;
@@ -20,7 +15,16 @@ export type VercelContext = {
   gitRef?: string;
 };
 
+function getVercelTokenOrThrow(): string {
+  const token = process.env.VERCEL_TOKEN;
+  if (!token) {
+    throw new Error('VERCEL_TOKEN is not set');
+  }
+  return token;
+}
+
 function buildHeaders() {
+  const token = getVercelTokenOrThrow();
   return {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
@@ -187,16 +191,18 @@ function getDeploymentGitMeta(depl: any):
   | undefined {
   const meta = depl?.meta;
   if (!meta || typeof meta !== 'object') return undefined;
-  const sha = typeof (meta as any).githubCommitSha === 'string'
-    ? (meta as any).githubCommitSha
-    : typeof (meta as any).gitSha === 'string'
-      ? (meta as any).gitSha
-      : undefined;
-  const ref = typeof (meta as any).githubCommitRef === 'string'
-    ? (meta as any).githubCommitRef
-    : typeof (meta as any).gitBranch === 'string'
-      ? (meta as any).gitBranch
-      : undefined;
+  const sha =
+    typeof (meta as any).githubCommitSha === 'string'
+      ? (meta as any).githubCommitSha
+      : typeof (meta as any).gitSha === 'string'
+        ? (meta as any).gitSha
+        : undefined;
+  const ref =
+    typeof (meta as any).githubCommitRef === 'string'
+      ? (meta as any).githubCommitRef
+      : typeof (meta as any).gitBranch === 'string'
+        ? (meta as any).gitBranch
+        : undefined;
   return { sha, ref };
 }
 

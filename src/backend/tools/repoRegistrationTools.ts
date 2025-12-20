@@ -17,17 +17,16 @@ function assertNonEmpty(label: string, v: unknown): asserts v is string {
   }
 }
 
-function normalizeRepo(repo: string): string {
+function normalizeRepo(repo: string): { fullName: string; owner: string; name: string } {
   const r = repo.trim();
   const parts = r.split('/');
   if (parts.length !== 2 || !parts[0] || !parts[1]) {
     throw new Error('repo must be in the form "owner/name"');
   }
-  return `${parts[0]}/${parts[1]}`;
+  return { fullName: `${parts[0]}/${parts[1]}`, owner: parts[0], name: parts[1] };
 }
 
-async function getRepoOwnerLogin(repoFullName: string): Promise<string> {
-  const [owner, repo] = repoFullName.split('/');
+async function getRepoOwnerLogin(owner: string, repo: string): Promise<string> {
   const res = await github.repos.get({ owner, repo });
   const ownerLogin = res.data?.owner?.login;
   if (typeof ownerLogin !== 'string' || !ownerLogin) {
@@ -85,7 +84,7 @@ export const repoRegistrationToolSchema = {
 } as const;
 
 export async function repo_register(args: RepoRegistrationArgs) {
-  const repo = normalizeRepo(args.repo);
+  const { fullName: repo, owner, name } = normalizeRepo(args.repo);
   assertNonEmpty('defaultBranch', args.defaultBranch);
   assertNonEmpty('vercel.projectIdEnv', args.vercel?.projectIdEnv);
   if (args.vercel?.teamIdEnv !== undefined) {
@@ -95,7 +94,7 @@ export async function repo_register(args: RepoRegistrationArgs) {
   // Security (per spec): only allow registering repos that belong to the same owner
   // as the authenticated GitHub token.
   const [repoOwner, authedLogin] = await Promise.all([
-    getRepoOwnerLogin(repo),
+    getRepoOwnerLogin(owner, name),
     getAuthenticatedUserLogin(),
   ]);
 

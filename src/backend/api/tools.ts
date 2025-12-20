@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { toolsSchemas, toolsHandlers, type ToolName } from '../tools/index';
+import { toolsSchemas, toolsHandlers } from '../tools/index';
 
 /**
  * GET /tools
@@ -13,6 +13,8 @@ type ToolCallBody = {
   name: string;
   arguments?: unknown;
 };
+
+type ToolName = keyof typeof toolsHandlers;
 
 /**
  * POST /tools/call

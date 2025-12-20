@@ -112,15 +112,8 @@ export async function diagnoseVercelDeployment(args: {
     };
   }
 
-  const raw = found.deployment as any;
-  const deploymentId: string | undefined =
-    typeof raw.id === 'string'
-      ? raw.id
-      : typeof raw.uid === 'string'
-        ? raw.uid
-        : undefined;
-
-  const details = deploymentId ? await getDeploymentStatus(deploymentId, ctx) : raw;
+  const deploymentId = found.id;
+  const details = deploymentId ? await getDeploymentStatus(deploymentId, ctx) : found;
 
   const url = typeof (details as any).url === 'string' ? (details as any).url : null;
   const state =
@@ -148,15 +141,15 @@ export async function diagnoseVercelDeployment(args: {
 
   const summaryParts = [
     `Vercel ${target} deployment: ${readyState ?? state ?? 'unknown'}`,
-    `matchedBy: ${found.matchedBy}`,
+    `matchedBy: latest`,
   ];
 
   return {
     ...(args.repo ? { repo: args.repo } : {}),
     git_sha: args.git_sha,
     target,
-    matchedBy: found.matchedBy,
-    ...(deploymentId ? { deploymentId } : {}),
+    matchedBy: 'latest',
+    deploymentId,
     state,
     readyState,
     url,

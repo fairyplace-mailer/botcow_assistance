@@ -317,8 +317,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_workflow_run_logs_text',
-      description:
-        'Достать логи workflow run как текст (распаковка zip).',
+      description: 'Достать логи workflow run как текст (распаковка zip).',
       parameters: {
         type: 'object',
         properties: {
@@ -473,9 +472,7 @@ export const githubToolHandlers = {
       pull_number: number;
       method?: 'merge' | 'squash' | 'rebase';
       repo?: string;
-    } = {
-      pull_number: args.pull_number,
-    };
+    } = { pull_number: args.pull_number };
 
     if (args.method !== undefined) options.method = args.method;
     if (args.repo !== undefined) options.repo = args.repo;
@@ -651,7 +648,7 @@ export const githubToolHandlers = {
       content: args.content,
       message: args.message,
       branch: args.branch,
-      repo: args.repo,
+      ...(args.repo ? { repo: args.repo } : {}),
     });
   },
 
@@ -665,7 +662,7 @@ export const githubToolHandlers = {
       path: args.path,
       message: args.message,
       branch: args.branch,
-      repo: args.repo,
+      ...(args.repo ? { repo: args.repo } : {}),
     });
   },
 };

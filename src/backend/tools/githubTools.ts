@@ -39,6 +39,16 @@ export const githubToolsSchemas = [
             description:
               'owner/name. Если не задано — используется дефолтный репозиторий.',
           },
+          ref: {
+            type: 'string',
+            description:
+              'Ветка/тег/sha. Если не задано — default branch (внутри инструмента).',
+          },
+          pathPrefix: {
+            type: 'string',
+            description:
+              'Фильтр по префиксу пути (например, "src/backend").',
+          },
         },
       },
     },
@@ -78,6 +88,10 @@ export const githubToolsSchemas = [
             type: 'string',
             description:
               'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+          ref: {
+            type: 'string',
+            description: 'Ветка/тег/sha. Если не задано — default branch.',
           },
         },
         required: ['path'],
@@ -407,8 +421,18 @@ function buildOptional<T extends Record<string, unknown>>(obj: T): {
  * Handlers.
  */
 export const githubToolHandlers = {
-  async github_get_repo_structure(args: { repo?: string }) {
-    return getRepoStructure(args.repo ? { repo: args.repo } : undefined);
+  async github_get_repo_structure(args: {
+    repo?: string;
+    ref?: string;
+    pathPrefix?: string;
+  }) {
+    return getRepoStructure(
+      buildOptional({
+        repo: args.repo,
+        ref: args.ref,
+        pathPrefix: args.pathPrefix,
+      }),
+    );
   },
 
   async github_list_files(args: ListFilesArgs) {
@@ -419,8 +443,8 @@ export const githubToolHandlers = {
     return listFiles(options);
   },
 
-  async github_get_file(args: { path: string; repo?: string }) {
-    return getFile(args.path, args.repo);
+  async github_get_file(args: { path: string; repo?: string; ref?: string }) {
+    return getFile(args.path, args.repo, args.ref);
   },
 
   async github_search_in_repo(args: SearchArgs) {

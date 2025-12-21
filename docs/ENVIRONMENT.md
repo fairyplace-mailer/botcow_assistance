@@ -1,32 +1,21 @@
-# Environment variables
-
-Below is a list of environment variables used by the project.
+# Environment
 
 ## Required
 
-- `OPENAI_API_KEY` — OpenAI API key.
-- `GITHUB_PAT_BOTCOW` — GitHub Personal Access Token used by the bot.
-- `BOTCOW_DEFAULT_REPO` — default repo in `owner/name` format.
+- `BOTCOW_ADMIN_TOKEN`
 
 ## Optional
 
-- `BLOB_READ_WRITE_TOKEN` — Vercel Blob token (required if you use Blob-backed stores).
+### `BOTCOW_CODEX_CHAT_COMPAT`
 
-## CI / GitHub Actions
+Controls whether the router is allowed to select the `gpt-5.1-codex-max` model.
 
-- `GITHUB_WEBHOOK_SECRET` — secret for validating GitHub webhooks.
+Why: some providers / gateways expose `gpt-5.1-codex-max` as a **non-chat** model.
+If selected, calls to `v1/chat/completions` may fail with an error like:
+`This is not a chat model and thus not supported in the v1/chat/completions endpoint.`
 
-## Vercel
+- Default: disabled (treat as `false`).
+- Enable: set `BOTCOW_CODEX_CHAT_COMPAT=1`.
 
-### Webhooks
-
-- `VERCEL_WEBHOOK_SECRET` — secret used to validate incoming Vercel webhooks on:
-  - `POST /api/vercel/webhook`
-
-Without this variable the endpoint returns `500` and does not accept webhooks.
-
-### API (optional)
-
-- `VERCEL_TOKEN` — Vercel API token (used for polling helpers like `getLatestDeployments()` and `getDeploymentStatus()`).
-- `VERCEL_TEAM_ID` — Vercel team id.
-- `VERCEL_PROJECT_ID` — Vercel project id.
+When disabled, code-generation / small refactor requests will fall back to:
+- `gpt-5.2` with `reasoning.effort=high`.

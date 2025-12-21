@@ -1,5 +1,6 @@
 import { Octokit } from '@octokit/rest';
 import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
+import { logEvent } from './log';
 
 const token = process.env.GITHUB_PAT_BOTCOW;
 
@@ -56,6 +57,162 @@ export type NormalizedJob = {
   completed_at?: string | null;
   html_url?: string | null;
 };
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number) {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+function normalizeQuery(q: string) {
+  return q.trim().replace(/\s+/g, ' ');
+}
+
+function buildSearchQuery(args: {
+  query: string;
+  owner: string;
+  repo: string;
+  path?: string;
+}) {
+  const baseQuery = normalizeQuery(args.query);
+
+  // Avoid duplicating repo/path qualifiers if caller already inserted them.
+  const hasRepoQualifier = /(^|\s)repo:/.test(baseQuery);
+  const hasPathQualifier = /(^|\s)path:/.test(baseQuery);
+
+  let q = baseQuery;
+  if (!hasRepoQualifier) {
+    q += ` repo:${args.owner}/${args.repo}`;
+  }
+  if (args.path && !hasPathQualifier) {
+    q += ` path:${args.path}`;
+  }
+
+  return q;
+}
+
+type SearchCodeParams = {
+  q: string;
+  per_page: number;
+  page: number;
+};
+
+function getHeaderValue(headers: any, name: string): string | undefined {
+  if (!headers) return undefined;
+  const lower = name.toLowerCase();
+  return headers[name] ?? headers[lower];
+}
+
+function isSecondaryRateLimitError(error: any): boolean {
+  const msg =
+    (typeof error?.message === 'string' ? error.message : '') +
+    ' ' +
+    (typeof error?.response?.data?.message === 'string'
+      ? error.response.data.message
+      : '');
+  return /secondary rate limit/i.test(msg);
+}
+
+async function searchCodeWithRetry(params: SearchCodeParams) {
+  const maxRetries = 4;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await github.search.code({
+        q: params.q,
+        per_page: params.per_page,
+        page: params.page,
+      });
+    } catch (error: any) {
+      const status = error?.status ?? error?.response?.status;
+      const headers = error?.response?.headers;
+
+      const remainingStr = getHeaderValue(headers, 'x-ratelimit-remaining');
+      const resetStr = getHeaderValue(headers, 'x-ratelimit-reset');
+      const remaining =
+        remainingStr !== undefined ? Number.parseInt(remainingStr, 10) : undefined;
+      const resetSec =
+        resetStr !== undefined ? Number.parseInt(resetStr, 10) : undefined;
+
+      const isRateLimitExceeded = status === 403 && remaining === 0;
+      const isSecondary = status === 403 && isSecondaryRateLimitError(error);
+
+      if (attempt >= maxRetries || (!isRateLimitExceeded && !isSecondary)) {
+        throw error;
+      }
+
+      if (isRateLimitExceeded && resetSec) {
+        const resetMs = resetSec * 1000;
+        const now = Date.now();
+        const jitterMs = 100 + Math.floor(Math.random() * 400);
+        const waitMs = Math.max(0, resetMs - now) + jitterMs;
+
+        // Best-effort: do not break the request if logging fails.
+        try {
+          await logEvent('github_search_rate_limited_wait', {
+            attempt,
+            waitMs,
+            remaining,
+            resetSec,
+          });
+        } catch {
+          // ignore
+        }
+
+        await sleep(waitMs);
+        continue;
+      }
+
+      // Secondary rate limit / abuse detection fallback
+      const backoffMs = Math.min(20000, 1000 * 2 ** attempt);
+      try {
+        await logEvent('github_search_secondary_rate_limit_backoff', {
+          attempt,
+          backoffMs,
+        });
+      } catch {
+        // ignore
+      }
+      await sleep(backoffMs);
+    }
+  }
+
+  // Unreachable due to throw/return in loop.
+  throw new Error('searchCodeWithRetry: exhausted');
+}
+
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const SEARCH_CACHE_MAX_ENTRIES = 300;
+
+type SearchInRepoResultItem = {
+  path: string;
+  repository: string;
+  score: number;
+  url: string;
+};
+
+const searchCache = new Map<
+  string,
+  { expiresAt: number; data: SearchInRepoResultItem[] }
+>();
+const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
+
+function purgeExpiredSearchCache() {
+  const now = Date.now();
+  for (const [k, v] of searchCache.entries()) {
+    if (v.expiresAt <= now) searchCache.delete(k);
+  }
+  // Basic LRU-ish cap: delete oldest inserted keys (Map preserves insertion order).
+  while (searchCache.size > SEARCH_CACHE_MAX_ENTRIES) {
+    const firstKey = searchCache.keys().next().value as string | undefined;
+    if (!firstKey) break;
+    searchCache.delete(firstKey);
+  }
+}
 
 /**
  * Прочитать файл (UTF-8 текст) по пути.
@@ -181,26 +338,77 @@ export async function searchInRepo(options: {
   path?: string;
   repo?: string;
   per_page?: number;
-}) {
+  page?: number;
+}): Promise<SearchInRepoResultItem[]> {
   const { owner, repo } = parseRepo(options.repo);
-  const per_page = options.per_page ?? 20;
 
-  let q = `${options.query} repo:${owner}/${repo}`;
-  if (options.path) {
-    q += ` path:${options.path}`;
-  }
+  const per_page = clampInt(options.per_page, 1, 50, 20);
+  const page = clampInt(options.page, 1, 5, 1);
 
-  const res = await github.search.code({
-    q,
-    per_page,
+  const q = buildSearchQuery({
+    query: options.query,
+    owner,
+    repo,
+    ...(options.path ? { path: options.path } : {}),
   });
 
-  return res.data.items.map((item) => ({
-    path: item.path,
-    repository: item.repository.full_name,
-    score: item.score,
-    url: item.html_url,
-  }));
+  purgeExpiredSearchCache();
+
+  const cacheKey = `${q}::per_page=${per_page}::page=${page}`;
+
+  const cached = searchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    try {
+      await logEvent('github_search_cache_hit', {
+        page,
+        per_page,
+      });
+    } catch {
+      // ignore
+    }
+    return cached.data;
+  }
+
+  const inflight = searchInflight.get(cacheKey);
+  if (inflight) {
+    try {
+      await logEvent('github_search_inflight_join', {
+        page,
+        per_page,
+      });
+    } catch {
+      // ignore
+    }
+    return inflight;
+  }
+
+  const promise = (async () => {
+    const res = await searchCodeWithRetry({ q, per_page, page });
+
+    const items: SearchInRepoResultItem[] = res.data.items.map((item) => ({
+      path: item.path,
+      repository: item.repository.full_name,
+      score: item.score,
+      url: item.html_url,
+    }));
+
+    searchCache.set(cacheKey, {
+      expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
+      data: items,
+    });
+
+    purgeExpiredSearchCache();
+
+    return items;
+  })();
+
+  searchInflight.set(cacheKey, promise);
+
+  try {
+    return await promise;
+  } finally {
+    searchInflight.delete(cacheKey);
+  }
 }
 
 /**

@@ -25,6 +25,8 @@ const MODEL_FAST: ModelConfig = { model: 'gpt-5.2', reasoning: { effort: 'none' 
 const MODEL_DEEP: ModelConfig = { model: 'gpt-5.2', reasoning: { effort: 'high' } };
 const MODEL_CODEX: ModelConfig = { model: 'gpt-5.1-codex-max' };
 
+const CODEX_CHAT_COMPAT = process.env.BOTCOW_CODEX_CHAT_COMPAT === '1';
+
 export function chooseModel(
   messages: Array<{ role: string; content: unknown }>,
 ): ModelRoutingDecision {
@@ -59,7 +61,16 @@ export function chooseModel(
     };
   }
 
-  // 2) Архитектура, дизайн, большие задачки → gpt-5.2 (drop-in)
+  // 2) PM / статусы / деплой / Vercel → gpt-5.2 (effort=none)
+  // Держим этот путь выше «кодового», чтобы короткие запросы про деплой не перехватывались логами/диффами.
+  if (flags.hasPmWords && length < 2000) {
+    return {
+      ...MODEL_FAST,
+      reason: 'pm-or-status-or-deploy',
+    };
+  }
+
+  // 3) Архитектура, дизайн, большие задачки → gpt-5.2 (drop-in)
   if (flags.hasArchWords || (longContext && manyMessages)) {
     return {
       ...MODEL_DEFAULT,
@@ -67,7 +78,7 @@ export function chooseModel(
     };
   }
 
-  // 3) Генерация/мелкий рефактор кода → gpt-5.1-codex-max
+  // 4) Генерация/мелкий рефактор кода
   if (
     flags.hasCodeFence ||
     flags.hasTsKeywords ||
@@ -82,17 +93,18 @@ export function chooseModel(
       };
     }
 
+    // Codex может не поддерживать chat.completions у некоторых провайдеров.
+    // Если флаг не включен — никогда не выбираем codex, а деградируем в качество.
+    if (!CODEX_CHAT_COMPAT) {
+      return {
+        ...MODEL_DEEP,
+        reason: 'codex-not-chat-compatible-fallback-to-gpt-5.2-high',
+      };
+    }
+
     return {
       ...MODEL_CODEX,
       reason: 'code-gen-or-small-refactor',
-    };
-  }
-
-  // 4) PM / статусы / деплой / Vercel → gpt-5.2 (effort=none)
-  if (flags.hasPmWords && length < 2000) {
-    return {
-      ...MODEL_FAST,
-      reason: 'pm-or-status-or-deploy',
     };
   }
 
@@ -185,9 +197,7 @@ function detectFlags(text: string) {
     /bug|баг|ошибк|сломалось|crash|crashed|падает|falling/i.test(text);
 
   const hasReviewWords =
-    /review|ревью|code review|проверь код|посмотри дифф|посмотри diff/i.test(
-      lower,
-    );
+    /review|ревью|code review|проверь код|посмотри дифф|посмотри diff/i.test(lower);
 
   const hasDiff =
     /diff --git|@@ .+ @@|^\+\+\+ |^--- /m.test(text) || /```diff/.test(text);

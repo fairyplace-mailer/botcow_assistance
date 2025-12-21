@@ -1,6 +1,9 @@
 import {
+  commitFile,
+  createBranch,
   createIssue,
   createPullRequest,
+  deleteFile,
   downloadWorkflowRunLogs,
   getFile,
   getRepoStructure,
@@ -35,6 +38,16 @@ export const githubToolsSchemas = [
             type: 'string',
             description:
               'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+          ref: {
+            type: 'string',
+            description:
+              'Ветка/тег/sha. Если не задано — default branch (внутри инструмента).',
+          },
+          pathPrefix: {
+            type: 'string',
+            description:
+              'Фильтр по префиксу пути (например, "src/backend").',
           },
         },
       },
@@ -75,6 +88,10 @@ export const githubToolsSchemas = [
             type: 'string',
             description:
               'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+          ref: {
+            type: 'string',
+            description: 'Ветка/тег/sha. Если не задано — default branch.',
           },
         },
         required: ['path'],
@@ -190,6 +207,77 @@ export const githubToolsSchemas = [
     },
   },
 
+  // Git write tools
+  {
+    type: 'function',
+    function: {
+      name: 'github_create_branch',
+      description: 'Создать ветку от baseBranch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'Имя новой ветки.' },
+          base: {
+            type: 'string',
+            description: 'Базовая ветка. По умолчанию: main.',
+          },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+        },
+        required: ['branch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_commit_file',
+      description: 'Создать или обновить файл (commit) в указанной ветке.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь файла в репозитории.' },
+          content: {
+            type: 'string',
+            description: 'Полное содержимое файла (utf-8).',
+          },
+          message: { type: 'string', description: 'Commit message.' },
+          branch: { type: 'string', description: 'Ветка, в которую коммитим.' },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+        },
+        required: ['path', 'content', 'message', 'branch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_delete_file',
+      description: 'Удалить файл в указанной ветке.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь файла в репозитории.' },
+          message: { type: 'string', description: 'Commit message.' },
+          branch: { type: 'string', description: 'Ветка, из которой удаляем.' },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+        },
+        required: ['path', 'message', 'branch'],
+      },
+    },
+  },
+
   // Actions
   {
     type: 'function',
@@ -243,8 +331,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_workflow_run_logs_text',
-      description:
-        'Достать логи workflow run как текст (распаковка zip).',
+      description: 'Достать логи workflow run как текст (распаковка zip).',
       parameters: {
         type: 'object',
         properties: {
@@ -334,8 +421,18 @@ function buildOptional<T extends Record<string, unknown>>(obj: T): {
  * Handlers.
  */
 export const githubToolHandlers = {
-  async github_get_repo_structure(args: { repo?: string }) {
-    return getRepoStructure(args.repo ? { repo: args.repo } : undefined);
+  async github_get_repo_structure(args: {
+    repo?: string;
+    ref?: string;
+    pathPrefix?: string;
+  }) {
+    return getRepoStructure(
+      buildOptional({
+        repo: args.repo,
+        ref: args.ref,
+        pathPrefix: args.pathPrefix,
+      }),
+    );
   },
 
   async github_list_files(args: ListFilesArgs) {
@@ -346,8 +443,8 @@ export const githubToolHandlers = {
     return listFiles(options);
   },
 
-  async github_get_file(args: { path: string; repo?: string }) {
-    return getFile(args.path, args.repo);
+  async github_get_file(args: { path: string; repo?: string; ref?: string }) {
+    return getFile(args.path, args.repo, args.ref);
   },
 
   async github_search_in_repo(args: SearchArgs) {
@@ -399,9 +496,7 @@ export const githubToolHandlers = {
       pull_number: number;
       method?: 'merge' | 'squash' | 'rebase';
       repo?: string;
-    } = {
-      pull_number: args.pull_number,
-    };
+    } = { pull_number: args.pull_number };
 
     if (args.method !== undefined) options.method = args.method;
     if (args.repo !== undefined) options.repo = args.repo;
@@ -559,5 +654,39 @@ export const githubToolHandlers = {
     workflow_id?: string;
   }) {
     return githubDiagnoseActionsSetup(args);
+  },
+
+  async github_create_branch(args: { branch: string; base?: string; repo?: string }) {
+    return createBranch(args.branch, args.base ?? 'main', args.repo);
+  },
+
+  async github_commit_file(args: {
+    path: string;
+    content: string;
+    message: string;
+    branch: string;
+    repo?: string;
+  }) {
+    return commitFile({
+      path: args.path,
+      content: args.content,
+      message: args.message,
+      branch: args.branch,
+      ...(args.repo ? { repo: args.repo } : {}),
+    });
+  },
+
+  async github_delete_file(args: {
+    path: string;
+    message: string;
+    branch: string;
+    repo?: string;
+  }) {
+    return deleteFile({
+      path: args.path,
+      message: args.message,
+      branch: args.branch,
+      ...(args.repo ? { repo: args.repo } : {}),
+    });
   },
 };

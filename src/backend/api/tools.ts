@@ -1,10 +1,10 @@
 import type { NextFunction, Request, Response } from 'express';
 import { toolsSchemas, toolsHandlers } from '../tools/index';
 
-function parseBearerToken(header: unknown): string | null {
-  if (!header || typeof header !== 'string') return null;
+function parseBearerToken(header: unknown): string | undefined {
+  if (!header || typeof header !== 'string') return undefined;
   const m = /^Bearer\s+(.+)$/i.exec(header.trim());
-  return m ? m[1] : null;
+  return m ? m[1] : undefined;
 }
 
 function requireAdminBearerAuthExpress(req: Request, res: Response, next: NextFunction) {

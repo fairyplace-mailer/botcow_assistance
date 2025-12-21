@@ -1,6 +1,9 @@
 import {
+  commitFile,
+  createBranch,
   createIssue,
   createPullRequest,
+  deleteFile,
   downloadWorkflowRunLogs,
   getFile,
   getRepoStructure,
@@ -186,6 +189,77 @@ export const githubToolsSchemas = [
           labels: { type: 'array', items: { type: 'string' } },
           repo: { type: 'string' },
         },
+      },
+    },
+  },
+
+  // Git write tools
+  {
+    type: 'function',
+    function: {
+      name: 'github_create_branch',
+      description: 'Создать ветку от baseBranch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'Имя новой ветки.' },
+          base: {
+            type: 'string',
+            description: 'Базовая ветка. По умолчанию: main.',
+          },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+        },
+        required: ['branch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_commit_file',
+      description: 'Создать или обновить файл (commit) в указанной ветке.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь файла в репозитории.' },
+          content: {
+            type: 'string',
+            description: 'Полное содержимое файла (utf-8).',
+          },
+          message: { type: 'string', description: 'Commit message.' },
+          branch: { type: 'string', description: 'Ветка, в которую коммитим.' },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+        },
+        required: ['path', 'content', 'message', 'branch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_delete_file',
+      description: 'Удалить файл в указанной ветке.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Путь файла в репозитории.' },
+          message: { type: 'string', description: 'Commit message.' },
+          branch: { type: 'string', description: 'Ветка, из которой удаляем.' },
+          repo: {
+            type: 'string',
+            description:
+              'owner/name. Если не задано — используется дефолтный репозиторий.',
+          },
+        },
+        required: ['path', 'message', 'branch'],
       },
     },
   },
@@ -559,5 +633,39 @@ export const githubToolHandlers = {
     workflow_id?: string;
   }) {
     return githubDiagnoseActionsSetup(args);
+  },
+
+  async github_create_branch(args: { branch: string; base?: string; repo?: string }) {
+    return createBranch(args.branch, args.base ?? 'main', args.repo);
+  },
+
+  async github_commit_file(args: {
+    path: string;
+    content: string;
+    message: string;
+    branch: string;
+    repo?: string;
+  }) {
+    return commitFile({
+      path: args.path,
+      content: args.content,
+      message: args.message,
+      branch: args.branch,
+      repo: args.repo,
+    });
+  },
+
+  async github_delete_file(args: {
+    path: string;
+    message: string;
+    branch: string;
+    repo?: string;
+  }) {
+    return deleteFile({
+      path: args.path,
+      message: args.message,
+      branch: args.branch,
+      repo: args.repo,
+    });
   },
 };

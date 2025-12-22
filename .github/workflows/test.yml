@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - botcow-prevectus
-  pull_request:
-    branches:
-      - botcow-prevectus
 
 jobs:
   test:

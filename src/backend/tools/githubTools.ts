@@ -113,7 +113,14 @@ export const githubToolsSchemas = [
             description:
               'owner/name. Если не задано — используется дефолтный репозиторий.',
           },
-          per_page: { type: 'number', description: 'Кол-во (до 100).' },
+          per_page: {
+            type: 'number',
+            description: 'Кол-во (рекомендуется ≤ 50).',
+          },
+          page: {
+            type: 'number',
+            description: 'Страница результатов (начиная с 1).',
+          },
         },
         required: ['query'],
       },
@@ -405,6 +412,7 @@ type SearchArgs = {
   path?: string;
   repo?: string;
   per_page?: number;
+  page?: number;
 };
 
 function buildOptional<T extends Record<string, unknown>>(obj: T): {
@@ -453,11 +461,13 @@ export const githubToolHandlers = {
       path?: string;
       repo?: string;
       per_page?: number;
+      page?: number;
     } = { query: args.query };
 
     if (args.path !== undefined) options.path = args.path;
     if (args.repo !== undefined) options.repo = args.repo;
     if (args.per_page !== undefined) options.per_page = args.per_page;
+    if (args.page !== undefined) options.page = args.page;
 
     return searchInRepo(options);
   },

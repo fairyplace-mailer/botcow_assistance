@@ -28,7 +28,7 @@ export function extractWorkflowRunLogsTextFromZipBase64(
   const files: Array<{ path: string; size: number }> = [];
 
   // GH Actions logs zip has files like: <job name>/<step name>.txt
-  let textParts: string[] = [];
+  const textParts: string[] = [];
   let total = 0;
   let truncated = false;
 

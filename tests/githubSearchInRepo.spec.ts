@@ -121,6 +121,9 @@ describe('searchInRepo', () => {
   it('retries on rate limit exceeded using x-ratelimit-reset', async () => {
     jest.useFakeTimers();
 
+    // Use a unique query to avoid interaction with cache from previous tests.
+    const query = `foo-${Date.now()}`;
+
     const nowSec = Math.floor(Date.now() / 1000);
     const resetSec = nowSec + 1;
 
@@ -142,13 +145,13 @@ describe('searchInRepo', () => {
 
     const promise = searchInRepo({
       repo: 'fairyplace-mailer/botcow_assistance',
-      query: 'foo',
+      query,
       per_page: 10,
       page: 1,
     });
 
-    // advance enough for wait + jitter (<= 1400ms)
-    await jest.advanceTimersByTimeAsync(2000);
+    // advance enough for wait + jitter
+    await jest.advanceTimersByTimeAsync(2500);
 
     const res = await promise;
 

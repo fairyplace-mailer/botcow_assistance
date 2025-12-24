@@ -1,4 +1,18 @@
-import { github, searchInRepo, __resetSearchStateForTests } from '../src/backend/github';
+import { __resetSearchStateForTests, getGithubClient, searchInRepo } from '../src/backend/github';
+
+jest.mock('../src/backend/github', () => {
+  const actual = jest.requireActual('../src/backend/github');
+
+  // Provide a stable mock Octokit-like client for tests.
+  const mockClient = {
+    search: { code: jest.fn() },
+  };
+
+  return {
+    ...actual,
+    getGithubClient: jest.fn(() => mockClient),
+  };
+});
 
 function makeRateLimitError(resetSec: number) {
   const err: any = new Error('rate limit exceeded');
@@ -19,9 +33,14 @@ describe('searchInRepo', () => {
     __resetSearchStateForTests();
     jest.restoreAllMocks();
     jest.useRealTimers();
+
+    // Reset calls on our mocked client between tests.
+    const github = getGithubClient() as any;
+    github.search.code.mockReset();
   });
 
   it('passes page to github.search.code', async () => {
+    const github = getGithubClient() as any;
     const spy = jest.spyOn(github.search, 'code').mockResolvedValue({
       data: {
         items: [
@@ -53,6 +72,7 @@ describe('searchInRepo', () => {
   });
 
   it('caches identical requests (same q/per_page/page)', async () => {
+    const github = getGithubClient() as any;
     const spy = jest.spyOn(github.search, 'code').mockResolvedValue({
       data: {
         items: [
@@ -81,6 +101,7 @@ describe('searchInRepo', () => {
   });
 
   it('deduplicates inflight requests', async () => {
+    const github = getGithubClient() as any;
     let resolveFn: ((v: any) => void) | null = null;
 
     const spy = jest.spyOn(github.search, 'code').mockImplementation(
@@ -125,6 +146,7 @@ describe('searchInRepo', () => {
     const nowSec = Math.floor(Date.now() / 1000);
     const resetSec = nowSec + 1;
 
+    const github = getGithubClient() as any;
     const spy = jest
       .spyOn(github.search, 'code')
       .mockRejectedValueOnce(makeRateLimitError(resetSec))

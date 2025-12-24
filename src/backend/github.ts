@@ -4,6 +4,9 @@ import { logEvent } from './log';
 
 let githubClient: Octokit | null = null;
 
+// Test-only injection (kept null in runtime)
+let githubClientForTests: Octokit | null = null;
+
 function getGithubToken(): string {
   const token = process.env.GITHUB_PAT_BOTCOW;
   if (!token) {
@@ -15,9 +18,23 @@ function getGithubToken(): string {
 }
 
 export function getGithubClient(): Octokit {
+  if (githubClientForTests) return githubClientForTests;
   if (githubClient) return githubClient;
   githubClient = new Octokit({ auth: getGithubToken() });
   return githubClient;
+}
+
+/**
+ * Test-only: inject a fake Octokit client.
+ * This avoids touching env vars and makes unit tests deterministic.
+ */
+export function __setGithubClientForTests(client: Octokit) {
+  githubClientForTests = client;
+}
+
+/** Test-only: reset injected client. */
+export function __resetGithubClientForTests() {
+  githubClientForTests = null;
 }
 
 // Backwards-compatible export: many modules import { github }.
@@ -702,7 +719,7 @@ export async function getWorkflowStatus(options: {
 
   const run = await github.actions.getWorkflowRun({
     owner,
-       repo,
+    repo,
     run_id: options.run_id,
   });
 

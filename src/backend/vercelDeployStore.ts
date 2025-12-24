@@ -43,7 +43,7 @@ export interface DeploymentIndexEntry {
 const LATEST_TTL_SECONDS = 20 * 24 * 60 * 60; // 20 days
 
 function sanitizeKeyPart(v: string) {
-  return v.replace(/[^a-zA-Z0-9._\-\/]/g, '_');
+  return v.replace(/[^a-zA-Z0-9._\-/]/g, '_');
 }
 
 function repoKey(repoFullName: string) {

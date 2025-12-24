@@ -1,4 +1,4 @@
-import { getBlobJson, putBlob } from './blob-util';
+import { kvGetJson, kvSetJson } from './kv';
 
 export type VercelDeploymentState =
   | 'created'
@@ -40,46 +40,37 @@ export interface DeploymentIndexEntry {
   gitSha: string | null;
 }
 
+const LATEST_TTL_SECONDS = 20 * 24 * 60 * 60; // 20 days
+
 function sanitizeKeyPart(v: string) {
-  return v.replace(/[^a-zA-Z0-9._\-\/]/g, '_');
+  return v.replace(/[^a-zA-Z0-9._\-/]/g, '_');
 }
 
 function repoKey(repoFullName: string) {
   return sanitizeKeyPart(repoFullName);
 }
 
-export function blobPathForDeployment(repoFullName: string, deploymentId: string) {
-  return `vercel/deployments/${repoKey(repoFullName)}/${deploymentId}.json`;
+function kvKeyForDeployment(repoFullName: string, deploymentId: string) {
+  return `vercel:deployment:${repoKey(repoFullName)}:${deploymentId}`;
 }
 
-export function blobPathForShaIndex(repoFullName: string, gitSha: string) {
-  return `vercel/index/by-sha/${repoKey(repoFullName)}/${gitSha}.json`;
+function kvKeyForLatestBySha(repoFullName: string, gitSha: string) {
+  return `vercel:latestBySha:${repoKey(repoFullName)}:${gitSha}`;
 }
 
-export function blobPathForBranchIndex(repoFullName: string, branch: string) {
-  return `vercel/index/by-branch/${repoKey(repoFullName)}/${sanitizeKeyPart(branch)}.json`;
-}
-
-async function upsertIndex(
-  path: string,
-  entry: DeploymentIndexEntry,
-  limit: number,
-): Promise<void> {
-  const current = (await getBlobJson<DeploymentIndexEntry[]>(path)) ?? [];
-  const filtered = current.filter((e) => e.deploymentId !== entry.deploymentId);
-  const next = [entry, ...filtered]
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, limit);
-
-  await putBlob(path, JSON.stringify(next, null, 2));
+function kvKeyForLatestByBranch(repoFullName: string, branch: string) {
+  return `vercel:latestByBranch:${repoKey(repoFullName)}:${sanitizeKeyPart(branch)}`;
 }
 
 export async function saveDeployment(
   repoFullName: string,
   deployment: StoredVercelDeployment,
 ) {
-  const depPath = blobPathForDeployment(repoFullName, deployment.deploymentId);
-  await putBlob(depPath, JSON.stringify(deployment, null, 2));
+  // Store the full deployment record (no TTL by default)
+  await kvSetJson(
+    kvKeyForDeployment(repoFullName, deployment.deploymentId),
+    deployment,
+  );
 
   const indexEntry: DeploymentIndexEntry = {
     deploymentId: deployment.deploymentId,
@@ -91,32 +82,30 @@ export async function saveDeployment(
   };
 
   if (deployment.gitSha) {
-    await upsertIndex(
-      blobPathForShaIndex(repoFullName, deployment.gitSha),
-      indexEntry,
-      10,
-    );
+    await kvSetJson(kvKeyForLatestBySha(repoFullName, deployment.gitSha), indexEntry, {
+      exSeconds: LATEST_TTL_SECONDS,
+    });
   }
 
   if (deployment.gitBranch) {
-    await upsertIndex(
-      blobPathForBranchIndex(repoFullName, deployment.gitBranch),
+    await kvSetJson(
+      kvKeyForLatestByBranch(repoFullName, deployment.gitBranch),
       indexEntry,
-      10,
+      { exSeconds: LATEST_TTL_SECONDS },
     );
   }
 }
 
 export async function getLatestForSha(repoFullName: string, gitSha: string) {
-  const list = await getBlobJson<DeploymentIndexEntry[]>(
-    blobPathForShaIndex(repoFullName, gitSha),
+  const entry = await kvGetJson<DeploymentIndexEntry>(
+    kvKeyForLatestBySha(repoFullName, gitSha),
   );
-  return (list && list[0]) || null;
+  return entry ?? null;
 }
 
 export async function getLatestForBranch(repoFullName: string, branch: string) {
-  const list = await getBlobJson<DeploymentIndexEntry[]>(
-    blobPathForBranchIndex(repoFullName, branch),
+  const entry = await kvGetJson<DeploymentIndexEntry>(
+    kvKeyForLatestByBranch(repoFullName, branch),
   );
-  return (list && list[0]) || null;
+  return entry ?? null;
 }

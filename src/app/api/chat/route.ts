@@ -161,20 +161,6 @@ export async function POST(req: Request) {
       );
     }
 
-    const responsePayload = {
-      // оставляем "сырой" completion на корне — для фронта ничего не ломается
-      ...completion,
-      // наша дополнительная структура — под неймспейсом
-      botcowMeta: {
-        ok: true,
-        model: routing.model,
-        modelReason: routing.reason,
-        message: finalMessage,
-        toolCalls: result.toolCalls,
-        usage: completion.usage ?? null,
-      },
-    };
-
     // ВАЖНО: возвращаем именно "сырое" completion — как раньше,
     // чтобы фронт работал как до всех изменений
     return NextResponse.json(completion);

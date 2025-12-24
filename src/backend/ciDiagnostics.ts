@@ -50,7 +50,7 @@ function extractErrorLinesFromLogs(text: string, maxLines = 60): string[] {
     /Next\.js build worker exited with code/i,
     /ELIFECYCLE/i,
     /npm ERR!/i,
-    /Command \".+\" exited with/i,
+    /Command ".+" exited with/i,
   ];
 
   const hits: number[] = [];

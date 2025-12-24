@@ -1,5 +1,12 @@
-import { runWorkflow, listWorkflowRuns, getWorkflowStatus, getRecentCommits, commitFile, getFile } from './github';
-import { saveRun, getLastRun } from './ciStore';
+import {
+  commitFile,
+  getFile,
+  getRecentCommits,
+  getWorkflowStatus,
+  listWorkflowRuns,
+  runWorkflow,
+} from './github';
+import { saveRun } from './ciStore';
 
 export type RunTrackResult = {
   runId: number | null;
@@ -16,7 +23,8 @@ const STORE_COMMIT_BRANCH = 'botcow-prevectus'; // per user request — persist 
 /**
  * Запустить workflow и попытаться отследить созданный run_id.
  * Сначала пытаемся сопоставить по head_sha (коммиту) — это даёт надёжность.
- * Сохраняем запись в репозитории (файл .botcow/ci-runs.json в ветке botcow-prevectus). Если commit неудачен — fallback в локальное хранилище.
+ * Сохраняем запись в репозитории (файл .botcow/ci-runs.json в ветке botcow-prevectus).
+ * Если commit неудачен — fallback в локальное хранилище.
  */
 export async function runWorkflowAndTrack(options: {
   workflow_id?: string;
@@ -43,13 +51,17 @@ export async function runWorkflowAndTrack(options: {
     ) {
       commitSha = (commits[0] as any).sha as string;
     }
-  } catch (e) {
+  } catch {
     // best-effort — continue without commitSha
-    // console.warn('ciRunner: getRecentCommits failed', e);
   }
 
   // trigger workflow dispatch (doesn't return run id)
-  const dispatchParams: { workflow_id: string; ref: string; repo: string; inputs?: Record<string, string> } = {
+  const dispatchParams: {
+    workflow_id: string;
+    ref: string;
+    repo: string;
+    inputs?: Record<string, string>;
+  } = {
     workflow_id,
     ref,
     repo,
@@ -64,7 +76,6 @@ export async function runWorkflowAndTrack(options: {
   let foundRunId: number | null = null;
 
   try {
-    const repoName = repo;
     const maxAttempts = 20;
     let attempt = 0;
     const perPage = 10;
@@ -75,7 +86,7 @@ export async function runWorkflowAndTrack(options: {
       const res = await listWorkflowRuns({
         workflow_id,
         branch: ref,
-        repo: repoName,
+        repo,
         event: 'workflow_dispatch',
         per_page: perPage,
       });
@@ -116,7 +127,7 @@ export async function runWorkflowAndTrack(options: {
       const waitMs = Math.min(1000 * Math.pow(2, Math.min(attempt, 5)), 10000);
       await new Promise((r) => setTimeout(r, waitMs));
     }
-  } catch (e) {
+  } catch {
     // ignore - best-effort
   }
 
@@ -140,7 +151,7 @@ export async function runWorkflowAndTrack(options: {
       data = JSON.parse(raw || '{}');
     } catch (err: any) {
       // if not found (404) we'll create new
-      // console.warn('ciRunner: store file read failed', err?.message || err);
+      void err;
     }
 
     data[repo] = record;
@@ -156,7 +167,7 @@ export async function runWorkflowAndTrack(options: {
     stored = 'repo';
   } catch (err: any) {
     // If commit fails (permissions etc) — fallback to local store
-    // console.warn('ciRunner: commit to repo failed, fallback to local store', err?.message || err);
+    void err;
     try {
       await saveRun(repo, {
         run_id: record.run_id,
@@ -165,7 +176,7 @@ export async function runWorkflowAndTrack(options: {
         startedAt: record.startedAt,
         status: record.status,
       });
-    } catch (e) {
+    } catch {
       // swallow
     }
     stored = 'local';

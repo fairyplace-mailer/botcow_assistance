@@ -2,15 +2,52 @@ import { Octokit } from '@octokit/rest';
 import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
 import { logEvent } from './log';
 
-const token = process.env.GITHUB_PAT_BOTCOW;
+let githubClient: Octokit | null = null;
 
-if (!token) {
-  throw new Error('GITHUB_PAT_BOTCOW is not set');
+// Test-only injection (kept null in runtime)
+let githubClientForTests: Octokit | null = null;
+
+function getGithubToken(): string {
+  const token = process.env.GITHUB_PAT_BOTCOW;
+  if (!token) {
+    // IMPORTANT: do not throw at module import time.
+    // Next.js may evaluate route modules during build/"collect page data".
+    throw new Error('GITHUB_PAT_BOTCOW is not set');
+  }
+  return token;
 }
 
-export const github = new Octokit({
-  auth: token,
-});
+export function getGithubClient(): Octokit {
+  if (githubClientForTests) return githubClientForTests;
+  if (githubClient) return githubClient;
+  githubClient = new Octokit({ auth: getGithubToken() });
+  return githubClient;
+}
+
+/**
+ * Test-only: inject a fake Octokit client.
+ * This avoids touching env vars and makes unit tests deterministic.
+ */
+export function __setGithubClientForTests(client: Octokit) {
+  githubClientForTests = client;
+}
+
+/** Test-only: reset injected client. */
+export function __resetGithubClientForTests() {
+  githubClientForTests = null;
+}
+
+// Backwards-compatible export: many modules import { github }.
+// This must NOT trigger auth/env reads during module evaluation.
+export const github = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      const client = getGithubClient() as any;
+      return client[prop];
+    },
+  },
+) as unknown as Octokit;
 
 function getDefaultRepo(): string {
   // Source of truth: config/repos.yml
@@ -119,6 +156,7 @@ function isSecondaryRateLimitError(error: any): boolean {
 
 async function searchCodeWithRetry(params: SearchCodeParams) {
   const maxRetries = 4;
+  const github = getGithubClient();
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -201,6 +239,15 @@ const searchCache = new Map<
 >();
 const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
 
+/**
+ * Test-only helper to make unit tests deterministic.
+ * Not used in runtime code.
+ */
+export function __resetSearchStateForTests() {
+  searchCache.clear();
+  searchInflight.clear();
+}
+
 function purgeExpiredSearchCache() {
   const now = Date.now();
   for (const [k, v] of searchCache.entries()) {
@@ -214,10 +261,8 @@ function purgeExpiredSearchCache() {
   }
 }
 
-/**
- * Прочитать файл (UTF-8 текст) по пути.
- */
 export async function getFile(path: string, repo?: string, ref?: string) {
+  const github = getGithubClient();
   const { owner, repo: repoName } = parseRepo(repo);
 
   const params: Parameters<typeof github.repos.getContent>[0] = {
@@ -240,14 +285,12 @@ export async function getFile(path: string, repo?: string, ref?: string) {
   return raw;
 }
 
-/**
- * Получить структуру репозитория (дерево файлов).
- */
 export async function getRepoStructure(options?: {
   repo?: string;
-  ref?: string; // ветка или SHA, по умолчанию default_branch
-  pathPrefix?: string; // фильтр по префиксу пути
+  ref?: string;
+  pathPrefix?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options?.repo);
 
   let ref = options?.ref;
@@ -272,7 +315,7 @@ export async function getRepoStructure(options?: {
     )
     .map((item) => ({
       path: item.path!,
-      type: item.type, // 'blob' | 'tree' | ...
+      type: item.type,
       mode: item.mode,
       size: item.size,
       sha: item.sha,
@@ -285,14 +328,12 @@ export async function getRepoStructure(options?: {
   };
 }
 
-/**
- * Список файлов/папок по указанному пути (один уровень).
- */
 export async function listFiles(options?: {
   path?: string;
   repo?: string;
   ref?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options?.repo);
   const path = options?.path ?? '';
 
@@ -312,13 +353,12 @@ export async function listFiles(options?: {
     return res.data.map((item) => ({
       path: item.path,
       name: item.name,
-      type: item.type, // 'file' | 'dir'
+      type: item.type,
       size: item.size,
       sha: item.sha,
     }));
   }
 
-  // если вернулся файл — оборачиваем в массив
   return [
     {
       path: res.data.path,
@@ -330,9 +370,6 @@ export async function listFiles(options?: {
   ];
 }
 
-/**
- * Поиск по коду в репозитории.
- */
 export async function searchInRepo(options: {
   query: string;
   path?: string;
@@ -411,14 +448,12 @@ export async function searchInRepo(options: {
   }
 }
 
-/**
- * Последние коммиты по ветке.
- */
 export async function getRecentCommits(options?: {
   branch?: string;
   limit?: number;
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options?.repo);
   const branch = options?.branch;
   const limit = options?.limit ?? 20;
@@ -445,14 +480,12 @@ export async function getRecentCommits(options?: {
   }));
 }
 
-/**
- * Создать ветку от baseBranch.
- */
 export async function createBranch(
   branchName: string,
   baseBranch: string = 'main',
   repoName?: string,
 ) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(repoName);
 
   const baseRef = await github.git.getRef({
@@ -480,9 +513,6 @@ export async function createBranch(
   }
 }
 
-/**
- * Создать или обновить файл (commit).
- */
 export async function commitFile(options: {
   path: string;
   content: string;
@@ -490,6 +520,7 @@ export async function commitFile(options: {
   branch: string;
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { path, content, message, branch } = options;
   const { owner, repo } = parseRepo(options.repo);
 
@@ -539,15 +570,13 @@ export async function commitFile(options: {
   return result.data;
 }
 
-/**
- * Удалить файл.
- */
 export async function deleteFile(options: {
   path: string;
   message: string;
   branch: string;
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const { path, message, branch } = options;
@@ -577,9 +606,6 @@ export async function deleteFile(options: {
   return result.data;
 }
 
-/**
- * Создать Pull Request.
- */
 export async function createPullRequest(options: {
   title: string;
   head: string;
@@ -587,6 +613,7 @@ export async function createPullRequest(options: {
   body?: string;
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { title, head } = options;
   const base = options.base ?? 'main';
   const { owner, repo } = parseRepo(options.repo);
@@ -614,14 +641,12 @@ export async function createPullRequest(options: {
   return pr.data;
 }
 
-/**
- * Оставить комментарий в PR (issues API).
- */
 export async function commentOnPullRequest(options: {
   pull_number: number;
   body: string;
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const res = await github.issues.createComment({
@@ -634,14 +659,12 @@ export async function commentOnPullRequest(options: {
   return res.data;
 }
 
-/**
- * Замёржить Pull Request выбранным методом.
- */
 export async function mergePullRequest(options: {
   pull_number: number;
   method?: 'merge' | 'squash' | 'rebase';
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const res = await github.pulls.merge({
@@ -654,15 +677,13 @@ export async function mergePullRequest(options: {
   return res.data;
 }
 
-/**
- * Запустить workflow.
- */
 export async function runWorkflow(options: {
   workflow_id?: string;
   ref?: string;
   repo?: string;
   inputs?: Record<string, string>;
 }) {
+  const github = getGithubClient();
   const workflow_id = options.workflow_id ?? 'ci.yml';
   const ref = options.ref ?? 'main';
   const { owner, repo } = parseRepo(options.repo);
@@ -689,13 +710,11 @@ export async function runWorkflow(options: {
   return { dispatched: true, workflow_id, ref };
 }
 
-/**
- * Получить статус конкретного запуска CI.
- */
 export async function getWorkflowStatus(options: {
   run_id: number;
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const run = await github.actions.getWorkflowRun({
@@ -707,10 +726,8 @@ export async function getWorkflowStatus(options: {
   return run.data;
 }
 
-/**
- * Получить список jobs для workflow run.
- */
 export async function listWorkflowRunJobs(options: { run_id: number; repo?: string }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const res = await github.actions.listJobsForWorkflowRun({
@@ -733,17 +750,13 @@ export async function listWorkflowRunJobs(options: { run_id: number; repo?: stri
   return { total_count: res.data.total_count, jobs };
 }
 
-/**
- * Скачать логи workflow run.
- * Возвращает zip-архив в base64.
- */
 export async function downloadWorkflowRunLogs(options: {
   run_id: number;
   repo?: string;
 }): Promise<{ format: 'zip-base64'; contentBase64: string }> {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  // Use official octokit endpoint for proper typing under exactOptionalPropertyTypes.
   const res = await github.actions.downloadWorkflowRunLogs({
     owner,
     repo,
@@ -755,9 +768,6 @@ export async function downloadWorkflowRunLogs(options: {
   return { format: 'zip-base64', contentBase64: buf.toString('base64') };
 }
 
-/**
- * Список запусков workflow.
- */
 export async function listWorkflowRunsForRepo(args: {
   workflow_id?: string | null | undefined;
   branch?: string | null | undefined;
@@ -782,10 +792,10 @@ export async function listWorkflowRunsForRepo(args: {
     | null
     | undefined;
 }) {
+  const github = getGithubClient();
   const { workflow_id, branch, repo, per_page, event, status } = args;
   const { owner, repo: repoName } = parseRepo(repo ?? undefined);
 
-  // Prefer workflow-specific endpoint when workflow_id provided
   if (workflow_id) {
     const res = await github.actions.listWorkflowRuns({
       owner,
@@ -814,7 +824,6 @@ export async function listWorkflowRunsForRepo(args: {
     return { total_count: res.data.total_count, runs };
   }
 
-  // Fallback to repo-wide endpoint
   const res = await github.actions.listWorkflowRunsForRepo({
     owner,
     repo: repoName,
@@ -841,9 +850,6 @@ export async function listWorkflowRunsForRepo(args: {
   return { total_count: res.data.total_count, runs };
 }
 
-/**
- * Создать Issue.
- */
 export async function createIssue(options: {
   title: string;
   body?: string;
@@ -851,6 +857,7 @@ export async function createIssue(options: {
   assignees?: string[];
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const params: any = {
@@ -873,9 +880,6 @@ export async function createIssue(options: {
   return res.data;
 }
 
-/**
- * Обновить Issue.
- */
 export async function updateIssue(options: {
   issue_number: number;
   title?: string;
@@ -885,6 +889,7 @@ export async function updateIssue(options: {
   assignees?: string[];
   repo?: string;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const params: any = {
@@ -913,15 +918,13 @@ export async function updateIssue(options: {
   return res.data;
 }
 
-/**
- * Список Issues по репозиторию.
- */
 export async function listIssues(options?: {
   state?: 'open' | 'closed' | 'all';
   labels?: string[];
   repo?: string;
   per_page?: number;
 }) {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options?.repo);
 
   const params: any = {

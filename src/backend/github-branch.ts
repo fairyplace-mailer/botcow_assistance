@@ -1,4 +1,4 @@
-import { github, parseRepo } from './github';
+import { getGithubClient, parseRepo } from './github';
 
 export async function deleteBranch(options: { branch: string; repo?: string }) {
   const { branch } = options;
@@ -10,6 +10,8 @@ export async function deleteBranch(options: { branch: string; repo?: string }) {
   const { owner, repo } = parseRepo(repoName);
 
   const ref = `heads/${branch}`;
+
+  const github = getGithubClient();
 
   await github.git.deleteRef({
     owner,

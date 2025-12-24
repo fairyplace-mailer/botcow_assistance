@@ -1,23 +1,9 @@
-import { appendToBlob, cleanupLogs } from "./blob-util";
-
-export async function logEvent(
-  type: string,
-  payload: Record<string, unknown>
-) {
-  const now = new Date();
-  const line = JSON.stringify({
+export async function logEvent(type: string, payload: Record<string, unknown>) {
+  // Blob-based logging removed to avoid expensive Blob Advanced Operations on Hobby.
+  // Keeping API stable as a no-op; callers can still await it safely.
+  return {
     type,
-    timestamp: now.toISOString(),
+    timestamp: new Date().toISOString(),
     payload,
-  });
-
-  const path = "logs/current.jsonl";
-
-  // 1. append
-  await appendToBlob(path, line);
-
-  // 2. cleanup: сохраняем только current.jsonl
-  await cleanupLogs("logs/", [path]);
-
-  return { path };
+  };
 }

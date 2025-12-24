@@ -1,6 +1,6 @@
 import type { RepoConfig } from '../config/repos';
 import { upsertRepoConfig } from '../config/repos';
-import { github, parseRepo } from '../github';
+import { getGithubClient, parseRepo } from '../github';
 
 export type RepoRegistrationArgs = {
   repo: string; // owner/name
@@ -27,6 +27,7 @@ function normalizeRepo(repo: string): { fullName: string; owner: string; name: s
 }
 
 async function getRepoOwnerLogin(owner: string, repo: string): Promise<string> {
+  const github = getGithubClient();
   const res = await github.repos.get({ owner, repo });
   const ownerLogin = res.data?.owner?.login;
   if (typeof ownerLogin !== 'string' || !ownerLogin) {
@@ -36,6 +37,7 @@ async function getRepoOwnerLogin(owner: string, repo: string): Promise<string> {
 }
 
 async function getAuthenticatedUserLogin(): Promise<string> {
+  const github = getGithubClient();
   const res = await github.users.getAuthenticated();
   const login = res.data?.login;
   if (typeof login !== 'string' || !login) {

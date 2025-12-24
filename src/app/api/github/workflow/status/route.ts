@@ -48,7 +48,7 @@ export async function POST(req: Request) {
             run_id: null,
           });
         }
-      } catch (e) {
+      } catch {
         // ignore - fallthrough
       }
     } else {

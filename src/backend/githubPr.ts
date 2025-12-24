@@ -1,10 +1,12 @@
-import { github, parseRepo } from './github';
+import { getGithubClient, parseRepo } from './github';
 
 export async function findOpenPullRequestByHeadSha(options: {
   repoFullName: string;
   sha: string;
 }) {
   const { owner, repo } = parseRepo(options.repoFullName);
+
+  const github = getGithubClient();
 
   const res = await github.pulls.list({
     owner,
@@ -26,6 +28,8 @@ export async function commentOnceOnPullRequest(options: {
   marker: string;
 }) {
   const { owner, repo } = parseRepo(options.repoFullName);
+
+  const github = getGithubClient();
 
   const existing = await github.issues.listComments({
     owner,

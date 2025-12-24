@@ -382,6 +382,7 @@ export async function searchInRepo(options: {
     return inflight;
   }
 
+  // Register inflight promise first to deduplicate concurrent callers.
   const promise = (async () => {
     const res = await searchCodeWithRetry({ q, per_page, page });
 

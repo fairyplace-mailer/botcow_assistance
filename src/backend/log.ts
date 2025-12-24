@@ -1,9 +1,6 @@
-import { appendToBlob, cleanupLogs } from "./blob-util";
+import { appendToBlob } from "./blob-util";
 
-export async function logEvent(
-  type: string,
-  payload: Record<string, unknown>
-) {
+export async function logEvent(type: string, payload: Record<string, unknown>) {
   const now = new Date();
   const line = JSON.stringify({
     type,
@@ -13,11 +10,9 @@ export async function logEvent(
 
   const path = "logs/current.jsonl";
 
-  // 1. append
+  // NOTE: Blob log rotation/cleanup via list/delete is intentionally not used in runtime
+  // to avoid expensive Advanced Operations on Hobby.
   await appendToBlob(path, line);
-
-  // 2. cleanup: сохраняем только current.jsonl
-  await cleanupLogs("logs/", [path]);
 
   return { path };
 }

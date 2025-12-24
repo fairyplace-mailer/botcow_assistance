@@ -201,6 +201,15 @@ const searchCache = new Map<
 >();
 const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
 
+/**
+ * Test-only helper to make unit tests deterministic.
+ * Not used in runtime code.
+ */
+export function __resetSearchStateForTests() {
+  searchCache.clear();
+  searchInflight.clear();
+}
+
 function purgeExpiredSearchCache() {
   const now = Date.now();
   for (const [k, v] of searchCache.entries()) {
@@ -215,7 +224,8 @@ function purgeExpiredSearchCache() {
 }
 
 /**
- * Прочитать файл (UTF-8 текст) по пути.
+ * 
+ * 
  */
 export async function getFile(path: string, repo?: string, ref?: string) {
   const { owner, repo: repoName } = parseRepo(repo);
@@ -241,12 +251,12 @@ export async function getFile(path: string, repo?: string, ref?: string) {
 }
 
 /**
- * Получить структуру репозитория (дерево файлов).
+ * 
  */
 export async function getRepoStructure(options?: {
   repo?: string;
-  ref?: string; // ветка или SHA, по умолчанию default_branch
-  pathPrefix?: string; // фильтр по префиксу пути
+  ref?: string; // ,  default_branch
+  pathPrefix?: string; //    
 }) {
   const { owner, repo } = parseRepo(options?.repo);
 
@@ -286,7 +296,7 @@ export async function getRepoStructure(options?: {
 }
 
 /**
- * Список файлов/папок по указанному пути (один уровень).
+ * 
  */
 export async function listFiles(options?: {
   path?: string;
@@ -318,7 +328,7 @@ export async function listFiles(options?: {
     }));
   }
 
-  // если вернулся файл — оборачиваем в массив
+  //      
   return [
     {
       path: res.data.path,
@@ -331,7 +341,7 @@ export async function listFiles(options?: {
 }
 
 /**
- * Поиск по коду в репозитории.
+ *    .
  */
 export async function searchInRepo(options: {
   query: string;
@@ -413,7 +423,7 @@ export async function searchInRepo(options: {
 }
 
 /**
- * Последние коммиты по ветке.
+ *    .
  */
 export async function getRecentCommits(options?: {
   branch?: string;
@@ -447,7 +457,7 @@ export async function getRecentCommits(options?: {
 }
 
 /**
- * Создать ветку от baseBranch.
+ *    baseBranch.
  */
 export async function createBranch(
   branchName: string,
@@ -482,7 +492,7 @@ export async function createBranch(
 }
 
 /**
- * Создать или обновить файл (commit).
+ *    (commit).
  */
 export async function commitFile(options: {
   path: string;
@@ -541,7 +551,7 @@ export async function commitFile(options: {
 }
 
 /**
- * Удалить файл.
+ *  .
  */
 export async function deleteFile(options: {
   path: string;
@@ -579,7 +589,7 @@ export async function deleteFile(options: {
 }
 
 /**
- * Создать Pull Request.
+ *  Pull Request.
  */
 export async function createPullRequest(options: {
   title: string;
@@ -616,7 +626,7 @@ export async function createPullRequest(options: {
 }
 
 /**
- * Оставить комментарий в PR (issues API).
+ *    PR (issues API).
  */
 export async function commentOnPullRequest(options: {
   pull_number: number;
@@ -636,7 +646,7 @@ export async function commentOnPullRequest(options: {
 }
 
 /**
- * Замёржить Pull Request выбранным методом.
+ *  Pull Request  .
  */
 export async function mergePullRequest(options: {
   pull_number: number;
@@ -656,7 +666,7 @@ export async function mergePullRequest(options: {
 }
 
 /**
- * Запустить workflow.
+ *  workflow.
  */
 export async function runWorkflow(options: {
   workflow_id?: string;
@@ -691,7 +701,7 @@ export async function runWorkflow(options: {
 }
 
 /**
- * Получить статус конкретного запуска CI.
+ *     CI.
  */
 export async function getWorkflowStatus(options: {
   run_id: number;
@@ -709,7 +719,7 @@ export async function getWorkflowStatus(options: {
 }
 
 /**
- * Получить список jobs для workflow run.
+ *   jobs  workflow run.
  */
 export async function listWorkflowRunJobs(options: { run_id: number; repo?: string }) {
   const { owner, repo } = parseRepo(options.repo);
@@ -735,8 +745,8 @@ export async function listWorkflowRunJobs(options: { run_id: number; repo?: stri
 }
 
 /**
- * Скачать логи workflow run.
- * Возвращает zip-архив в base64.
+ *   workflow run.
+ *  zip-  base64.
  */
 export async function downloadWorkflowRunLogs(options: {
   run_id: number;
@@ -757,7 +767,7 @@ export async function downloadWorkflowRunLogs(options: {
 }
 
 /**
- * Список запусков workflow.
+ *   workflow.
  */
 export async function listWorkflowRunsForRepo(args: {
   workflow_id?: string | null | undefined;
@@ -843,7 +853,7 @@ export async function listWorkflowRunsForRepo(args: {
 }
 
 /**
- * Создать Issue.
+ *  Issue.
  */
 export async function createIssue(options: {
   title: string;
@@ -875,7 +885,7 @@ export async function createIssue(options: {
 }
 
 /**
- * Обновить Issue.
+ *  Issue.
  */
 export async function updateIssue(options: {
   issue_number: number;
@@ -915,7 +925,7 @@ export async function updateIssue(options: {
 }
 
 /**
- * Список Issues по репозиторию.
+ *   Issues  .
  */
 export async function listIssues(options?: {
   state?: 'open' | 'closed' | 'all';

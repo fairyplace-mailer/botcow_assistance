@@ -20,6 +20,18 @@ export function getGithubClient(): Octokit {
   return githubClient;
 }
 
+// Backwards-compatible export: many modules import { github }.
+// This must NOT trigger auth/env reads during module evaluation.
+export const github = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      const client = getGithubClient() as any;
+      return client[prop];
+    },
+  },
+) as unknown as Octokit;
+
 function getDefaultRepo(): string {
   // Source of truth: config/repos.yml
   return getDefaultRepoFromConfig();
@@ -690,7 +702,7 @@ export async function getWorkflowStatus(options: {
 
   const run = await github.actions.getWorkflowRun({
     owner,
-    repo,
+       repo,
     run_id: options.run_id,
   });
 

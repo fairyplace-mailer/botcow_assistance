@@ -1,9 +1,13 @@
 import type { SearchCodeResponse } from '@octokit/types';
 
+// IMPORTANT:
+// - Do NOT mock the whole github module (we want to test the real searchInRepo logic: cache/dedup/retry)
+// - We override only the exported `github` client (which is a Proxy in runtime) with a simple mock object.
+//   This keeps Next.js build-safe lazy init in src/backend/github.ts while allowing deterministic unit tests.
 jest.mock('../src/backend/github', () => {
   const actual = jest.requireActual('../src/backend/github');
 
-  const mockClient = {
+  const mockGithub = {
     search: {
       code: jest.fn(),
     },
@@ -11,15 +15,11 @@ jest.mock('../src/backend/github', () => {
 
   return {
     ...actual,
-    getGithubClient: jest.fn(() => mockClient),
+    github: mockGithub,
   };
 });
 
-import {
-  __resetSearchStateForTests,
-  getGithubClient,
-  searchInRepo,
-} from '../src/backend/github';
+import { __resetSearchStateForTests, github, searchInRepo } from '../src/backend/github';
 
 describe('searchInRepo', () => {
   beforeEach(() => {
@@ -28,11 +28,9 @@ describe('searchInRepo', () => {
   });
 
   it('passes page to github.search.code', async () => {
-    const mockClient = getGithubClient() as unknown as {
-      search: { code: jest.Mock };
-    };
+    const spy = (github as unknown as { search: { code: jest.Mock } }).search.code;
 
-    const spy = mockClient.search.code.mockResolvedValue({
+    spy.mockResolvedValue({
       data: {
         items: [
           {
@@ -64,11 +62,9 @@ describe('searchInRepo', () => {
   });
 
   it('caches identical requests (same q/per_page/page)', async () => {
-    const mockClient = getGithubClient() as unknown as {
-      search: { code: jest.Mock };
-    };
+    const spy = (github as unknown as { search: { code: jest.Mock } }).search.code;
 
-    const spy = mockClient.search.code.mockResolvedValue({
+    spy.mockResolvedValue({
       data: {
         items: [
           {
@@ -92,13 +88,11 @@ describe('searchInRepo', () => {
   });
 
   it('deduplicates inflight requests', async () => {
-    const mockClient = getGithubClient() as unknown as {
-      search: { code: jest.Mock };
-    };
+    const spy = (github as unknown as { search: { code: jest.Mock } }).search.code;
 
     let resolveFn: ((v: SearchCodeResponse) => void) | null = null;
 
-    const spy = mockClient.search.code.mockImplementation(
+    spy.mockImplementation(
       () =>
         new Promise((resolve) => {
           resolveFn = resolve;
@@ -147,14 +141,12 @@ describe('searchInRepo', () => {
   it('retries on rate limit exceeded using x-ratelimit-reset', async () => {
     jest.useFakeTimers();
 
-    const mockClient = getGithubClient() as unknown as {
-      search: { code: jest.Mock };
-    };
+    const spy = (github as unknown as { search: { code: jest.Mock } }).search.code;
 
     const nowSec = Math.floor(Date.now() / 1000);
     const resetSec = nowSec + 1;
 
-    const spy = mockClient.search.code
+    spy
       .mockRejectedValueOnce(makeRateLimitError(resetSec))
       .mockResolvedValueOnce({
         data: {

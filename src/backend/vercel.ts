@@ -19,13 +19,6 @@ export type VercelContext = {
   gitRef?: string;
 };
 
-type VercelApiError = {
-  error?: {
-    code?: string;
-    message?: string;
-  };
-};
-
 function buildUrl(path: string, ctx?: VercelContext) {
   const url = new URL(`https://api.vercel.com${path}`);
   const teamId = ctx?.teamId ?? process.env.VERCEL_TEAM_ID;

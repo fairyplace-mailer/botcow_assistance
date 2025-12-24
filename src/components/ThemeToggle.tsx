@@ -6,7 +6,7 @@ export default function ThemeToggle() {
     try {
       const t = localStorage.getItem('theme');
       return t === 'dark' ? 'dark' : 'light';
-    } catch (_e) {
+    } catch {
       return 'light';
     }
   });
@@ -20,7 +20,7 @@ export default function ThemeToggle() {
         document.documentElement.removeAttribute('data-theme');
         localStorage.setItem('theme', 'light');
       }
-    } catch (_e) {
+    } catch {
       // ignore (e.g. when localStorage is unavailable)
     }
   }, [theme]);
@@ -32,7 +32,7 @@ export default function ThemeToggle() {
       aria-label="Toggle theme"
       title="Toggle theme"
     >
-      {theme === 'dark' ? '🌙 Dark' : '☀️ Light'}
+      {theme === 'dark' ? ' Dark' : ' Light'}
     </button>
   );
 }

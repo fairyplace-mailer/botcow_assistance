@@ -51,6 +51,7 @@ export default [
         "error",
         {
           argsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
           varsIgnorePattern: "^_",
           ignoreRestSiblings: true,
         },

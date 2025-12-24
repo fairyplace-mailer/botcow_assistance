@@ -16,7 +16,6 @@
   "description": "",
   "dependencies": {
     "@octokit/rest": "^22.0.1",
-    "@vercel/blob": "^2.0.0",
     "@vercel/kv": "^2.0.0",
     "adm-zip": "^0.5.16",
     "express": "^5.1.0",

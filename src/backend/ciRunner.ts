@@ -51,7 +51,7 @@ export async function runWorkflowAndTrack(options: {
     ) {
       commitSha = (commits[0] as any).sha as string;
     }
-  } catch (_e) {
+  } catch {
     // best-effort — continue without commitSha
   }
 
@@ -127,7 +127,7 @@ export async function runWorkflowAndTrack(options: {
       const waitMs = Math.min(1000 * Math.pow(2, Math.min(attempt, 5)), 10000);
       await new Promise((r) => setTimeout(r, waitMs));
     }
-  } catch (_e) {
+  } catch {
     // ignore - best-effort
   }
 
@@ -176,7 +176,7 @@ export async function runWorkflowAndTrack(options: {
         startedAt: record.startedAt,
         status: record.status,
       });
-    } catch (_e) {
+    } catch {
       // swallow
     }
     stored = 'local';

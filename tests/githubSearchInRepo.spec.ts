@@ -1,4 +1,4 @@
-import { github, searchInRepo } from '../src/backend/github';
+import { github, searchInRepo, __resetSearchStateForTests } from '../src/backend/github';
 
 function makeRateLimitError(resetSec: number) {
   const err: any = new Error('rate limit exceeded');
@@ -16,6 +16,7 @@ function makeRateLimitError(resetSec: number) {
 
 describe('searchInRepo', () => {
   beforeEach(() => {
+    __resetSearchStateForTests();
     jest.restoreAllMocks();
     jest.useRealTimers();
   });
@@ -121,9 +122,6 @@ describe('searchInRepo', () => {
   it('retries on rate limit exceeded using x-ratelimit-reset', async () => {
     jest.useFakeTimers();
 
-    // Use a unique query to avoid interaction with cache from previous tests.
-    const query = `foo-${Date.now()}`;
-
     const nowSec = Math.floor(Date.now() / 1000);
     const resetSec = nowSec + 1;
 
@@ -145,7 +143,7 @@ describe('searchInRepo', () => {
 
     const promise = searchInRepo({
       repo: 'fairyplace-mailer/botcow_assistance',
-      query,
+      query: 'foo',
       per_page: 10,
       page: 1,
     });

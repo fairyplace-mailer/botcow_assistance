@@ -1,4 +1,11 @@
-import { runWorkflow, listWorkflowRuns, getWorkflowStatus, getRecentCommits, commitFile, getFile } from './github';
+import {
+  commitFile,
+  getFile,
+  getRecentCommits,
+  getWorkflowStatus,
+  listWorkflowRuns,
+  runWorkflow,
+} from './github';
 import { saveRun } from './ciStore';
 
 export type RunTrackResult = {
@@ -11,20 +18,13 @@ export type RunTrackResult = {
 };
 
 const STORE_PATH = '.botcow/ci-runs.json';
-const STORE_COMMIT_BRANCH = 'botcow-prevectus'; // per user request 
-
- persist tracking in this branch
+const STORE_COMMIT_BRANCH = 'botcow-prevectus'; // per user request — persist tracking in this branch
 
 /**
- * 
-
-
-
-
-
-
-
-
+ * Запустить workflow и попытаться отследить созданный run_id.
+ * Сначала пытаемся сопоставить по head_sha (коммиту) — это даёт надёжность.
+ * Сохраняем запись в репозитории (файл .botcow/ci-runs.json в ветке botcow-prevectus).
+ * Если commit неудачен — fallback в локальное хранилище.
  */
 export async function runWorkflowAndTrack(options: {
   workflow_id?: string;
@@ -39,9 +39,7 @@ export async function runWorkflowAndTrack(options: {
   const dispatchTime = new Date();
   const dispatchIso = dispatchTime.toISOString();
 
-  // Try to get latest commit sha for the target ref 
-
- helps to match the created run
+  // Try to get latest commit sha for the target ref — helps to match the created run
   let commitSha: string | null = null;
   try {
     const commits = await getRecentCommits({ branch: ref, limit: 1, repo });
@@ -54,13 +52,16 @@ export async function runWorkflowAndTrack(options: {
       commitSha = (commits[0] as any).sha as string;
     }
   } catch (_e) {
-    // best-effort 
-
- continue without commitSha
+    // best-effort — continue without commitSha
   }
 
   // trigger workflow dispatch (doesn't return run id)
-  const dispatchParams: { workflow_id: string; ref: string; repo: string; inputs?: Record<string, string> } = {
+  const dispatchParams: {
+    workflow_id: string;
+    ref: string;
+    repo: string;
+    inputs?: Record<string, string>;
+  } = {
     workflow_id,
     ref,
     repo,
@@ -75,7 +76,6 @@ export async function runWorkflowAndTrack(options: {
   let foundRunId: number | null = null;
 
   try {
-    const repoName = repo;
     const maxAttempts = 20;
     let attempt = 0;
     const perPage = 10;
@@ -86,7 +86,7 @@ export async function runWorkflowAndTrack(options: {
       const res = await listWorkflowRuns({
         workflow_id,
         branch: ref,
-        repo: repoName,
+        repo,
         event: 'workflow_dispatch',
         per_page: perPage,
       });
@@ -166,9 +166,7 @@ export async function runWorkflowAndTrack(options: {
 
     stored = 'repo';
   } catch (err: any) {
-    // If commit fails (permissions etc) 
-
- fallback to local store
+    // If commit fails (permissions etc) — fallback to local store
     void err;
     try {
       await saveRun(repo, {
@@ -197,15 +195,7 @@ export async function runWorkflowAndTrack(options: {
 }
 
 /**
- * 
-
-
-
-
-
-
-
-
+ * Получить статус запуска workflow, с обработкой ошибок прав доступа/не найдено.
  */
 export async function getWorkflowRunStatus(args: { run_id: number; repo?: string }) {
   try {

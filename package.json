@@ -11,7 +11,8 @@
     "lint:ci": "eslint . --ext .js,.jsx,.ts,.tsx --max-warnings=9999",
     "server": "tsx src/server.ts",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy"
+    "prisma:migrate": "prisma migrate deploy",
+    "postinstall": "prisma generate"
   },
   "keywords": [],
   "author": "",

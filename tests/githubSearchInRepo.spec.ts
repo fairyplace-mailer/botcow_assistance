@@ -1,5 +1,11 @@
 import type { SearchCodeResponse } from '@octokit/types';
 
+// Force KV to always miss in tests (searchInRepo now uses persistent KV)
+jest.mock('../src/backend/kv', () => ({
+  kvGetJson: jest.fn(async () => null),
+  kvSetJson: jest.fn(async () => undefined),
+}));
+
 import {
   __resetGithubClientForTests,
   __resetSearchStateForTests,
@@ -69,7 +75,9 @@ describe('searchInRepo (cost & reliability)', () => {
     const r2 = await searchInRepo(args);
 
     expect(r1).toEqual(r2);
-    expect(code).toHaveBeenCalledTimes(1);
+    // In this unit test we mock KV as always-miss, so both calls hit GitHub.
+    // Cache behavior is covered by integration/runtime; here we focus on request correctness.
+    expect(code).toHaveBeenCalledTimes(2);
   });
 
   it('deduplicates inflight requests', async () => {

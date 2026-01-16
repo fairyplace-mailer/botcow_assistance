@@ -1,58 +1,44 @@
 import { prisma } from './db';
 
-/**
- * Prisma-backed KV store.
- * Replaces Upstash/Vercel KV to avoid Hobby plan KV limits.
- */
+export type KvSetOptions = {
+  ttlSeconds?: number;
+};
 
-type SetOpts = { exSeconds?: number };
-
-function expiresAtFromOpts(opts?: SetOpts): Date | null {
-  const ex = opts?.exSeconds;
-  if (!ex || ex <= 0) return null;
-  return new Date(Date.now() + ex * 1000);
+function expiresAtFromOpts(opts?: KvSetOptions): Date | null {
+  if (!opts?.ttlSeconds) return null;
+  return new Date(Date.now() + opts.ttlSeconds * 1000);
 }
 
-export async function kvGetJson<T>(key: string): Promise<T | null> {
+export async function kvGetJson<T = unknown>(key: string): Promise<T | null> {
   const row = await prisma.kvItem.findUnique({ where: { key } });
   if (!row) return null;
 
   if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) {
     // Best-effort cleanup
-    try {
-      await prisma.kvItem.delete({ where: { key } });
-    } catch {
-      // ignore
-    }
+    await prisma.kvItem.delete({ where: { key } }).catch(() => undefined);
     return null;
   }
 
   return row.valueJson as T;
 }
 
-export async function kvSetJson(
-  key: string,
-  value: unknown,
-  opts?: SetOpts,
-): Promise<void> {
+export async function kvSetJson(key: string, value: unknown, opts?: KvSetOptions): Promise<void> {
+  const expiresAt = expiresAtFromOpts(opts);
+
   await prisma.kvItem.upsert({
     where: { key },
     create: {
       key,
       valueJson: value as any,
-      expiresAt: expiresAtFromOpts(opts) ?? undefined,
+      expiresAt,
     },
     update: {
       valueJson: value as any,
-      expiresAt: expiresAtFromOpts(opts) ?? undefined,
+      expiresAt,
     },
   });
 }
 
 export async function kvDel(key: string): Promise<void> {
-  try {
-    await prisma.kvItem.delete({ where: { key } });
-  } catch {
-    // ignore if missing
-  }
+  await prisma.kvItem.delete({ where: { key } }).catch(() => undefined);
 }

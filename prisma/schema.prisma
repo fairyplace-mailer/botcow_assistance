@@ -13,3 +13,34 @@ model KvItem {
   expiresAt DateTime?
   updatedAt DateTime @updatedAt
 }
+
+model DocPage {
+  id          String   @id @default(cuid())
+  url         String   @unique
+  title       String?
+  text        String
+  contentHash String
+  fetchedAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  chunks DocChunk[]
+
+  @@index([fetchedAt])
+}
+
+model DocChunk {
+  id             String   @id @default(cuid())
+  pageId         String
+  idx            Int
+  content        String
+  embeddingJson  Json?
+  embeddingModel String?
+  dims           Int?
+  createdAt      DateTime @default(now())
+
+  page DocPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, idx])
+  @@index([pageId])
+}

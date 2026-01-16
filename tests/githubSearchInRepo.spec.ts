@@ -97,6 +97,9 @@ describe('searchInRepo (cost & reliability)', () => {
     const p1 = searchInRepo(args);
     const p2 = searchInRepo(args);
 
+    // allow the first call to progress to the point it invokes github.search.code
+    await Promise.resolve();
+
     expect(code).toHaveBeenCalledTimes(1);
 
     resolveFn!(okResponse());

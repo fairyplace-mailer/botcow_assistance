@@ -15,7 +15,7 @@ function keyForRepo(repo: string) {
 const CI_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 export async function saveRun(repo: string, record: CiRunRecord) {
-  await kvSetJson(keyForRepo(repo), record, { exSeconds: CI_TTL_SECONDS });
+  await kvSetJson(keyForRepo(repo), record, { ttlSeconds: CI_TTL_SECONDS });
 }
 
 export async function getLastRun(repo: string) {

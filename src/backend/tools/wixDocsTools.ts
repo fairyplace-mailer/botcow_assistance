@@ -58,13 +58,13 @@ export const wixDocsToolsSchemas = [
       parameters: {
         type: 'object',
         properties: {
-          methodId: {
+          articleUrl: {
             type: 'string',
             description:
-              'Method identifier as expected by Wix MCP server (exact shape depends on server).',
+              'Full URL to the reference article for the method (uri). Used by Wix Site MCP ReadFullDocsMethodSchema.',
           },
         },
-        required: ['methodId'],
+        required: ['articleUrl'],
       },
     },
   },
@@ -159,14 +159,14 @@ export const wixDocsToolHandlers = {
     });
   },
 
-  async wix_docs_read_method_schema(args: { methodId: string }) {
-    assertNonEmptyString('methodId', args?.methodId);
+  async wix_docs_read_method_schema(args: { articleUrl: string }) {
+    assertNonEmptyString('articleUrl', args?.articleUrl);
 
     return wixMcpCachedCall<any>({
       cachePrefix: 'docs:methodSchema:v1',
       cacheTtlSeconds: TTL_SCHEMA_SECONDS,
       toolName: 'ReadFullDocsMethodSchema',
-      toolArgs: { methodId: args.methodId },
+      toolArgs: { articleUrl: args.articleUrl },
     });
   },
 } as const;

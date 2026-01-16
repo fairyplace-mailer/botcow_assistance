@@ -1,59 +1,58 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 
-import { prisma } from '../db';
+import { prisma } from '@/backend/db';
 
-type IngestResult = {
-  visited: number;
-  saved: number;
+const DEFAULT_USER_AGENT =
+  'botcow_assistance (+https://github.com/fairyplace-mailer/botcow_assistance)';
+
+export type DevWixIngestResult = {
+  fetched: number;
   skippedUnchanged: number;
-  errors: number;
+  stored: number;
+  discoveredUrls: number;
 };
 
-const BASE = 'https://dev.wix.com';
-const START_URL = 'https://dev.wix.com/docs/articles';
-const ALLOWED_PREFIX = '/docs/articles';
-
-function normalizeUrl(raw: string): string | null {
-  try {
-    const u = new URL(raw, BASE);
-    // Only same origin
-    if (u.origin !== BASE) return null;
-    // Strip hash
-    u.hash = '';
-    return u.toString();
-  } catch {
-    return null;
-  }
+function hashText(s: string): string {
+  return crypto.createHash('sha256').update(s).digest('hex');
 }
 
-function isAllowed(u: URL): boolean {
-  return u.origin === BASE && u.pathname.startsWith(ALLOWED_PREFIX);
+function normalizeUrl(u: string): string {
+  // remove hash fragments (navigation only)
+  const url = new URL(u);
+  url.hash = '';
+  return url.toString();
 }
 
-function extractLinks(html: string): string[] {
-  // Minimal & safe extraction: href="..." only
+function extractArticleLinks(html: string, baseUrl: string): string[] {
   const out: string[] = [];
-  const re = /href\s*=\s*"([^"]+)"/gi;
-  for (let m; (m = re.exec(html)); ) {
+  const hrefRe = /href\s*=\s*"([^"]+)"/gi;
+
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html))) {
     const href = m[1];
     if (!href) continue;
-    const normalized = normalizeUrl(href);
-    if (!normalized) continue;
-    const u = new URL(normalized);
-    if (!isAllowed(u)) continue;
-    out.push(u.toString());
+
+    try {
+      const abs = new URL(href, baseUrl).toString();
+      out.push(normalizeUrl(abs));
+    } catch {
+      // ignore
+    }
   }
-  return Array.from(new Set(out));
+
+  return out;
 }
 
 function stripHtmlToText(html: string): { title: string | null; text: string } {
   const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  const title = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim() : null;
+  const rawTitle = titleMatch?.[1];
+  const title = rawTitle ? rawTitle.replace(/\s+/g, ' ').trim() : null;
 
   // naive tag stripping
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -65,85 +64,93 @@ function stripHtmlToText(html: string): { title: string | null; text: string } {
   return { title, text };
 }
 
-function sha256(s: string): string {
-  return crypto.createHash('sha256').update(s).digest('hex');
+function isAllowedDevWixUrl(u: string): boolean {
+  try {
+    const url = new URL(u);
+    if (url.hostname !== 'dev.wix.com') return false;
+    return url.pathname.startsWith('/docs/articles');
+  } catch {
+    return false;
+  }
 }
 
-export async function ingestDevWixDocsArticles(opts?: {
+async function fetchHtml(url: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: {
+      'user-agent': DEFAULT_USER_AGENT,
+      accept: 'text/html,application/xhtml+xml',
+    },
+    redirect: 'follow',
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
+  }
+
+  return await res.text();
+}
+
+export async function ingestDevWixArticles(opts?: {
   limitPages?: number;
-  maxQueue?: number;
-}): Promise<IngestResult> {
-  const limitPages = opts?.limitPages ?? 20;
-  const maxQueue = opts?.maxQueue ?? 200;
+}): Promise<DevWixIngestResult> {
+  const limitPages = Math.max(1, Math.min(opts?.limitPages ?? 5, 200));
 
-  const queue: string[] = [START_URL];
-  const seen = new Set<string>(queue);
+  const startUrl = 'https://dev.wix.com/docs/articles';
 
-  const res: IngestResult = {
-    visited: 0,
-    saved: 0,
-    skippedUnchanged: 0,
-    errors: 0,
-  };
+  const queue: string[] = [startUrl];
+  const seen = new Set<string>();
 
-  while (queue.length > 0 && res.visited < limitPages) {
-    const url = queue.shift()!;
-    res.visited += 1;
+  let fetched = 0;
+  let skippedUnchanged = 0;
+  let stored = 0;
 
-    try {
-      const r = await fetch(url, {
-        method: 'GET',
-        headers: {
-          // Some CDNs behave better with a UA
-          'user-agent': 'botcow_assistance/1.0 (+docs ingestion)',
-          accept: 'text/html,application/xhtml+xml',
+  while (queue.length > 0 && fetched < limitPages) {
+    const url = normalizeUrl(queue.shift()!);
+    if (seen.has(url)) continue;
+    seen.add(url);
+
+    if (!isAllowedDevWixUrl(url)) continue;
+
+    const html = await fetchHtml(url);
+    fetched += 1;
+
+    const { title, text } = stripHtmlToText(html);
+    const contentHash = hashText(text);
+
+    const existing = await prisma.docPage.findUnique({ where: { url } });
+    if (existing?.contentHash === contentHash) {
+      skippedUnchanged += 1;
+    } else {
+      await prisma.docPage.upsert({
+        where: { url },
+        create: {
+          url,
+          title,
+          text,
+          contentHash,
+          fetchedAt: new Date(),
+        },
+        update: {
+          title,
+          text,
+          contentHash,
+          fetchedAt: new Date(),
         },
       });
+      stored += 1;
+    }
 
-      if (!r.ok) {
-        res.errors += 1;
-        continue;
-      }
-
-      const html = await r.text();
-      const { title, text } = stripHtmlToText(html);
-      const contentHash = sha256(text);
-
-      const existing = await prisma.docPage.findUnique({ where: { url } });
-      if (existing && existing.contentHash === contentHash) {
-        res.skippedUnchanged += 1;
-      } else {
-        await prisma.docPage.upsert({
-          where: { url },
-          create: {
-            url,
-            title,
-            text,
-            contentHash,
-            fetchedAt: new Date(),
-          },
-          update: {
-            title,
-            text,
-            contentHash,
-            fetchedAt: new Date(),
-          },
-        });
-        res.saved += 1;
-      }
-
-      // Expand queue
-      const links = extractLinks(html);
-      for (const link of links) {
-        if (seen.has(link)) continue;
-        if (seen.size >= maxQueue) break;
-        seen.add(link);
-        queue.push(link);
-      }
-    } catch {
-      res.errors += 1;
+    // discover more URLs
+    const links = extractArticleLinks(html, url);
+    for (const l of links) {
+      if (isAllowedDevWixUrl(l) && !seen.has(l)) queue.push(l);
     }
   }
 
-  return res;
+  return {
+    fetched,
+    skippedUnchanged,
+    stored,
+    discoveredUrls: seen.size,
+  };
 }

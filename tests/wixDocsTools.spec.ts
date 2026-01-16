@@ -28,6 +28,14 @@ describe('wixDocsToolHandlers', () => {
     expect(res.tools[0]).toHaveProperty('name');
   });
 
+  test('wix_docs_list_mcp_tools handles upstream empty list', async () => {
+    const { wixMcpListTools } = jest.requireMock('../src/backend/wixMcp');
+    wixMcpListTools.mockResolvedValueOnce([]);
+
+    const res = await wixDocsToolHandlers.wix_docs_list_mcp_tools();
+    expect(res).toEqual({ tools: [] });
+  });
+
   test('wix_docs_search clamps limit and returns items', async () => {
     const res = await wixDocsToolHandlers.wix_docs_search({ query: 'contacts', limit: 999 });
     expect(res).toHaveProperty('items');

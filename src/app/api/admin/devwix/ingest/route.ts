@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { requireAdminBearerAuth } from '../../../../../backend/auth/adminAuth';
-import { ingestDevWixDocsArticles } from '../../../../../backend/devWixDocs/ingest';
+import { ingestDevWixArticles } from '../../../../../backend/devWixDocs/ingest';
 
 export async function POST(req: Request) {
   const authError = requireAdminBearerAuth(req);
@@ -10,6 +10,6 @@ export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const limitPages = Number(searchParams.get('limitPages') ?? '20');
 
-  const result = await ingestDevWixDocsArticles({ limitPages });
+  const result = await ingestDevWixArticles({ limitPages });
   return NextResponse.json({ ok: true, result });
 }

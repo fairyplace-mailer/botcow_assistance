@@ -225,7 +225,6 @@ async function searchCodeWithRetry(params: SearchCodeParams) {
 }
 
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
-const SEARCH_CACHE_MAX_ENTRIES = 300;
 
 type SearchInRepoResultItem = {
   path: string;

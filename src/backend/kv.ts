@@ -1,67 +1,58 @@
-import { createClient } from '@vercel/kv';
+import { prisma } from './db';
 
 /**
- * KV client (Upstash Redis via Vercel Marketplace).
- *
- * IMPORTANT:
- * Next.js may evaluate app route modules during `next build` ("Collecting page data").
- * To keep builds deterministic and not dependent on runtime secrets,
- * we must NOT throw on missing env at module-evaluation time.
- *
- * Requires at runtime:
- * - KV_REST_API_URL
- * - KV_REST_API_TOKEN
+ * Prisma-backed KV store.
+ * Replaces Upstash/Vercel KV to avoid Hobby plan KV limits.
  */
 
-let _kv: ReturnType<typeof createClient> | null = null;
+type SetOpts = { exSeconds?: number };
 
-export function getKvClient() {
-  if (_kv) return _kv;
-
-  const url = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-
-  if (!url) {
-    throw new Error('KV_REST_API_URL is not set');
-  }
-
-  if (!token) {
-    throw new Error('KV_REST_API_TOKEN is not set');
-  }
-
-  _kv = createClient({ url, token });
-  return _kv;
+function expiresAtFromOpts(opts?: SetOpts): Date | null {
+  const ex = opts?.exSeconds;
+  if (!ex || ex <= 0) return null;
+  return new Date(Date.now() + ex * 1000);
 }
 
 export async function kvGetJson<T>(key: string): Promise<T | null> {
-  const kv = getKvClient();
-  const v = await kv.get(key);
-  if (v == null) return null;
+  const row = await prisma.kvItem.findUnique({ where: { key } });
+  if (!row) return null;
 
-  // @vercel/kv returns JSON values as objects when set via json/set, but
-  // may return strings if stored as plain text.
-  if (typeof v === 'string') {
+  if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) {
+    // Best-effort cleanup
     try {
-      return JSON.parse(v) as T;
+      await prisma.kvItem.delete({ where: { key } });
     } catch {
-      return null;
+      // ignore
     }
+    return null;
   }
 
-  return v as T;
+  return row.valueJson as T;
 }
 
 export async function kvSetJson(
   key: string,
   value: unknown,
-  opts?: { exSeconds?: number },
+  opts?: SetOpts,
 ): Promise<void> {
-  const kv = getKvClient();
+  await prisma.kvItem.upsert({
+    where: { key },
+    create: {
+      key,
+      valueJson: value as any,
+      expiresAt: expiresAtFromOpts(opts) ?? undefined,
+    },
+    update: {
+      valueJson: value as any,
+      expiresAt: expiresAtFromOpts(opts) ?? undefined,
+    },
+  });
+}
 
-  if (opts?.exSeconds && opts.exSeconds > 0) {
-    await kv.set(key, value, { ex: opts.exSeconds });
-    return;
+export async function kvDel(key: string): Promise<void> {
+  try {
+    await prisma.kvItem.delete({ where: { key } });
+  } catch {
+    // ignore if missing
   }
-
-  await kv.set(key, value);
 }

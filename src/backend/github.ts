@@ -13,6 +13,7 @@ function getGithubToken(): string {
   if (!token) {
     // IMPORTANT: do not throw at module import time.
     // Next.js may evaluate route modules during build/"collect page data".
+    // We throw when an actual GitHub call is attempted.
     throw new Error('GITHUB_PAT_BOTCOW is not set');
   }
   return token;
@@ -39,7 +40,7 @@ export function __resetGithubClientForTests() {
 }
 
 // Backwards-compatible export: many modules import { github }.
-// This must NOT trigger auth/env reads during module evaluation.
+// Must NOT trigger auth/env reads during module evaluation.
 export const github = new Proxy(
   {},
   {

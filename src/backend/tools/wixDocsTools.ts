@@ -73,8 +73,22 @@ export const wixDocsToolsSchemas = [
     function: {
       name: 'wix_docs_list_mcp_tools',
       description:
-        'List available MCP tools on dev.wix.com/_api/mcp (cached). Useful for debugging.',
-      parameters: { type: 'object', properties: {} },
+        'List available MCP tools on dev.wix.com/_api/mcp (cached). Useful for debugging. Optionally include inputSchema for a specific tool to discover its argument shape without returning full schemas for everything.',
+      parameters: {
+        type: 'object',
+        properties: {
+          toolName: {
+            type: 'string',
+            description:
+              'Optional tool name to filter by. If provided, only matching tools are returned.',
+          },
+          includeInputSchema: {
+            type: 'boolean',
+            description:
+              'If true and toolName is provided, include inputSchema in the result for matching tools.',
+          },
+        },
+      },
     },
   },
 ] as const;
@@ -86,12 +100,25 @@ function clampLimit(limit: unknown) {
 }
 
 export const wixDocsToolHandlers = {
-  async wix_docs_list_mcp_tools() {
+  async wix_docs_list_mcp_tools(args?: {
+    toolName?: string;
+    includeInputSchema?: boolean;
+  }) {
     const tools = await wixMcpListTools();
-    // Return minimal data to save tokens.
-    return {
-      tools: tools.map((t) => ({ name: t.name, description: t.description })),
-    };
+
+    const toolName = args?.toolName?.trim();
+    const includeInputSchema = Boolean(args?.includeInputSchema && toolName);
+
+    const filtered = toolName ? tools.filter((t) => t.name === toolName) : tools;
+
+    // Default: minimal data to save tokens.
+    const mapped = filtered.map((t) => {
+      const base: any = { name: t.name, description: t.description };
+      if (includeInputSchema) base.inputSchema = t.inputSchema;
+      return base;
+    });
+
+    return { tools: mapped };
   },
 
   async wix_docs_search(args: { query: string; limit?: number }) {

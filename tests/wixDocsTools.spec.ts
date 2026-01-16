@@ -50,7 +50,10 @@ describe('wixDocsToolHandlers', () => {
 
   test('wix_docs_read_method_schema validates input', async () => {
     await expect(
-      wixDocsToolHandlers.wix_docs_read_method_schema({ methodId: 'some.method' }),
+      wixDocsToolHandlers.wix_docs_read_method_schema({
+        articleUrl:
+          'https://dev.wix.com/docs/rest/business-solutions/cms/collection-management/data-collections/create-data-collection',
+      }),
     ).resolves.toBeDefined();
   });
 });

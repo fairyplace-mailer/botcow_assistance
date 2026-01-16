@@ -421,7 +421,7 @@ export async function searchInRepo(options: {
     await kvSetJson(
       kvKey,
       { data: items },
-      { exSeconds: Math.floor(SEARCH_CACHE_TTL_MS / 1000) },
+      { ttlSeconds: Math.floor(SEARCH_CACHE_TTL_MS / 1000) },
     );
 
     return items;

@@ -26,6 +26,14 @@ function makeId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+async function readTextSafe(res: Response) {
+  try {
+    return await res.text();
+  } catch {
+    return '';
+  }
+}
+
 async function postJsonRpc<T>(method: string, params?: unknown): Promise<T> {
   const body = {
     jsonrpc: '2.0',
@@ -38,13 +46,30 @@ async function postJsonRpc<T>(method: string, params?: unknown): Promise<T> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      // Helps some edge setups to not content-negotiate into HTML.
+      Accept: 'application/json',
     },
     body: JSON.stringify(body),
   });
 
+  // NOTE: In the wild this endpoint sometimes responds with HTML (Next.js) even for POST.
+  // We keep a short snippet to ease debugging.
+  const contentType = res.headers.get('content-type') || '';
+
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Wix MCP ${method} failed: ${res.status} ${text}`);
+    const text = await readTextSafe(res);
+    const snippet = text.slice(0, 500);
+    throw new Error(
+      `Wix MCP ${method} failed: ${res.status} content-type=${contentType} body=${snippet}`,
+    );
+  }
+
+  if (!contentType.includes('application/json')) {
+    const text = await readTextSafe(res);
+    const snippet = text.slice(0, 500);
+    throw new Error(
+      `Wix MCP ${method} invalid response content-type=${contentType} body=${snippet}`,
+    );
   }
 
   const data = (await res.json()) as JsonRpcResponse<T>;
@@ -59,6 +84,38 @@ async function postJsonRpc<T>(method: string, params?: unknown): Promise<T> {
 const TOOLS_LIST_CACHE_KEY = 'wix:mcp:tools:list:v1';
 const TOOLS_LIST_TTL_SECONDS = 6 * 60 * 60; // 6h
 
+function normalizeToolsListPayload(payload: unknown): WixMcpTool[] {
+  const resultTools = (payload as any)?.tools;
+  if (Array.isArray(resultTools)) return resultTools;
+  if (Array.isArray(payload)) return payload as WixMcpTool[];
+  return [];
+}
+
+async function tryListToolsViaToolsList(): Promise<WixMcpTool[] | null> {
+  try {
+    const result = await postJsonRpc<unknown>('tools/list');
+    return normalizeToolsListPayload(result);
+  } catch {
+    return null;
+  }
+}
+
+async function tryListToolsViaToolsCall(): Promise<WixMcpTool[] | null> {
+  // Some MCP implementations expose listing as a tool rather than a JSON-RPC method.
+  // We try common variants. If none exist, we return null.
+  const candidates = ['ListTools', 'ToolsList', 'tools/list'];
+  for (const toolName of candidates) {
+    try {
+      const result = await postJsonRpc<unknown>('tools/call', { name: toolName, arguments: {} });
+      const tools = normalizeToolsListPayload(result);
+      if (tools.length) return tools;
+    } catch {
+      // keep trying
+    }
+  }
+  return null;
+}
+
 export async function wixMcpListTools(): Promise<WixMcpTool[]> {
   // Cache to reduce repeated calls and costs.
   const cached = await kvGetJson<{ tools: WixMcpTool[] }>(TOOLS_LIST_CACHE_KEY);
@@ -66,8 +123,8 @@ export async function wixMcpListTools(): Promise<WixMcpTool[]> {
     return cached.tools;
   }
 
-  const result = await postJsonRpc<{ tools?: WixMcpTool[] }>('tools/list');
-  const tools = Array.isArray(result?.tools) ? result.tools : [];
+  const tools =
+    (await tryListToolsViaToolsList()) ?? (await tryListToolsViaToolsCall()) ?? ([] as WixMcpTool[]);
 
   await kvSetJson(TOOLS_LIST_CACHE_KEY, { tools }, { exSeconds: TOOLS_LIST_TTL_SECONDS });
 

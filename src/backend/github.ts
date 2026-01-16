@@ -39,19 +39,6 @@ export function __resetGithubClientForTests() {
   githubClientForTests = null;
 }
 
-// Backwards-compatible export: many modules import { github }.
-// Must NOT trigger auth/env reads during module evaluation.
-export const github = new Proxy(
-  {},
-  {
-    get(_target, prop) {
-      // Important: do not call getGithubClient() during module evaluation.
-      // This getter runs only when a property is accessed.
-      return (getGithubClient() as any)[prop];
-    },
-  },
-) as unknown as Octokit;
-
 function getDefaultRepo(): string {
   // Source of truth: config/repos.yml
   return getDefaultRepoFromConfig();

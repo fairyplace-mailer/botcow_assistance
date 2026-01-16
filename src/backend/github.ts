@@ -45,8 +45,9 @@ export const github = new Proxy(
   {},
   {
     get(_target, prop) {
-      const client = getGithubClient() as any;
-      return client[prop];
+      // Important: do not call getGithubClient() during module evaluation.
+      // This getter runs only when a property is accessed.
+      return (getGithubClient() as any)[prop];
     },
   },
 ) as unknown as Octokit;

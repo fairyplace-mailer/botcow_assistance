@@ -1,82 +1,59 @@
-import { __setGithubClientForTests } from '../src/backend/github';
+// Deterministic unit test for ciRunner without timers/env/network.
 
-// Minimal fake Octokit-like surface used by ciRunner.
-const fakeGithub: any = {
-  repos: {
-    listCommits: jest.fn().mockResolvedValue({
-      data: [
-        {
-          sha: 'deadbeef',
-          commit: {
-            author: {
-              name: 'bot',
-              email: 'bot@example.com',
-              date: new Date().toISOString(),
-            },
-            message: 'x',
-          },
-          html_url: 'https://example.com',
-        },
-      ],
-    }),
-    getContent: jest.fn().mockRejectedValue({ status: 404 }),
-    createOrUpdateFileContents: jest.fn().mockResolvedValue({ data: {} }),
-  },
-  actions: {
-    createWorkflowDispatch: jest.fn().mockResolvedValue({}),
-    // first poll returns no runs, second poll returns a matching run id
+import { __setDelayForTests, __resetDelayForTests, runWorkflowAndTrack } from '../src/backend/ciRunner';
+
+// Mock the github module functions that ciRunner imports.
+jest.mock('../src/backend/github', () => {
+  return {
+    runWorkflow: jest.fn().mockResolvedValue({ dispatched: true }),
+    // return commit sha so runner can match by head_sha
+    getRecentCommits: jest.fn().mockResolvedValue([{ sha: 'deadbeef' }]),
+    // first poll empty, second poll contains matching run
     listWorkflowRuns: jest
       .fn()
-      .mockResolvedValueOnce({ data: { total_count: 0, workflow_runs: [] } })
+      .mockResolvedValueOnce({ total_count: 0, runs: [] })
       .mockResolvedValueOnce({
-        data: {
-          total_count: 1,
-          workflow_runs: [
-            {
-              id: 123,
-              head_sha: 'deadbeef',
-              created_at: new Date().toISOString(),
-              event: 'workflow_dispatch',
-            },
-          ],
-        },
+        total_count: 1,
+        runs: [
+          {
+            id: 123,
+            head_sha: 'deadbeef',
+            created_at: new Date().toISOString(),
+          },
+        ],
       }),
-    listWorkflowRunsForRepo: jest.fn().mockResolvedValue({ data: { total_count: 0, workflow_runs: [] } }),
-    getWorkflowRun: jest.fn().mockResolvedValue({
-      data: { id: 1, status: 'completed', conclusion: 'success' },
-    }),
-  },
-};
+    getWorkflowStatus: jest.fn(),
+    // repo file store
+    getFile: jest.fn().mockRejectedValue({ status: 404 }),
+    commitFile: jest.fn().mockResolvedValue({}),
+  };
+});
 
-__setGithubClientForTests(fakeGithub);
-
-import { runWorkflowAndTrack } from '../src/backend/ciRunner';
+// saveRun should not be used if commitFile succeeds.
+jest.mock('../src/backend/ciStore', () => ({
+  saveRun: jest.fn().mockResolvedValue(undefined),
+}));
 
 describe('ciRunner', () => {
-  it('runWorkflowAndTrack returns tracked result', async () => {
-    jest.useFakeTimers();
+  afterEach(() => {
+    __resetDelayForTests();
+    jest.clearAllMocks();
+  });
 
-    const p = runWorkflowAndTrack({
+  it('runWorkflowAndTrack returns tracked result (no timers)', async () => {
+    __setDelayForTests(async () => {
+      // no-op delay
+    });
+
+    const res = await runWorkflowAndTrack({
       workflow_id: 'ci.yml',
       ref: 'main',
       repo: 'fairyplace-mailer/botcow_assistance',
     });
 
-    // allow the first poll + its backoff timer to be scheduled
-    await Promise.resolve();
-
-    // fast-forward enough for at least one backoff + second poll
-    jest.runOnlyPendingTimers();
-    jest.runOnlyPendingTimers();
-
-    const res = await p;
-
-    expect(res).toHaveProperty('tracked');
-    expect(res.tracked).toHaveProperty('workflowId', 'ci.yml');
-
-    // In our mock, the second poll returns run id 123
+    expect(res.tracked.workflowId).toBe('ci.yml');
+    expect(res.tracked.ref).toBe('main');
     expect(res.tracked.runId).toBe(123);
-
-    jest.useRealTimers();
-  }, 15000);
+    expect(res.tracked.stored).toBe('repo');
+  });
 });

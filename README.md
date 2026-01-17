@@ -29,6 +29,20 @@
 - TypeScript
 - PWA (будет добавлено)
 
+## Prisma / DB
+
+- Prisma v7 использует `prisma.config.ts`.
+- В `prisma/schema.prisma` **не** задаётся `datasource.url`.
+- Подключение к Postgres делается через Prisma v7 adapter (`@prisma/adapter-pg`) в `src/backend/db.ts`.
+
+### Миграции (deploy)
+
+На окружении, где выставлен `DATABASE_URL`:
+
+```bash
+npx prisma migrate deploy
+```
+
 ## API-роуты
 
 /api/chat

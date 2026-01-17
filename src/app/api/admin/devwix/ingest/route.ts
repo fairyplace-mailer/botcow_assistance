@@ -9,12 +9,13 @@ export async function POST(req: Request) {
 
   try {
     const { searchParams } = new URL(req.url);
-    const limitPages = Number(searchParams.get('limitPages') ?? '20');
+    const limitPages = Number(searchParams.get('limitPages') ?? '50');
+    const maxChunksPerRun = searchParams.get('maxChunks') ? Number(searchParams.get('maxChunks')) : undefined;
+    const force = searchParams.get('force') === '1' || searchParams.get('force') === 'true';
 
-    const result = await ingestDevWixArticles({ limitPages });
+    const result = await ingestDevWixArticles({ limitPages, maxChunksPerRun, force });
     return NextResponse.json({ ok: true, result });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }
 }

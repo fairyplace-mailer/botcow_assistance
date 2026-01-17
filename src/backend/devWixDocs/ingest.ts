@@ -2,7 +2,12 @@ import { prisma } from '../db';
 import { embedText } from '../openai';
 import { kvGetJson, kvSetJson } from '../kv';
 
-type IngestResult = {
+export type IngestStopReason =
+  | 'skipped_daily_gate'
+  | 'start_fetch_failed'
+  | 'maxChunksPerRun';
+
+export type IngestResult = {
   ok: true;
   startUrl: string;
   limitPages: number;
@@ -11,13 +16,14 @@ type IngestResult = {
   skippedUnchanged: number;
   chunksUpserted: number;
   discoveredQueued: number;
-  stoppedReason?: string;
+  stoppedReason?: IngestStopReason;
+
   // diagnostics
   startFetched: boolean;
   startStatus: number | null;
   startHtmlBytes: number | null;
-  startFetchErrorName?: string | null;
-  startFetchError?: string | null;
+  startFetchErrorName: string | null;
+  startFetchError: string | null;
   linksFoundTotal: number;
   linksMatchedAllowed: number;
   sampleLinks: string[];
@@ -177,7 +183,7 @@ export async function ingestDevWixArticles(
   let linksFoundTotal = 0;
   let linksMatchedAllowed = 0;
   let sampleLinks: string[] = [];
-  let stoppedReason: string | undefined;
+  let stoppedReason: IngestStopReason | undefined;
 
   const queue: string[] = [startUrl];
   const seen = new Set<string>(queue);
@@ -355,7 +361,8 @@ export async function ingestDevWixArticles(
   // record last run
   await kvSetJson(KV_LAST_RUN_KEY, new Date().toISOString());
 
-  return {
+  // Build result without passing `undefined` for optional fields.
+  const result: IngestResult = {
     ok: true,
     startUrl,
     limitPages,
@@ -364,7 +371,6 @@ export async function ingestDevWixArticles(
     skippedUnchanged,
     chunksUpserted,
     discoveredQueued,
-    stoppedReason,
     startFetched,
     startStatus,
     startHtmlBytes,
@@ -374,4 +380,6 @@ export async function ingestDevWixArticles(
     linksMatchedAllowed,
     sampleLinks,
   };
+  if (stoppedReason) result.stoppedReason = stoppedReason;
+  return result;
 }

@@ -21,12 +21,14 @@ model DocPage {
   text        String
   contentHash String
   fetchedAt   DateTime
+  lastSeenAt  DateTime
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   chunks DocChunk[]
 
   @@index([fetchedAt])
+  @@index([lastSeenAt])
 }
 
 model DocChunk {

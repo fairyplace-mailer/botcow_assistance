@@ -118,11 +118,13 @@ function chunkText(text: string, maxChars = 1800, overlap = 200): string[] {
   return chunks;
 }
 
-export async function ingestDevWixArticles(opts?: {
-  limitPages?: number;
-  maxChunksPerRun?: number;
-  force?: boolean;
-}) {
+export async function ingestDevWixArticles(
+  opts?: {
+    limitPages?: number;
+    maxChunksPerRun?: number;
+    force?: boolean;
+  },
+): Promise<IngestResult> {
   const limitPages = Math.max(1, Math.min(500, Number(opts?.limitPages ?? 50)));
   const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 600)));
   const startUrl = DEFAULT_START_URL;
@@ -148,10 +150,12 @@ export async function ingestDevWixArticles(opts?: {
             startFetched: false,
             startStatus: null,
             startHtmlBytes: null,
+            startFetchErrorName: null,
+            startFetchError: null,
             linksFoundTotal: 0,
             linksMatchedAllowed: 0,
             sampleLinks: [],
-          } satisfies IngestResult;
+          };
         }
       }
     }
@@ -182,7 +186,6 @@ export async function ingestDevWixArticles(opts?: {
   try {
     const res = await fetch(startUrl, {
       headers: {
-        // some sites vary content by UA
         'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
         Accept: 'text/html,application/xhtml+xml',
       },
@@ -215,8 +218,7 @@ export async function ingestDevWixArticles(opts?: {
       }
     }
 
-    // remove startUrl if it's not allowed itself (it is /docs, which is not /docs/)
-    // keep it in seen but we won't store it as DocPage.
+    // remove startUrl: it's /docs (not /docs/), not a storable page.
     queue.shift();
   } catch (e: any) {
     startFetchErrorName = e?.name ?? null;
@@ -239,7 +241,7 @@ export async function ingestDevWixArticles(opts?: {
       linksFoundTotal,
       linksMatchedAllowed,
       sampleLinks,
-    } satisfies IngestResult;
+    };
   }
 
   let discoveredQueued = queue.length;
@@ -371,5 +373,5 @@ export async function ingestDevWixArticles(opts?: {
     linksFoundTotal,
     linksMatchedAllowed,
     sampleLinks,
-  } satisfies IngestResult;
+  };
 }

@@ -24,9 +24,27 @@ const fakeGithub: any = {
   },
   actions: {
     createWorkflowDispatch: jest.fn().mockResolvedValue({}),
-    listWorkflowRuns: jest.fn().mockResolvedValue({ data: { total_count: 0, workflow_runs: [] } }),
+    // first poll returns no runs, second poll returns a matching run id
+    listWorkflowRuns: jest
+      .fn()
+      .mockResolvedValueOnce({ data: { total_count: 0, workflow_runs: [] } })
+      .mockResolvedValueOnce({
+        data: {
+          total_count: 1,
+          workflow_runs: [
+            {
+              id: 123,
+              head_sha: 'deadbeef',
+              created_at: new Date().toISOString(),
+              event: 'workflow_dispatch',
+            },
+          ],
+        },
+      }),
     listWorkflowRunsForRepo: jest.fn().mockResolvedValue({ data: { total_count: 0, workflow_runs: [] } }),
-    getWorkflowRun: jest.fn().mockResolvedValue({ data: { id: 1, status: 'completed', conclusion: 'success' } }),
+    getWorkflowRun: jest.fn().mockResolvedValue({
+      data: { id: 1, status: 'completed', conclusion: 'success' },
+    }),
   },
 };
 
@@ -36,13 +54,29 @@ import { runWorkflowAndTrack } from '../src/backend/ciRunner';
 
 describe('ciRunner', () => {
   it('runWorkflowAndTrack returns tracked result', async () => {
-    const res = await runWorkflowAndTrack({
+    jest.useFakeTimers();
+
+    const p = runWorkflowAndTrack({
       workflow_id: 'ci.yml',
       ref: 'main',
       repo: 'fairyplace-mailer/botcow_assistance',
     });
 
+    // allow the first poll + its backoff timer to be scheduled
+    await Promise.resolve();
+
+    // fast-forward enough for at least one backoff + second poll
+    jest.runOnlyPendingTimers();
+    jest.runOnlyPendingTimers();
+
+    const res = await p;
+
     expect(res).toHaveProperty('tracked');
     expect(res.tracked).toHaveProperty('workflowId', 'ci.yml');
-  });
+
+    // In our mock, the second poll returns run id 123
+    expect(res.tracked.runId).toBe(123);
+
+    jest.useRealTimers();
+  }, 15000);
 });

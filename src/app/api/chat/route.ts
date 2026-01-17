@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { runAssistant } from '../../../backend/assistant';
 import { logEvent } from '../../../backend/log';
 import { chooseModel } from '../../../backend/modelRouter';
+import {
+  formatDevWixContext,
+  retrieveDevWixContext,
+} from '../../../backend/devWixDocs/retrieve';
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -124,7 +128,38 @@ export async function POST(req: Request) {
 `,
   };
 
-  const fullMessages = [systemMessage, ...messages];
+  // RAG: use latest user message as query
+  const lastUser = [...messages].reverse().find((m: any) => m?.role === 'user');
+  const userQuery =
+    typeof lastUser?.content === 'string' ? lastUser.content : null;
+
+  let ragMessage: { role: 'system'; content: string } | null = null;
+  if (userQuery) {
+    try {
+      const retrieved = await retrieveDevWixContext({
+        query: userQuery,
+        topK: 6,
+        maxChars: 6000,
+        candidateLimit: 800,
+      });
+      const ctx = formatDevWixContext(retrieved.chunks);
+      if (ctx) {
+        ragMessage = {
+          role: 'system',
+          content:
+            ctx +
+            '\n\nUse this context only when relevant. Prefer citing the Source URLs when referencing docs.',
+        };
+      }
+    } catch {
+      // RAG is best-effort. Never fail the chat if retrieval fails.
+      ragMessage = null;
+    }
+  }
+
+  const fullMessages = ragMessage
+    ? [systemMessage, ragMessage, ...messages]
+    : [systemMessage, ...messages];
 
   // выбор модели
   const routing = chooseModel(fullMessages);

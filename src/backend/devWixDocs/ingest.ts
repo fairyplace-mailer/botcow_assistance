@@ -3,23 +3,16 @@ import crypto from 'crypto';
 import { prisma } from '../db';
 import { embedText } from '../openai';
 
-const DEFAULT_START_URL = 'https://dev.wix.com/docs';
-
-function normalizeUrl(raw: string): string | null {
-  try {
-    const u = new URL(raw);
-    u.hash = '';
-    // drop common tracking params
-    u.searchParams.delete('utm_source');
-    u.searchParams.delete('utm_medium');
-    u.searchParams.delete('utm_campaign');
-    u.searchParams.delete('utm_term');
-    u.searchParams.delete('utm_content');
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
+type IngestResult = {
+  ok: true;
+  startUrl: string;
+  limitPages: number;
+  fetched: number;
+  stored: number;
+  skippedUnchanged: number;
+  chunksUpserted: number;
+  discoveredQueued: number;
+};
 
 function hashText(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex');
@@ -27,105 +20,113 @@ function hashText(text: string): string {
 
 function stripHtmlToText(html: string): { title: string | null; text: string } {
   const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  const titleRaw = titleMatch?.[1];
-  const title = titleRaw ? titleRaw.replace(/\s+/g, ' ').trim() : null;
+  const rawTitle = titleMatch?.[1];
+  const title = rawTitle ? rawTitle.replace(/\s+/g, ' ').trim() : null;
 
   // naive tag stripping
   const text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
 
   return { title, text };
 }
 
-function extractLinks(html: string, baseUrl: string): string[] {
+function normalizeUrl(url: string): string | null {
+  try {
+    const u = new URL(url, 'https://dev.wix.com');
+    if (u.origin !== 'https://dev.wix.com') return null;
+    u.hash = '';
+    // keep query? typically not useful for docs
+    u.search = '';
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+function extractLinksFromAnchors(html: string): string[] {
   const out: string[] = [];
-  const re = /href\s*=\s*"([^"]+)"/gi;
+  const re = /<a\s+[^>]*href=("|')([^"']+)("|')[^>]*>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    const href = m[1];
-    if (!href) continue;
-    const abs = normalizeUrl(new URL(href, baseUrl).toString());
+    const raw = m?.[2];
+    if (!raw) continue;
+    const abs = normalizeUrl(raw);
     if (abs) out.push(abs);
   }
   return out;
 }
 
-// Fallback for sites where navigation is embedded in JSON/JS and plain <a href> links are sparse.
-function extractLinksByRegex(html: string, baseUrl: string): string[] {
+function extractLinksByRegex(html: string): string[] {
   const out: string[] = [];
-  // Match absolute or relative URLs that look like dev.wix.com/docs/... and are inside quotes.
-  const re = /"(https?:\/\/dev\.wix\.com\/docs\/[^"]+)"/gi;
+  // capture absolute or root-relative links inside quotes (covers many Next.js inline data blobs)
+  const re = /(?:https?:\/\/dev\.wix\.com)?(\/docs\/[^"]+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
-    const abs = normalizeUrl(m[1]);
+    const raw = m?.[1];
+    if (!raw) continue;
+    const abs = normalizeUrl(raw);
     if (abs) out.push(abs);
   }
-
-  // Match relative /docs/... occurrences.
-  const rel = /"(\/docs\/[^"]+)"/gi;
-  while ((m = rel.exec(html)) !== null) {
-    const abs = normalizeUrl(new URL(m[1], baseUrl).toString());
-    if (abs) out.push(abs);
-  }
-
   return out;
 }
 
-function isAllowedDocsUrl(u: URL): boolean {
-  if (u.hostname !== 'dev.wix.com') return false;
-  const p = u.pathname;
-  if (!p.startsWith('/docs/')) return false;
+function shouldStorePath(pathname: string): boolean {
+  if (!pathname.startsWith('/docs/')) return false;
 
-  // deny obvious non-content / high-churn areas (can adjust later)
-  if (p.startsWith('/docs/rest/')) return false;
-  if (p.startsWith('/docs/sdk/')) return false;
-  if (p.startsWith('/docs/api/')) return false;
-  if (p.startsWith('/docs/reference/')) return false;
+  // deny big non-article sections to reduce noise/cost
+  const denyPrefixes = ['/docs/rest/', '/docs/sdk/', '/docs/api/', '/docs/reference/'];
+  if (denyPrefixes.some((p) => pathname.startsWith(p))) return false;
 
   return true;
 }
 
-function chunkText(text: string, opts?: { maxChars?: number; overlapChars?: number }): string[] {
-  const maxChars = Math.max(400, opts?.maxChars ?? 1800);
-  const overlap = Math.max(0, Math.min(400, opts?.overlapChars ?? 150));
-
-  const cleaned = text.replace(/\s+/g, ' ').trim();
-  if (!cleaned) return [];
+function chunkText(text: string, maxChars = 1800, overlapChars = 200): string[] {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
 
   const chunks: string[] = [];
   let i = 0;
-  while (i < cleaned.length) {
-    const end = Math.min(cleaned.length, i + maxChars);
-    const slice = cleaned.slice(i, end).trim();
-    if (slice) chunks.push(slice);
-    if (end >= cleaned.length) break;
-    i = Math.max(0, end - overlap);
+  while (i < clean.length) {
+    const end = Math.min(clean.length, i + maxChars);
+    const piece = clean.slice(i, end).trim();
+    if (piece) chunks.push(piece);
+    if (end >= clean.length) break;
+    i = Math.max(0, end - overlapChars);
   }
   return chunks;
 }
 
-export type IngestDevWixArticlesOptions = {
-  startUrl?: string;
-  limitPages?: number;
-};
+async function fetchHtml(url: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
+      Accept: 'text/html,application/xhtml+xml',
+    },
+    redirect: 'follow',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
+  }
+  return await res.text();
+}
 
-export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {}) {
-  const startUrl = opts.startUrl ?? DEFAULT_START_URL;
-  const limitPages = Math.max(1, Math.min(opts.limitPages ?? 5, 200));
+export async function ingestDevWixArticles(params: {
+  limitPages: number;
+}): Promise<IngestResult> {
+  const startUrl = 'https://dev.wix.com/docs';
+  const limitPages = Math.max(1, Math.min(500, params.limitPages));
 
-  const queue: string[] = [startUrl];
   const seen = new Set<string>();
+  const queue: string[] = [startUrl];
 
   let fetched = 0;
   let stored = 0;
@@ -137,45 +138,13 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
     if (seen.has(url)) continue;
     seen.add(url);
 
-    let u: URL;
-    try {
-      u = new URL(url);
-    } catch {
+    const u = new URL(url);
+    if (!shouldStorePath(u.pathname)) {
       continue;
     }
 
-    const isStart = url === startUrl;
-    const isAllowed = isAllowedDocsUrl(u);
-    if (!isStart && !isAllowed) continue;
-
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'text/html,application/xhtml+xml',
-      },
-    });
-
-    if (!res.ok) {
-      throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
-    }
-
-    const html = await res.text();
+    const html = await fetchHtml(url);
     fetched += 1;
-
-    // discover more URLs
-    const discovered = [...extractLinks(html, url), ...extractLinksByRegex(html, url)];
-    for (const d of discovered) {
-      if (seen.has(d)) continue;
-      try {
-        const du = new URL(d);
-        if (!isAllowedDocsUrl(du)) continue;
-        queue.push(d);
-      } catch {
-        // ignore
-      }
-    }
-
-    // store only allowed docs pages (not just the start)
-    if (!isAllowed) continue;
 
     const { title, text } = stripHtmlToText(html);
     const contentHash = hashText(text);
@@ -183,49 +152,57 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
     const existing = await prisma.docPage.findUnique({ where: { url } });
     if (existing?.contentHash === contentHash) {
       skippedUnchanged += 1;
-      continue;
-    }
-
-    const page = await prisma.docPage.upsert({
-      where: { url },
-      create: {
-        url,
-        title,
-        text,
-        contentHash,
-        fetchedAt: new Date(),
-      },
-      update: {
-        title,
-        text,
-        contentHash,
-        fetchedAt: new Date(),
-      },
-    });
-
-    // re-create chunks for page
-    await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
-
-    const chunks = chunkText(text).filter((c): c is string => typeof c === 'string' && c.length > 0);
-    let idx = 0;
-    for (const content of chunks) {
-      const emb = await embedText(content);
-
-      await prisma.docChunk.create({
-        data: {
-          pageId: page.id,
-          idx,
-          content,
-          embeddingJson: emb.vector as any,
-          embeddingModel: emb.model,
-          dims: emb.dims,
+    } else {
+      const saved = await prisma.docPage.upsert({
+        where: { url },
+        create: {
+          url,
+          title,
+          text,
+          contentHash,
+          fetchedAt: new Date(),
+        },
+        update: {
+          title,
+          text,
+          contentHash,
+          fetchedAt: new Date(),
         },
       });
-      chunksUpserted += 1;
-      idx += 1;
+      stored += 1;
+
+      // replace chunks for this page
+      await prisma.docChunk.deleteMany({ where: { pageId: saved.id } });
+
+      const chunks = chunkText(text).filter((c): c is string => typeof c === 'string' && c.trim().length > 0);
+
+      for (let idx = 0; idx < chunks.length; idx += 1) {
+        const content = chunks[idx];
+        if (!content) continue;
+        const emb = await embedText(content);
+
+        await prisma.docChunk.create({
+          data: {
+            pageId: saved.id,
+            idx,
+            content,
+            embeddingJson: emb.vector as any,
+            embeddingModel: emb.model,
+            dims: emb.dims,
+          },
+        });
+        chunksUpserted += 1;
+      }
     }
 
-    stored += 1;
+    // discover links
+    const discovered = [...extractLinksFromAnchors(html), ...extractLinksByRegex(html)];
+    for (const link of discovered) {
+      if (seen.has(link)) continue;
+      const lu = new URL(link);
+      if (!shouldStorePath(lu.pathname)) continue;
+      queue.push(link);
+    }
   }
 
   return {

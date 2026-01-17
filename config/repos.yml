@@ -26,9 +26,3 @@ repos:
     vercel:
       projectIdEnv: VERCEL_PROJECT_ID_BOTCAT
       teamIdEnv: VERCEL_TEAM_ID
-
-  - repo: fairyplace-mailer/wixsites-read
-    defaultBranch: main
-    vercel:
-      projectIdEnv: VERCEL_PROJECT_ID_WIXSITES_READ
-      teamIdEnv: VERCEL_TEAM_ID

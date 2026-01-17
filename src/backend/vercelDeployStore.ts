@@ -83,7 +83,7 @@ export async function saveDeployment(
 
   if (deployment.gitSha) {
     await kvSetJson(kvKeyForLatestBySha(repoFullName, deployment.gitSha), indexEntry, {
-      exSeconds: LATEST_TTL_SECONDS,
+      ttlSeconds: LATEST_TTL_SECONDS,
     });
   }
 
@@ -91,7 +91,7 @@ export async function saveDeployment(
     await kvSetJson(
       kvKeyForLatestByBranch(repoFullName, deployment.gitBranch),
       indexEntry,
-      { exSeconds: LATEST_TTL_SECONDS },
+      { ttlSeconds: LATEST_TTL_SECONDS },
     );
   }
 }

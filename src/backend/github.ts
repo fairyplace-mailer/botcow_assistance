@@ -1,6 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
 import { logEvent } from './log';
+import { kvGetJson, kvSetJson } from './kv';
 
 let githubClient: Octokit | null = null;
 
@@ -12,6 +13,7 @@ function getGithubToken(): string {
   if (!token) {
     // IMPORTANT: do not throw at module import time.
     // Next.js may evaluate route modules during build/"collect page data".
+    // We throw when an actual GitHub call is attempted.
     throw new Error('GITHUB_PAT_BOTCOW is not set');
   }
   return token;
@@ -36,18 +38,6 @@ export function __setGithubClientForTests(client: Octokit) {
 export function __resetGithubClientForTests() {
   githubClientForTests = null;
 }
-
-// Backwards-compatible export: many modules import { github }.
-// This must NOT trigger auth/env reads during module evaluation.
-export const github = new Proxy(
-  {},
-  {
-    get(_target, prop) {
-      const client = getGithubClient() as any;
-      return client[prop];
-    },
-  },
-) as unknown as Octokit;
 
 function getDefaultRepo(): string {
   // Source of truth: config/repos.yml
@@ -224,7 +214,6 @@ async function searchCodeWithRetry(params: SearchCodeParams) {
 }
 
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
-const SEARCH_CACHE_MAX_ENTRIES = 300;
 
 type SearchInRepoResultItem = {
   path: string;
@@ -233,10 +222,6 @@ type SearchInRepoResultItem = {
   url: string;
 };
 
-const searchCache = new Map<
-  string,
-  { expiresAt: number; data: SearchInRepoResultItem[] }
->();
 const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
 
 /**
@@ -244,21 +229,13 @@ const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
  * Not used in runtime code.
  */
 export function __resetSearchStateForTests() {
-  searchCache.clear();
   searchInflight.clear();
 }
 
-function purgeExpiredSearchCache() {
-  const now = Date.now();
-  for (const [k, v] of searchCache.entries()) {
-    if (v.expiresAt <= now) searchCache.delete(k);
-  }
-  // Basic LRU-ish cap: delete oldest inserted keys (Map preserves insertion order).
-  while (searchCache.size > SEARCH_CACHE_MAX_ENTRIES) {
-    const firstKey = searchCache.keys().next().value as string | undefined;
-    if (!firstKey) break;
-    searchCache.delete(firstKey);
-  }
+function cacheKeyToKvKey(cacheKey: string) {
+  // Avoid overly long keys + unsafe characters
+  const safe = cacheKey.replace(/[^a-zA-Z0-9._\-:=/]/g, '_');
+  return `github:searchCache:${safe}`;
 }
 
 export async function getFile(path: string, repo?: string, ref?: string) {
@@ -389,12 +366,11 @@ export async function searchInRepo(options: {
     ...(options.path ? { path: options.path } : {}),
   });
 
-  purgeExpiredSearchCache();
-
   const cacheKey = `${q}::per_page=${per_page}::page=${page}`;
+  const kvKey = cacheKeyToKvKey(cacheKey);
 
-  const cached = searchCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
+  const cached = await kvGetJson<{ data: SearchInRepoResultItem[] }>(kvKey);
+  if (cached?.data) {
     try {
       await logEvent('github_search_cache_hit', {
         page,
@@ -429,12 +405,12 @@ export async function searchInRepo(options: {
       url: item.html_url,
     }));
 
-    searchCache.set(cacheKey, {
-      expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
-      data: items,
-    });
-
-    purgeExpiredSearchCache();
+    // Persist cache to survive serverless cold starts.
+    await kvSetJson(
+      kvKey,
+      { data: items },
+      { ttlSeconds: Math.floor(SEARCH_CACHE_TTL_MS / 1000) },
+    );
 
     return items;
   })();

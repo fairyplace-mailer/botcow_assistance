@@ -11,6 +11,10 @@ export interface ModelRoutingDecision {
 
 type ModelConfig = Pick<ModelRoutingDecision, 'model' | 'reasoning'>;
 
+// OpenAI embeddings model used for RAG/search/analytics.
+// Kept separate from chat ModelId to avoid breaking chat routing.
+export const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-large' as const;
+
 /**
  * Роутер моделей по содержимому диалога.
  *
@@ -203,7 +207,7 @@ function detectFlags(text: string) {
     /diff --git|@@ .+ @@|^\+\+\+ |^--- /m.test(text) || /```diff/.test(text);
 
   const hasPmWords =
-    /issue|ticket|task|задач[аеи]|project board|kanban|roadmap|эпик|epic|статус|status|update status|progress/i.test(
+    /issue|ticket|task|задач[аеии]|project board|kanban|roadmap|эпик|epic|статус|status|update status|progress/i.test(
       lower,
     ) ||
     /deploy|деплой|redeploy|rollback|roll back|vercel|верцел|лог деплоя|deployment log/i.test(

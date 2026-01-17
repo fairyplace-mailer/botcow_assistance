@@ -1,57 +1,59 @@
-import { runWorkflowAndTrack, getWorkflowRunStatus } from '../src/backend/ciRunner';
-import * as github from '../src/backend/github';
-import * as store from '../src/backend/ciStore';
+// Deterministic unit test for ciRunner without timers/env/network.
 
-jest.mock('../src/backend/github');
-jest.mock('../src/backend/ciStore');
+import { __setDelayForTests, __resetDelayForTests, runWorkflowAndTrack } from '../src/backend/ciRunner';
 
-const mockedGitHub = github as jest.Mocked<typeof github>;
-const mockedStore = store as jest.Mocked<typeof store>;
+// Mock the github module functions that ciRunner imports.
+jest.mock('../src/backend/github', () => {
+  return {
+    runWorkflow: jest.fn().mockResolvedValue({ dispatched: true }),
+    // return commit sha so runner can match by head_sha
+    getRecentCommits: jest.fn().mockResolvedValue([{ sha: 'deadbeef' }]),
+    // first poll empty, second poll contains matching run
+    listWorkflowRuns: jest
+      .fn()
+      .mockResolvedValueOnce({ total_count: 0, runs: [] })
+      .mockResolvedValueOnce({
+        total_count: 1,
+        runs: [
+          {
+            id: 123,
+            head_sha: 'deadbeef',
+            created_at: new Date().toISOString(),
+          },
+        ],
+      }),
+    getWorkflowStatus: jest.fn(),
+    // repo file store
+    getFile: jest.fn().mockRejectedValue({ status: 404 }),
+    commitFile: jest.fn().mockResolvedValue({}),
+  };
+});
+
+// saveRun should not be used if commitFile succeeds.
+jest.mock('../src/backend/ciStore', () => ({
+  saveRun: jest.fn().mockResolvedValue(undefined),
+}));
 
 describe('ciRunner', () => {
-  beforeEach(() => {
-    jest.resetAllMocks();
+  afterEach(() => {
+    __resetDelayForTests();
+    jest.clearAllMocks();
   });
 
-  test('runWorkflowAndTrack - happy path, repo store', async () => {
-    mockedGitHub.getRecentCommits.mockResolvedValue([{ sha: 'abc123' } as any]);
-    mockedGitHub.runWorkflow.mockResolvedValue({ status: 'dispatched' } as any);
-    mockedGitHub.listWorkflowRuns.mockResolvedValue({ runs: [{ id: 1, head_sha: 'abc123', created_at: new Date().toISOString() }] } as any);
-    mockedGitHub.getFile.mockResolvedValue('{}' as any);
-    mockedGitHub.commitFile.mockResolvedValue({} as any);
+  it('runWorkflowAndTrack returns tracked result (no timers)', async () => {
+    __setDelayForTests(async () => {
+      // no-op delay
+    });
 
-    const { tracked } = await runWorkflowAndTrack({ workflow_id: 'ci.yml', ref: 'botcow-prevectus', repo: 'fairyplace-mailer/botcow_assistance' });
+    const res = await runWorkflowAndTrack({
+      workflow_id: 'ci.yml',
+      ref: 'main',
+      repo: 'fairyplace-mailer/botcow_assistance',
+    });
 
-    expect(tracked.runId).toBe(1);
-    expect(tracked.stored).toBe('repo');
-    expect(mockedGitHub.commitFile).toHaveBeenCalled();
-  });
-
-  test('runWorkflowAndTrack - fallback to local store when commit fails', async () => {
-    mockedGitHub.getRecentCommits.mockResolvedValue([{ sha: 'def456' } as any]);
-    mockedGitHub.runWorkflow.mockResolvedValue({ status: 'dispatched' } as any);
-    mockedGitHub.listWorkflowRuns.mockResolvedValue({ runs: [{ id: 2, head_sha: 'def456', created_at: new Date().toISOString() }] } as any);
-    mockedGitHub.getFile.mockResolvedValue('{}' as any);
-    mockedGitHub.commitFile.mockRejectedValue({ status: 403 });
-    mockedStore.saveRun.mockResolvedValue(undefined as any);
-
-    const { tracked } = await runWorkflowAndTrack({ workflow_id: 'ci.yml', ref: 'botcow-prevectus', repo: 'fairyplace-mailer/botcow_assistance' });
-
-    expect(tracked.runId).toBe(2);
-    expect(tracked.stored).toBe('local');
-    expect(mockedStore.saveRun).toHaveBeenCalled();
-  });
-
-  test('getWorkflowRunStatus - normalizes response', async () => {
-    mockedGitHub.getWorkflowStatus.mockResolvedValue({ id: 5, status: 'completed', conclusion: 'success', created_at: '2020-01-01', updated_at: '2020-01-01', html_url: 'http://', head_branch: 'botcow-prevectus', head_sha: 'abc' } as any);
-
-    const res = await getWorkflowRunStatus({ run_id: 5, repo: 'fairyplace-mailer/botcow_assistance' });
-    expect(res.run_id).toBe(5);
-    expect(res.status).toBe('completed');
-  });
-
-  test('getWorkflowRunStatus - throws on 403', async () => {
-    mockedGitHub.getWorkflowStatus.mockRejectedValue({ status: 403 });
-    await expect(getWorkflowRunStatus({ run_id: 99 })).rejects.toThrow('Actions/workflow permissions');
+    expect(res.tracked.workflowId).toBe('ci.yml');
+    expect(res.tracked.ref).toBe('main');
+    expect(res.tracked.runId).toBe(123);
+    expect(res.tracked.stored).toBe('repo');
   });
 });

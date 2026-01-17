@@ -20,6 +20,24 @@ export type RunTrackResult = {
 const STORE_PATH = '.botcow/ci-runs.json';
 const STORE_COMMIT_BRANCH = 'botcow-prevectus'; // per user request — persist tracking in this branch
 
+// --- test-only injection for polling delay ---
+let delayForTests: ((ms: number) => Promise<void>) | null = null;
+
+/** Test-only: inject delay function to avoid timers in unit tests. */
+export function __setDelayForTests(fn: (ms: number) => Promise<void>) {
+  delayForTests = fn;
+}
+
+/** Test-only: reset injected delay function. */
+export function __resetDelayForTests() {
+  delayForTests = null;
+}
+
+function delay(ms: number) {
+  if (delayForTests) return delayForTests(ms);
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Запустить workflow и попытаться отследить созданный run_id.
  * Сначала пытаемся сопоставить по head_sha (коммиту) — это даёт надёжность.
@@ -125,7 +143,7 @@ export async function runWorkflowAndTrack(options: {
 
       attempt++;
       const waitMs = Math.min(1000 * Math.pow(2, Math.min(attempt, 5)), 10000);
-      await new Promise((r) => setTimeout(r, waitMs));
+      await delay(waitMs);
     }
   } catch {
     // ignore - best-effort

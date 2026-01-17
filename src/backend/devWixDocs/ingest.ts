@@ -1,5 +1,6 @@
 import { prisma } from '../db';
 import { embedText } from '../openai';
+import { kvGetJson, kvSetJson } from '../kv';
 
 type IngestResult = {
   ok: true;
@@ -10,6 +11,7 @@ type IngestResult = {
   skippedUnchanged: number;
   chunksUpserted: number;
   discoveredQueued: number;
+  stoppedReason?: string;
   // diagnostics
   startFetched: boolean;
   startStatus: number | null;
@@ -22,6 +24,7 @@ type IngestResult = {
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
+const KV_LAST_RUN_KEY = 'devwix:ingest:lastRunAt';
 
 // Allow: any /docs/... page. We use deny-list to avoid huge API reference sections.
 function isAllowedPath(pathname: string): boolean {
@@ -115,9 +118,46 @@ function chunkText(text: string, maxChars = 1800, overlap = 200): string[] {
   return chunks;
 }
 
-export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
+export async function ingestDevWixArticles(opts?: {
+  limitPages?: number;
+  maxChunksPerRun?: number;
+  force?: boolean;
+}) {
   const limitPages = Math.max(1, Math.min(500, Number(opts?.limitPages ?? 50)));
+  const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 600)));
   const startUrl = DEFAULT_START_URL;
+
+  // Daily gating: cron may call hourly; we only ingest once per ~24h unless forced.
+  if (!opts?.force) {
+    const lastRunAtIso = await kvGetJson<string>(KV_LAST_RUN_KEY);
+    if (lastRunAtIso) {
+      const last = new Date(lastRunAtIso).getTime();
+      if (!Number.isNaN(last)) {
+        const ageMs = Date.now() - last;
+        if (ageMs < 23 * 60 * 60 * 1000) {
+          return {
+            ok: true,
+            startUrl,
+            limitPages,
+            fetched: 0,
+            stored: 0,
+            skippedUnchanged: 0,
+            chunksUpserted: 0,
+            discoveredQueued: 0,
+            stoppedReason: 'skipped_daily_gate',
+            startFetched: false,
+            startStatus: null,
+            startHtmlBytes: null,
+            linksFoundTotal: 0,
+            linksMatchedAllowed: 0,
+            sampleLinks: [],
+          } satisfies IngestResult;
+        }
+      }
+    }
+  }
+
+  const runStartedAt = new Date();
 
   let fetched = 0;
   let stored = 0;
@@ -133,6 +173,7 @@ export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
   let linksFoundTotal = 0;
   let linksMatchedAllowed = 0;
   let sampleLinks: string[] = [];
+  let stoppedReason: string | undefined;
 
   const queue: string[] = [startUrl];
   const seen = new Set<string>(queue);
@@ -189,6 +230,7 @@ export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
       skippedUnchanged,
       chunksUpserted,
       discoveredQueued: 0,
+      stoppedReason: 'start_fetch_failed',
       startFetched,
       startStatus,
       startHtmlBytes,
@@ -226,6 +268,8 @@ export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
 
     const existing = await prisma.docPage.findUnique({ where: { url } });
     if (existing?.contentHash === contentHash) {
+      // still mark as seen
+      await prisma.docPage.update({ where: { url }, data: { lastSeenAt: runStartedAt } }).catch(() => undefined);
       skippedUnchanged += 1;
       continue;
     }
@@ -237,13 +281,15 @@ export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
         title,
         text,
         contentHash,
-        fetchedAt: new Date(),
+        fetchedAt: runStartedAt,
+        lastSeenAt: runStartedAt,
       },
       update: {
         title,
         text,
         contentHash,
-        fetchedAt: new Date(),
+        fetchedAt: runStartedAt,
+        lastSeenAt: runStartedAt,
       },
     });
 
@@ -255,6 +301,10 @@ export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
     const chunks = chunkText(text).filter((c): c is string => typeof c === 'string' && c.trim().length > 0);
     let idx = 0;
     for (const content of chunks) {
+      if (chunksUpserted >= maxChunksPerRun) {
+        stoppedReason = 'maxChunksPerRun';
+        break;
+      }
       const emb = await embedText(content);
       await prisma.docChunk.create({
         data: {
@@ -269,6 +319,8 @@ export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
       chunksUpserted += 1;
       idx += 1;
     }
+
+    if (stoppedReason) break;
 
     // discover more links from this page
     const hrefLinks = extractHrefLinks(html);
@@ -291,6 +343,16 @@ export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
     discoveredQueued = queue.length;
   }
 
+  // Cleanup: remove pages not seen during this run (and their chunks via cascade)
+  await prisma.docPage.deleteMany({
+    where: {
+      lastSeenAt: { lt: runStartedAt },
+    },
+  });
+
+  // record last run
+  await kvSetJson(KV_LAST_RUN_KEY, new Date().toISOString());
+
   return {
     ok: true,
     startUrl,
@@ -300,6 +362,7 @@ export async function ingestDevWixArticles(opts?: { limitPages?: number }) {
     skippedUnchanged,
     chunksUpserted,
     discoveredQueued,
+    stoppedReason,
     startFetched,
     startStatus,
     startHtmlBytes,

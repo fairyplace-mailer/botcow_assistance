@@ -12,6 +12,13 @@ type IngestResult = {
   skippedUnchanged: number;
   chunksUpserted: number;
   discoveredQueued: number;
+  // diagnostics
+  startFetched: boolean;
+  startStatus: number | null;
+  startHtmlBytes: number | null;
+  linksFoundTotal: number;
+  linksMatchedAllowed: number;
+  sampleLinks: string[];
 };
 
 function hashText(text: string): string {
@@ -105,7 +112,7 @@ function chunkText(text: string, maxChars = 1800, overlapChars = 200): string[] 
   return chunks;
 }
 
-async function fetchHtml(url: string): Promise<string> {
+async function fetchHtmlWithStatus(url: string): Promise<{ status: number; html: string }> {
   const res = await fetch(url, {
     headers: {
       'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
@@ -113,10 +120,11 @@ async function fetchHtml(url: string): Promise<string> {
     },
     redirect: 'follow',
   });
+  const html = await res.text();
   if (!res.ok) {
     throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
   }
-  return await res.text();
+  return { status: res.status, html };
 }
 
 export async function ingestDevWixArticles(params: {
@@ -133,6 +141,14 @@ export async function ingestDevWixArticles(params: {
   let skippedUnchanged = 0;
   let chunksUpserted = 0;
 
+  // diagnostics
+  let startFetched = false;
+  let startStatus: number | null = null;
+  let startHtmlBytes: number | null = null;
+  let linksFoundTotal = 0;
+  let linksMatchedAllowed = 0;
+  const sampleLinks: string[] = [];
+
   while (queue.length > 0 && fetched < limitPages) {
     const url = queue.shift()!;
     if (seen.has(url)) continue;
@@ -143,8 +159,14 @@ export async function ingestDevWixArticles(params: {
       continue;
     }
 
-    const html = await fetchHtml(url);
+    const { status, html } = await fetchHtmlWithStatus(url);
     fetched += 1;
+
+    if (url === startUrl) {
+      startFetched = true;
+      startStatus = status;
+      startHtmlBytes = Buffer.byteLength(html, 'utf8');
+    }
 
     const { title, text } = stripHtmlToText(html);
     const contentHash = hashText(text);
@@ -197,10 +219,14 @@ export async function ingestDevWixArticles(params: {
 
     // discover links
     const discovered = [...extractLinksFromAnchors(html), ...extractLinksByRegex(html)];
+    linksFoundTotal += discovered.length;
+
     for (const link of discovered) {
+      if (sampleLinks.length < 5) sampleLinks.push(link);
       if (seen.has(link)) continue;
       const lu = new URL(link);
       if (!shouldStorePath(lu.pathname)) continue;
+      linksMatchedAllowed += 1;
       queue.push(link);
     }
   }
@@ -214,5 +240,11 @@ export async function ingestDevWixArticles(params: {
     skippedUnchanged,
     chunksUpserted,
     discoveredQueued: queue.length,
+    startFetched,
+    startStatus,
+    startHtmlBytes,
+    linksFoundTotal,
+    linksMatchedAllowed,
+    sampleLinks,
   };
 }

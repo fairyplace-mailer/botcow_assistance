@@ -183,9 +183,9 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
     // re-create chunks for page
     await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
 
-    const chunks = chunkText(text);
-    for (let idx = 0; idx < chunks.length; idx += 1) {
-      const content = chunks[idx];
+    const chunks = chunkText(text).filter((c): c is string => typeof c === 'string' && c.length > 0);
+    let idx = 0;
+    for (const content of chunks) {
       const emb = await embedText(content);
 
       await prisma.docChunk.create({
@@ -199,6 +199,7 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
         },
       });
       chunksUpserted += 1;
+      idx += 1;
     }
 
     stored += 1;

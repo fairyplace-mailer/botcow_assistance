@@ -1,0 +1,16 @@
+name: devwix-ingest
+
+on:
+  schedule:
+    # daily at 03:30 UTC
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call ingest endpoint (production)
+        run: |
+          curl -f -sS -X POST "https://botcow-assistance.vercel.app/api/admin/devwix/ingest?limitPages=200" \
+            -H "Authorization: Bearer ${{ secrets.BOTCOW_ADMIN_TOKEN }}"

@@ -13,7 +13,12 @@ export async function POST(req: Request) {
     const maxChunksPerRun = searchParams.get('maxChunks') ? Number(searchParams.get('maxChunks')) : undefined;
     const force = searchParams.get('force') === '1' || searchParams.get('force') === 'true';
 
-    const result = await ingestDevWixArticles({ limitPages, maxChunksPerRun, force });
+    const opts: { limitPages?: number; maxChunksPerRun?: number; force?: boolean } = { limitPages, force };
+    if (maxChunksPerRun !== undefined && Number.isFinite(maxChunksPerRun)) {
+      opts.maxChunksPerRun = maxChunksPerRun;
+    }
+
+    const result = await ingestDevWixArticles(opts);
     return NextResponse.json({ ok: true, result });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });

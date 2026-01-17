@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 
 import { prisma } from '../db';
+import { embedText } from '../openai';
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 
@@ -67,6 +68,25 @@ function isDevWixArticleUrl(u: URL): boolean {
   return p.startsWith('/docs/') && p.includes('/articles/');
 }
 
+function chunkText(text: string, opts?: { maxChars?: number; overlapChars?: number }): string[] {
+  const maxChars = Math.max(400, opts?.maxChars ?? 1800);
+  const overlap = Math.max(0, Math.min(400, opts?.overlapChars ?? 150));
+
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return [];
+
+  const chunks: string[] = [];
+  let i = 0;
+  while (i < cleaned.length) {
+    const end = Math.min(cleaned.length, i + maxChars);
+    const slice = cleaned.slice(i, end).trim();
+    if (slice) chunks.push(slice);
+    if (end >= cleaned.length) break;
+    i = Math.max(0, end - overlap);
+  }
+  return chunks;
+}
+
 export type IngestDevWixArticlesOptions = {
   startUrl?: string;
   limitPages?: number;
@@ -82,6 +102,7 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
   let fetched = 0;
   let stored = 0;
   let skippedUnchanged = 0;
+  let chunksUpserted = 0;
 
   while (queue.length > 0 && fetched < limitPages) {
     const url = queue.shift()!;
@@ -142,7 +163,7 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
       continue;
     }
 
-    await prisma.docPage.upsert({
+    const page = await prisma.docPage.upsert({
       where: { url },
       create: {
         url,
@@ -159,6 +180,27 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
       },
     });
 
+    // re-create chunks for page
+    await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
+
+    const chunks = chunkText(text);
+    for (let idx = 0; idx < chunks.length; idx += 1) {
+      const content = chunks[idx];
+      const emb = await embedText(content);
+
+      await prisma.docChunk.create({
+        data: {
+          pageId: page.id,
+          idx,
+          content,
+          embeddingJson: emb.vector as any,
+          embeddingModel: emb.model,
+          dims: emb.dims,
+        },
+      });
+      chunksUpserted += 1;
+    }
+
     stored += 1;
   }
 
@@ -169,6 +211,7 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
     fetched,
     stored,
     skippedUnchanged,
+    chunksUpserted,
     discoveredQueued: queue.length,
   };
 }

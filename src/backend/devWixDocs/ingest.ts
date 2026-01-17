@@ -61,11 +61,39 @@ function extractLinks(html: string, baseUrl: string): string[] {
   return out;
 }
 
-function isDevWixArticleUrl(u: URL): boolean {
+// Fallback for sites where navigation is embedded in JSON/JS and plain <a href> links are sparse.
+function extractLinksByRegex(html: string, baseUrl: string): string[] {
+  const out: string[] = [];
+  // Match absolute or relative URLs that look like dev.wix.com/docs/... and are inside quotes.
+  const re = /"(https?:\/\/dev\.wix\.com\/docs\/[^"]+)"/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const abs = normalizeUrl(m[1]);
+    if (abs) out.push(abs);
+  }
+
+  // Match relative /docs/... occurrences.
+  const rel = /"(\/docs\/[^"]+)"/gi;
+  while ((m = rel.exec(html)) !== null) {
+    const abs = normalizeUrl(new URL(m[1], baseUrl).toString());
+    if (abs) out.push(abs);
+  }
+
+  return out;
+}
+
+function isAllowedDocsUrl(u: URL): boolean {
   if (u.hostname !== 'dev.wix.com') return false;
   const p = u.pathname;
-  // We want articles across all sections: /docs/<section>/articles/...
-  return p.startsWith('/docs/') && p.includes('/articles/');
+  if (!p.startsWith('/docs/')) return false;
+
+  // deny obvious non-content / high-churn areas (can adjust later)
+  if (p.startsWith('/docs/rest/')) return false;
+  if (p.startsWith('/docs/sdk/')) return false;
+  if (p.startsWith('/docs/api/')) return false;
+  if (p.startsWith('/docs/reference/')) return false;
+
+  return true;
 }
 
 function chunkText(text: string, opts?: { maxChars?: number; overlapChars?: number }): string[] {
@@ -116,14 +144,12 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
       continue;
     }
 
-    // allow startUrl (docs root), and any article pages
     const isStart = url === startUrl;
-    const isArticle = isDevWixArticleUrl(u);
-    if (!isStart && !isArticle) continue;
+    const isAllowed = isAllowedDocsUrl(u);
+    if (!isStart && !isAllowed) continue;
 
     const res = await fetch(url, {
       headers: {
-        // some CDNs vary behavior by accept
         Accept: 'text/html,application/xhtml+xml',
       },
     });
@@ -135,24 +161,21 @@ export async function ingestDevWixArticles(opts: IngestDevWixArticlesOptions = {
     const html = await res.text();
     fetched += 1;
 
-    // discover more URLs from docs root and from article pages
-    const discovered = extractLinks(html, url);
+    // discover more URLs
+    const discovered = [...extractLinks(html, url), ...extractLinksByRegex(html, url)];
     for (const d of discovered) {
       if (seen.has(d)) continue;
       try {
         const du = new URL(d);
-        if (du.hostname !== 'dev.wix.com') continue;
-        // crawl only docs area and only if it's an article page
-        if (!du.pathname.startsWith('/docs/')) continue;
-        if (!du.pathname.includes('/articles/')) continue;
+        if (!isAllowedDocsUrl(du)) continue;
         queue.push(d);
       } catch {
         // ignore
       }
     }
 
-    // store only article pages
-    if (!isArticle) continue;
+    // store only allowed docs pages (not just the start)
+    if (!isAllowed) continue;
 
     const { title, text } = stripHtmlToText(html);
     const contentHash = hashText(text);

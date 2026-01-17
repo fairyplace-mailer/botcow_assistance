@@ -44,8 +44,9 @@ export async function retrieveDevWixContext(opts: {
   const emb = await embedText(opts.query);
 
   // Pull recent-ish chunks to limit cost.
+  // Prisma Json fields have tricky null semantics (JsonNull/DbNull). To avoid
+  // build-time type issues, fetch candidates and filter in JS.
   const rows = await prisma.docChunk.findMany({
-    where: { embeddingJson: { not: null } },
     orderBy: { createdAt: 'desc' },
     take: candidateLimit,
     include: { page: true },
@@ -54,7 +55,7 @@ export async function retrieveDevWixContext(opts: {
   const scored: RetrievedDocChunk[] = [];
   for (const r of rows) {
     const vec = r.embeddingJson as unknown as number[] | null;
-    if (!vec || vec.length === 0) continue;
+    if (!Array.isArray(vec) || vec.length === 0) continue;
     const score = cosineSimilarity(emb.vector, vec);
     if (score <= 0) continue;
     scored.push({

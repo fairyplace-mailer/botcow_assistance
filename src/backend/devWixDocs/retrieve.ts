@@ -8,69 +8,58 @@ export type RetrievedDocChunk = {
   score: number;
 };
 
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length === 0 || b.length === 0) return 0;
-  const n = Math.min(a.length, b.length);
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let i = 0; i < n; i += 1) {
-    const av = a[i] ?? 0;
-    const bv = b[i] ?? 0;
-    dot += av * bv;
-    na += av * av;
-    nb += bv * bv;
-  }
-  if (na === 0 || nb === 0) return 0;
-  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+type RetrievedRow = {
+  url: string;
+  title: string | null;
+  content: string;
+  distance: number;
+};
+
+function vectorLiteral(vec: number[]): string {
+  // pgvector accepts: '[1,2,3]'::vector
+  return `[${vec.join(',')}]`;
 }
 
 /**
  * Retrieve most relevant chunks from stored dev.wix.com/docs pages.
  *
- * Note: This is a simple implementation: we load a bounded candidate set from DB
- * and score it in JS. If it becomes slow at scale, we can switch to pgvector.
+ * Uses pgvector for similarity search.
  */
 export async function retrieveDevWixContext(opts: {
   query: string;
   topK?: number;
   maxChars?: number;
-  candidateLimit?: number;
 }): Promise<{ chunks: RetrievedDocChunk[]; queryEmbeddingDims: number }> {
   const topK = opts.topK ?? 6;
   const maxChars = opts.maxChars ?? 6000;
-  const candidateLimit = opts.candidateLimit ?? 800;
 
   const emb = await embedText(opts.query);
+  if (!emb.vector.length) return { chunks: [], queryEmbeddingDims: emb.dims };
 
-  // Pull recent-ish chunks to limit cost.
-  // Prisma Json fields have tricky null semantics (JsonNull/DbNull). To avoid
-  // build-time type issues, fetch candidates and filter in JS.
-  const rows = await prisma.docChunk.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: candidateLimit,
-    include: { page: true },
-  });
+  // NOTE: We use $queryRawUnsafe because Prisma can't parameterize a pgvector literal
+  // in a typed-safe way without custom extensions. Input comes from OpenAI vector,
+  // not user-controlled string.
+  const rows = await prisma.$queryRawUnsafe<RetrievedRow[]>(
+    `SELECT p.url, p.title, c.content, (c.embedding <-> '${vectorLiteral(emb.vector)}'::vector) AS distance
+     FROM "DocChunk" c
+     JOIN "DocPage" p ON p.id = c."pageId"
+     WHERE c.embedding IS NOT NULL
+     ORDER BY c.embedding <-> '${vectorLiteral(emb.vector)}'::vector
+     LIMIT ${Math.max(1, Math.min(20, topK * 3))};`,
+  );
 
-  const scored: RetrievedDocChunk[] = [];
-  for (const r of rows) {
-    const vec = r.embeddingJson as unknown as number[] | null;
-    if (!Array.isArray(vec) || vec.length === 0) continue;
-    const score = cosineSimilarity(emb.vector, vec);
-    if (score <= 0) continue;
-    scored.push({
-      url: r.page.url,
-      title: r.page.title ?? null,
-      content: r.content,
-      score,
-    });
-  }
-
-  scored.sort((a, b) => b.score - a.score);
+  // Convert distance to a descending score-like value.
+  // L2 distance: smaller is better. We map to score in (0, 1].
+  const scored = rows.map((r) => ({
+    url: r.url,
+    title: r.title,
+    content: r.content,
+    score: 1 / (1 + (r.distance ?? 0)),
+  }));
 
   const out: RetrievedDocChunk[] = [];
   let used = 0;
-  for (const s of scored.slice(0, topK * 3)) {
+  for (const s of scored) {
     const snippet = s.content.trim();
     if (!snippet) continue;
     if (used + snippet.length > maxChars) break;
@@ -88,7 +77,7 @@ export function formatDevWixContext(chunks: RetrievedDocChunk[]): string {
   const lines: string[] = [];
   lines.push('Wix developer docs context (dev.wix.com/docs):');
   for (const c of chunks) {
-    const title = c.title ? ` — ${c.title}` : '';
+    const title = c.title ? `  ${c.title}` : '';
     lines.push(`- Source: ${c.url}${title}`);
     lines.push(c.content.trim());
     lines.push('');

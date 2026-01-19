@@ -15,7 +15,7 @@ export type TokenChunk = {
  *
  * Notes:
  * - Uses @dqbd/tiktoken which works better with Next/Turbopack than `tiktoken`.
- * - Decoding returns string.
+ * - `decode()` returns bytes, so we convert via TextDecoder.
  */
 export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChunk[] {
   const chunkTokens = Math.max(1, Math.min(2000, Number(opts?.chunkTokens ?? 800)));
@@ -25,6 +25,7 @@ export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChu
   if (!t) return [];
 
   const enc = get_encoding('cl100k_base');
+  const td = new TextDecoder();
   try {
     const tokens = enc.encode(t);
     const chunks: TokenChunk[] = [];
@@ -33,7 +34,8 @@ export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChu
     while (i < tokens.length) {
       const end = Math.min(tokens.length, i + chunkTokens);
       const slice = tokens.slice(i, end);
-      const decoded = enc.decode(slice).trim();
+      const decodedBytes = enc.decode(slice);
+      const decoded = td.decode(decodedBytes).trim();
       if (decoded) chunks.push({ text: decoded, tokenCount: slice.length });
 
       if (end === tokens.length) break;

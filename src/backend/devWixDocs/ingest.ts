@@ -80,7 +80,7 @@ export async function ingestDevWixArticles(
     force?: boolean;
   },
 ): Promise<IngestResult> {
-  // Per wix_spec: 510 pages per run.
+  // Per wix_spec: 5–10 pages per run.
   const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 10)));
   const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 600)));
   const startUrl = DEFAULT_START_URL;

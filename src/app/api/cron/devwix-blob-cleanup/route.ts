@@ -1,76 +1,57 @@
 import { NextResponse } from 'next/server';
 
-import { prisma } from '@/backend/db';
-import { listDevWixBlobs, deleteMarkdownBlob } from '@/backend/devWixDocs/blob';
+import { prisma } from '../../../../backend/db';
+import { deleteMarkdownBlob, listDevWixBlobs } from '../../../../backend/devWixDocs/blob';
+
+export const runtime = 'nodejs';
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-
-    const limitDeletesRaw = searchParams.get('limitDeletes');
-    const dryRunRaw = searchParams.get('dryRun');
-
-    const limitDeletes = limitDeletesRaw ? Number(limitDeletesRaw) : 100;
-    const dryRun = dryRunRaw === '1' || dryRunRaw === 'true';
-
-    const limit = Math.min(Math.max(limitDeletes, 1), 500);
+    const limitDeletes = Math.max(1, Math.min(500, Number(searchParams.get('limitDeletes') ?? '100')));
+    const dryRun = searchParams.get('dryRun') === '1' || searchParams.get('dryRun') === 'true';
 
     const keepRows = await prisma.docPage.findMany({
-      where: {
-        blobPath: {
-          not: null,
-        },
-      },
-      select: {
-        blobPath: true,
-      },
+      select: { blobPath: true },
+      where: { blobPath: { not: null } },
     });
 
-    // Keep a stable set of known blob keys. Avoid implicit-any params under strict TS.
     const keep = new Set(
-      keepRows
-        .map((r: { blobPath: string | null }) => r.blobPath ?? '')
-        .filter((x: string) => x.length > 0),
+      keepRows.map((r: { blobPath: string | null }) => r.blobPath ?? '').filter((x: string) => x.length > 0),
     );
 
     let cursor: string | undefined;
     let deleted = 0;
-    let scanned = 0;
-    const orphanKeys: string[] = [];
+    const deletedKeys: string[] = [];
 
-    // Scan blobs in pages; delete up to `limit` per run.
-    while (deleted < limit) {
-      // Avoid passing `cursor: undefined` under exactOptionalPropertyTypes.
+    // Scan blobs in pages; delete up to `limitDeletes` per run.
+    while (deleted < limitDeletes) {
       const page = await listDevWixBlobs({ ...(cursor ? { cursor } : {}), limit: 250 });
       cursor = page.cursor;
 
       for (const key of page.keys) {
-        scanned += 1;
+        if (deleted >= limitDeletes) break;
         if (keep.has(key)) continue;
 
-        orphanKeys.push(key);
         if (!dryRun) {
-          await deleteMarkdownBlob(key);
+          await deleteMarkdownBlob(key).catch(() => undefined);
         }
+
         deleted += 1;
-        if (deleted >= limit) break;
+        deletedKeys.push(key);
       }
 
-      if (!page.hasMore) break;
+      if (!cursor) break;
     }
 
     return NextResponse.json({
       ok: true,
       dryRun,
-      scanned,
+      limitDeletes,
       deleted,
-      orphanKeys,
-      keepCount: keep.size,
+      deletedKeys,
     });
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message ?? String(e) },
-      { status: 500 },
-    );
+    return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }
 }

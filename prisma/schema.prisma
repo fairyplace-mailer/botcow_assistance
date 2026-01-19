@@ -19,6 +19,7 @@ model DocPage {
   title       String?
   text        String
   contentHash String
+  blobPath    String?
   fetchedAt   DateTime
   lastSeenAt  DateTime
   createdAt   DateTime @default(now())

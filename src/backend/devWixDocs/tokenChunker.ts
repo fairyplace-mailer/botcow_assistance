@@ -1,4 +1,4 @@
-import { getEncoding } from 'tiktoken';
+import { get_encoding } from 'tiktoken';
 
 export type TokenChunkOpts = {
   chunkTokens?: number;
@@ -18,7 +18,7 @@ export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChu
   if (!t) return [];
 
   // cl100k_base is the encoding used by modern OpenAI models.
-  const enc = getEncoding('cl100k_base');
+  const enc = get_encoding('cl100k_base');
   try {
     const tokens = enc.encode(t);
     const chunks: TokenChunk[] = [];

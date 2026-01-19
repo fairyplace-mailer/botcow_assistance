@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { requireAdminBearerAuth } from '../../../../../backend/auth/adminAuth';
 import { ingestDevWixArticles } from '../../../../../backend/devWixDocs/ingest';
 
+export const runtime = 'nodejs';
+
 export async function POST(req: Request) {
   const authError = requireAdminBearerAuth(req);
   if (authError) return authError;

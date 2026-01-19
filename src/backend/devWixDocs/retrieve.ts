@@ -39,14 +39,14 @@ export async function retrieveDevWixContext(opts: {
   // NOTE: We use $queryRawUnsafe because Prisma can't parameterize a pgvector literal
   // in a typed-safe way without custom extensions. Input comes from OpenAI vector,
   // not user-controlled string.
-  const rows = await prisma.$queryRawUnsafe<RetrievedRow[]>(
+  const rows = (await prisma.$queryRawUnsafe(
     `SELECT p.url, p.title, c.content, (c.embedding <-> '${vectorLiteral(emb.vector)}'::vector) AS distance
      FROM "DocChunk" c
      JOIN "DocPage" p ON p.id = c."pageId"
      WHERE c.embedding IS NOT NULL
      ORDER BY c.embedding <-> '${vectorLiteral(emb.vector)}'::vector
      LIMIT ${Math.max(1, Math.min(20, topK * 3))};`,
-  );
+  )) as RetrievedRow[];
 
   // Convert distance to a descending score-like value.
   // L2 distance: smaller is better. We map to score in (0, 1].
@@ -77,7 +77,7 @@ export function formatDevWixContext(chunks: RetrievedDocChunk[]): string {
   const lines: string[] = [];
   lines.push('Wix developer docs context (dev.wix.com/docs):');
   for (const c of chunks) {
-    const title = c.title ? ` — ${c.title}` : '';
+    const title = c.title ? `   ${c.title}` : '';
     lines.push(`- Source: ${c.url}${title}`);
     lines.push(c.content.trim());
     lines.push('');

@@ -18,7 +18,9 @@ CREATE TABLE "DocPage" (
     "title" TEXT,
     "text" TEXT NOT NULL,
     "contentHash" TEXT NOT NULL,
+    "blobPath" TEXT,
     "fetchedAt" TIMESTAMP(3) NOT NULL,
+    "lastSeenAt" TIMESTAMP(3) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -47,6 +49,9 @@ CREATE UNIQUE INDEX "DocPage_url_key" ON "DocPage"("url");
 
 -- CreateIndex
 CREATE INDEX "DocPage_fetchedAt_idx" ON "DocPage"("fetchedAt");
+
+-- CreateIndex
+CREATE INDEX "DocPage_lastSeenAt_idx" ON "DocPage"("lastSeenAt");
 
 -- CreateIndex
 CREATE INDEX "DocChunk_pageId_idx" ON "DocChunk"("pageId");

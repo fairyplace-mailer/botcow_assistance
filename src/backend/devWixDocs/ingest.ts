@@ -32,16 +32,6 @@ export type IngestResult = {
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 const KV_LAST_RUN_KEY = 'devwix:ingest:lastRunAt';
 
-// Allow: any /docs/... page. We use deny-list to avoid huge API reference sections.
-function isAllowedPath(pathname: string): boolean {
-  if (!pathname.startsWith('/docs/')) return false;
-
-  const denyPrefixes = ['/docs/rest/', '/docs/sdk/', '/docs/api/', '/docs/reference/'];
-  if (denyPrefixes.some((p) => pathname.startsWith(p))) return false;
-
-  return true;
-}
-
 function stripHtmlToText(html: string): { title: string | null; text: string } {
   const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
   const rawTitle = titleMatch?.[1];
@@ -86,41 +76,6 @@ function chunkText(text: string, maxChars = 1800, overlap = 200): string[] {
 
 function isDefinitivelyGone(status: number): boolean {
   return status === 404 || status === 410;
-}
-
-async function ensureSeededFromStartPage(startUrl: string, runStartedAt: Date): Promise<void> {
-  const res = await fetch(startUrl, {
-    headers: {
-      'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
-      Accept: 'text/html,application/xhtml+xml',
-    },
-  });
-
-  if (!res.ok) return;
-
-  const html = await res.text();
-  const { title, text } = stripHtmlToText(html);
-  const contentHash = hashText(text);
-
-  // Note: startUrl is /docs (not /docs/...), but we still store it as a seed record.
-  await prisma.docPage.upsert({
-    where: { url: startUrl },
-    create: {
-      url: startUrl,
-      title,
-      text,
-      contentHash,
-      fetchedAt: runStartedAt,
-      lastSeenAt: runStartedAt,
-    },
-    update: {
-      title,
-      text,
-      contentHash,
-      fetchedAt: runStartedAt,
-      lastSeenAt: runStartedAt,
-    },
-  });
 }
 
 export async function ingestDevWixArticles(
@@ -185,7 +140,7 @@ export async function ingestDevWixArticles(
   const sampleLinks: string[] = [];
   let stoppedReason: IngestStopReason | undefined;
 
-  // Make sure we have at least one known URL in DB.
+  // Keep a seed record for the landing page (optional).
   try {
     const res = await fetch(startUrl, {
       headers: {
@@ -244,20 +199,16 @@ export async function ingestDevWixArticles(
   }
 
   // Choose next URLs to update (controlled fetcher, no spidering).
+  // Skip pages that have not been seeded yet: we only process /docs/... URLs.
   const targets = await prisma.docPage.findMany({
     where: {
-      url: { contains: 'dev.wix.com/docs' },
+      url: { startsWith: 'https://dev.wix.com/docs/' },
     },
     orderBy: [{ fetchedAt: 'asc' }],
     take: limitPages,
   });
 
-  // If only seed exists, try to seed it (no link discovery yet; this is just to keep system stable).
-  if (targets.length === 0) {
-    await ensureSeededFromStartPage(startUrl, runStartedAt).catch(() => undefined);
-  }
-
-  let discoveredQueued = targets.length;
+  const discoveredQueued = targets.length;
 
   for (const t of targets) {
     if (fetched >= limitPages) break;

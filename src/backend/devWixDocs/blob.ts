@@ -1,7 +1,13 @@
-import { del, put } from '@vercel/blob';
+import { del, put, list } from '@vercel/blob';
 
 export type PutMarkdownResult = {
   blobPath: string;
+};
+
+export type ListDevWixBlobsResult = {
+  keys: string[];
+  cursor?: string;
+  hasMore: boolean;
 };
 
 function safeSlug(input: string): string {
@@ -49,4 +55,27 @@ export async function putDevWixMarkdown(url: string, markdown: string): Promise<
 
 export async function deleteMarkdownBlob(blobPath: string): Promise<void> {
   await del(blobPath);
+}
+
+export async function listDevWixBlobs(opts?: {
+  cursor?: string;
+  limit?: number;
+}): Promise<ListDevWixBlobsResult> {
+  const limit = Math.min(Math.max(opts?.limit ?? 100, 1), 1000);
+  const res = await list({
+    prefix: 'devwix/',
+    cursor: opts?.cursor,
+    limit,
+  } as any);
+
+  const blobs: any[] = (res as any).blobs ?? [];
+  const keys: string[] = blobs
+    .map((b) => (b as any).pathname ?? (b as any).key ?? (b as any).url)
+    .filter(Boolean);
+
+  return {
+    keys,
+    cursor: (res as any).cursor,
+    hasMore: Boolean((res as any).hasMore),
+  };
 }

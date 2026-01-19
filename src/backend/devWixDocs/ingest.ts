@@ -4,6 +4,7 @@ import { kvGetJson, kvSetJson } from '../kv';
 import { deleteMarkdownBlob, putDevWixMarkdown } from './blob';
 import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
+import { chunkTextByTokens } from './tokenChunker';
 
 export type IngestStopReason =
   | 'skipped_daily_gate'
@@ -36,8 +37,8 @@ const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 const KV_LAST_RUN_KEY = 'devwix:ingest:lastRunAt';
 
 function markdownToTextForChunking(md: string): string {
-  // Simple heuristic: markdown as plain text for now.
-  // We'll replace with token-based chunking later.
+  // Simple heuristic: markdown as plain text.
+  // Token-based chunking is applied after this step.
   return md
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`]*`/g, ' ')
@@ -45,23 +46,6 @@ function markdownToTextForChunking(md: string): string {
     .replace(/[#>*_~|-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function chunkText(text: string, maxChars = 1800, overlap = 200): string[] {
-  const chunks: string[] = [];
-  const t = text.trim();
-  if (!t) return chunks;
-
-  let i = 0;
-  while (i < t.length) {
-    const end = Math.min(t.length, i + maxChars);
-    const slice = t.slice(i, end).trim();
-    if (slice) chunks.push(slice);
-    i = end - overlap;
-    if (i < 0) i = 0;
-    if (end === t.length) break;
-  }
-  return chunks;
 }
 
 function isDefinitivelyGone(status: number): boolean {
@@ -282,13 +266,17 @@ export async function ingestDevWixArticles(
       await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
 
       const chunkSource = markdownToTextForChunking(markdown);
-      const chunks = chunkText(chunkSource).filter((c): c is string => typeof c === 'string' && c.trim().length > 0);
+      const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens: 800, overlapTokens: 120 });
+
       let idx = 0;
-      for (const content of chunks) {
+      for (const c of tokenChunks) {
         if (chunksUpserted >= maxChunksPerRun) {
           stoppedReason = 'maxChunksPerRun';
           break;
         }
+        const content = c.text;
+        if (!content || !content.trim()) continue;
+
         const emb = await embedText(content);
 
         const created = await prisma.docChunk.create({

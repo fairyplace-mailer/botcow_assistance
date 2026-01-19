@@ -78,6 +78,11 @@ function isDefinitivelyGone(status: number): boolean {
   return status === 404 || status === 410;
 }
 
+function vectorLiteral(vec: number[]): string {
+  // pgvector accepts: '[1,2,3]'::vector
+  return `[${vec.join(',')}]`;
+}
+
 export async function ingestDevWixArticles(
   opts?: {
     limitPages?: number;
@@ -280,16 +285,23 @@ export async function ingestDevWixArticles(
           break;
         }
         const emb = await embedText(content);
-        await prisma.docChunk.create({
+
+        const created = await prisma.docChunk.create({
           data: {
             pageId: page.id,
             idx,
             content,
-            embeddingJson: emb.vector as any,
             embeddingModel: emb.model,
             dims: emb.dims,
           },
         });
+
+        // Store embedding vector via raw SQL to pgvector column.
+        // Prisma does not natively support pgvector in schema, so we use Unsupported + $executeRaw.
+        await prisma.$executeRawUnsafe(
+          `UPDATE "DocChunk" SET "embedding" = '${vectorLiteral(emb.vector)}'::vector WHERE id = '${created.id}'`,
+        );
+
         chunksUpserted += 1;
         idx += 1;
       }

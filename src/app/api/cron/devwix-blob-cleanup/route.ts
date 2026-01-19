@@ -28,7 +28,7 @@ export async function GET(req: Request) {
 
     const keep = new Set(
       keepRows
-        .map((r) => r.blobPath)
+        .map((r: { blobPath: string | null }) => r.blobPath)
         .filter((x): x is string => typeof x === 'string' && x.length > 0),
     );
 

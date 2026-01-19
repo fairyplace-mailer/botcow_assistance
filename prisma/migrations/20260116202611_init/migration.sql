@@ -1,3 +1,6 @@
+-- Enable pgvector extension (required for embeddings)
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- CreateTable
 CREATE TABLE "KvItem" (
     "key" TEXT NOT NULL,
@@ -28,9 +31,12 @@ CREATE TABLE "DocChunk" (
     "pageId" TEXT NOT NULL,
     "idx" INTEGER NOT NULL,
     "content" TEXT NOT NULL,
-    "embeddingJson" JSONB,
+
+    -- pgvector embedding
+    "embedding" vector(3072),
     "embeddingModel" TEXT,
     "dims" INTEGER,
+
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "DocChunk_pkey" PRIMARY KEY ("id")

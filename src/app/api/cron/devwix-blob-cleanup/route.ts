@@ -26,10 +26,11 @@ export async function GET(req: Request) {
       },
     });
 
+    // Keep a stable set of known blob keys. Avoid implicit-any params under strict TS.
     const keep = new Set(
       keepRows
-        .map((r: { blobPath: string | null }) => r.blobPath)
-        .filter((x): x is string => typeof x === 'string' && x.length > 0),
+        .map((r: { blobPath: string | null }) => r.blobPath ?? '')
+        .filter((x: string) => x.length > 0),
     );
 
     let cursor: string | undefined;

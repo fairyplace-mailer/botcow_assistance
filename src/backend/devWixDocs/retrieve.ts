@@ -77,7 +77,7 @@ export function formatDevWixContext(chunks: RetrievedDocChunk[]): string {
   const lines: string[] = [];
   lines.push('Wix developer docs context (dev.wix.com/docs):');
   for (const c of chunks) {
-    const title = c.title ? `   ${c.title}` : '';
+    const title = c.title ? ` \u0015 \u0015 ${c.title}` : '';
     lines.push(`- Source: ${c.url}${title}`);
     lines.push(c.content.trim());
     lines.push('');

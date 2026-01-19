@@ -2,12 +2,12 @@ import { NextResponse } from 'next/server';
 
 import { ingestDevWixArticles } from '../../../../backend/devWixDocs/ingest';
 
-// Vercel Cron calls this endpoint. We rely on "daily gate" in ingestDevWixArticles
-// so calling hourly is cheap and safe.
+// Vercel Cron calls this endpoint.
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const limitPages = Number(searchParams.get('limitPages') ?? '200');
+    // Per docs/wix_spec.md: update 5–10 pages per run.
+    const limitPages = Math.max(1, Math.min(10, Number(searchParams.get('limitPages') ?? '10')));
 
     const maxChunksRaw = searchParams.get('maxChunks');
     const maxChunksPerRun = maxChunksRaw ? Number(maxChunksRaw) : undefined;

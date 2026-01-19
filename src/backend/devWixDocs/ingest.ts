@@ -1,6 +1,9 @@
 import { prisma } from '../db';
 import { embedText } from '../openai';
 import { kvGetJson, kvSetJson } from '../kv';
+import { deleteMarkdownBlob, putDevWixMarkdown } from './blob';
+import { hashText } from './hash';
+import { htmlToMarkdown } from './markdown';
 
 export type IngestStopReason =
   | 'skipped_daily_gate'
@@ -32,29 +35,16 @@ export type IngestResult = {
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 const KV_LAST_RUN_KEY = 'devwix:ingest:lastRunAt';
 
-function stripHtmlToText(html: string): { title: string | null; text: string } {
-  const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  const rawTitle = titleMatch?.[1];
-  const title = rawTitle ? rawTitle.replace(/\s+/g, ' ').trim() : null;
-
-  const text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+function markdownToTextForChunking(md: string): string {
+  // Simple heuristic: markdown as plain text for now.
+  // We'll replace with token-based chunking later.
+  return md
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+    .replace(/[#>*_~|-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-
-  return { title, text };
-}
-
-function hashText(text: string): string {
-  // lightweight deterministic hash
-  let h = 2166136261;
-  for (let i = 0; i < text.length; i += 1) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(16);
 }
 
 function chunkText(text: string, maxChars = 1800, overlap = 200): string[] {
@@ -90,7 +80,7 @@ export async function ingestDevWixArticles(
     force?: boolean;
   },
 ): Promise<IngestResult> {
-  // Per wix_spec: 5–10 pages per run.
+  // Per wix_spec: 510 pages per run.
   const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 10)));
   const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 600)));
   const startUrl = DEFAULT_START_URL;
@@ -158,22 +148,27 @@ export async function ingestDevWixArticles(
     if (res.ok) {
       const html = await res.text();
       startHtmlBytes = html.length;
-      const { title, text } = stripHtmlToText(html);
-      const contentHash = hashText(text);
+      const { title, markdown } = htmlToMarkdown(html);
+      const contentHash = hashText(markdown);
+
+      const blob = await putDevWixMarkdown(startUrl, markdown);
+
       await prisma.docPage.upsert({
         where: { url: startUrl },
         create: {
           url: startUrl,
           title,
-          text,
+          text: markdownToTextForChunking(markdown),
           contentHash,
+          blobPath: blob.blobPath,
           fetchedAt: runStartedAt,
           lastSeenAt: runStartedAt,
         },
         update: {
           title,
-          text,
+          text: markdownToTextForChunking(markdown),
           contentHash,
+          blobPath: blob.blobPath,
           fetchedAt: runStartedAt,
           lastSeenAt: runStartedAt,
         },
@@ -228,7 +223,11 @@ export async function ingestDevWixArticles(
       });
 
       if (isDefinitivelyGone(res.status)) {
-        // Per wix_spec: if page is removed -> delete it and its chunks.
+        // Per wix_spec: if page is removed -> delete it and its chunks AND blob.
+        const existing = await prisma.docPage.findUnique({ where: { url } });
+        if (existing?.blobPath) {
+          await deleteMarkdownBlob(existing.blobPath).catch(() => undefined);
+        }
         await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
         continue;
       }
@@ -241,8 +240,8 @@ export async function ingestDevWixArticles(
       const html = await res.text();
       fetched += 1;
 
-      const { title, text } = stripHtmlToText(html);
-      const contentHash = hashText(text);
+      const { title, markdown } = htmlToMarkdown(html);
+      const contentHash = hashText(markdown);
 
       const existing = await prisma.docPage.findUnique({ where: { url } });
       if (existing?.contentHash === contentHash) {
@@ -253,20 +252,25 @@ export async function ingestDevWixArticles(
         continue;
       }
 
+      // Update blob for canonical markdown.
+      const blob = await putDevWixMarkdown(url, markdown);
+
       const page = await prisma.docPage.upsert({
         where: { url },
         create: {
           url,
           title,
-          text,
+          text: markdownToTextForChunking(markdown),
           contentHash,
+          blobPath: blob.blobPath,
           fetchedAt: runStartedAt,
           lastSeenAt: runStartedAt,
         },
         update: {
           title,
-          text,
+          text: markdownToTextForChunking(markdown),
           contentHash,
+          blobPath: blob.blobPath,
           fetchedAt: runStartedAt,
           lastSeenAt: runStartedAt,
         },
@@ -277,7 +281,8 @@ export async function ingestDevWixArticles(
       // recreate chunks for this page
       await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
 
-      const chunks = chunkText(text).filter((c): c is string => typeof c === 'string' && c.trim().length > 0);
+      const chunkSource = markdownToTextForChunking(markdown);
+      const chunks = chunkText(chunkSource).filter((c): c is string => typeof c === 'string' && c.trim().length > 0);
       let idx = 0;
       for (const content of chunks) {
         if (chunksUpserted >= maxChunksPerRun) {

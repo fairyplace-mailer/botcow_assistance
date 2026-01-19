@@ -67,7 +67,7 @@ export async function POST(req: Request) {
 Создаёшь или обновляешь Pull Request:
    — даёшь summary;
    — перечисляешь изменения;
-   — перечисляешь затронутые файлы;
+   — перечисляешь затронутых файлы;
    — описываешь, как проверить изменения;
    — добавляешь статус CI;
    — добавляешь ссылку на preview-деплой, если она доступна через Vercel-tools.
@@ -140,7 +140,6 @@ export async function POST(req: Request) {
         query: userQuery,
         topK: 6,
         maxChars: 6000,
-        candidateLimit: 800,
       });
       const ctx = formatDevWixContext(retrieved.chunks);
       if (ctx) {

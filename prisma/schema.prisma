@@ -35,9 +35,13 @@ model DocChunk {
   pageId         String
   idx            Int
   content        String
-  embeddingJson  Json?
+
+  // pgvector embedding
+  // NOTE: requires `CREATE EXTENSION vector;` in Postgres (Neon supports it)
+  embedding      Unsupported("vector(3072)")?
   embeddingModel String?
   dims           Int?
+
   createdAt      DateTime @default(now())
 
   page DocPage @relation(fields: [pageId], references: [id], onDelete: Cascade)

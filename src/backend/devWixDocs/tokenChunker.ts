@@ -27,7 +27,11 @@ export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChu
     while (i < tokens.length) {
       const end = Math.min(tokens.length, i + chunkTokens);
       const slice = tokens.slice(i, end);
-      const decoded = enc.decode(slice).trim();
+
+      // In tiktoken versions used in Node, decode() returns bytes (Uint8Array), not a string.
+      const decodedBytes = enc.decode(slice);
+      const decoded = new TextDecoder().decode(decodedBytes).trim();
+
       if (decoded) chunks.push({ text: decoded, tokenCount: slice.length });
 
       if (end === tokens.length) break;

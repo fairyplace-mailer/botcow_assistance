@@ -1,4 +1,4 @@
-import { get_encoding } from 'tiktoken';
+import { get_encoding } from '@dqbd/tiktoken';
 
 export type TokenChunkOpts = {
   chunkTokens?: number;
@@ -10,6 +10,13 @@ export type TokenChunk = {
   tokenCount: number;
 };
 
+/**
+ * Token-based chunking using OpenAI-compatible encoding.
+ *
+ * Notes:
+ * - Uses @dqbd/tiktoken which works better with Next/Turbopack than `tiktoken`.
+ * - Decoding returns string.
+ */
 export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChunk[] {
   const chunkTokens = Math.max(1, Math.min(2000, Number(opts?.chunkTokens ?? 800)));
   const overlapTokens = Math.max(0, Math.min(chunkTokens - 1, Number(opts?.overlapTokens ?? 120)));
@@ -17,7 +24,6 @@ export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChu
   const t = text.trim();
   if (!t) return [];
 
-  // cl100k_base is the encoding used by modern OpenAI models.
   const enc = get_encoding('cl100k_base');
   try {
     const tokens = enc.encode(t);
@@ -27,11 +33,7 @@ export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChu
     while (i < tokens.length) {
       const end = Math.min(tokens.length, i + chunkTokens);
       const slice = tokens.slice(i, end);
-
-      // In tiktoken versions used in Node, decode() returns bytes (Uint8Array), not a string.
-      const decodedBytes = enc.decode(slice);
-      const decoded = new TextDecoder().decode(decodedBytes).trim();
-
+      const decoded = enc.decode(slice).trim();
       if (decoded) chunks.push({ text: decoded, tokenCount: slice.length });
 
       if (end === tokens.length) break;
@@ -41,7 +43,6 @@ export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChu
 
     return chunks;
   } finally {
-    // Prevent memory leak in serverless runtimes
     enc.free();
   }
 }

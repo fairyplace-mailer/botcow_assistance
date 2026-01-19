@@ -40,7 +40,8 @@ export async function GET(req: Request) {
 
     // Scan blobs in pages; delete up to `limit` per run.
     while (deleted < limit) {
-      const page = await listDevWixBlobs({ cursor, limit: 250 });
+      // Avoid passing `cursor: undefined` under exactOptionalPropertyTypes.
+      const page = await listDevWixBlobs({ ...(cursor ? { cursor } : {}), limit: 250 });
       cursor = page.cursor;
 
       for (const key of page.keys) {

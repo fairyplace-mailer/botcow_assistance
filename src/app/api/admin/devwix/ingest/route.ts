@@ -32,12 +32,14 @@ export async function POST(req: Request) {
         return {
           result: r,
           finish: {
-            processed: r.processed,
-            updated: r.updated,
-            skipped: r.skipped,
+            processed: r.fetched,
+            updated: r.stored,
+            skipped: r.skippedUnchanged,
             metaJson: {
               stoppedReason: r.stoppedReason ?? null,
-              maxChunksPerRun: r.maxChunksPerRun ?? null,
+              maxChunksPerRun: maxChunksPerRun ?? null,
+              chunksUpserted: r.chunksUpserted,
+              discoveredQueued: r.discoveredQueued,
             },
           },
         };

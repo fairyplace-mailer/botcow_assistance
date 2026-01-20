@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { ingestDevWixArticles } from '../../../../backend/devWixDocs/ingest';
+import { withCrawlJob } from '../../../../backend/crawlJobs';
 
 export const runtime = 'nodejs';
 
@@ -19,8 +20,27 @@ export async function GET(req: Request) {
       opts.maxChunksPerRun = maxChunksPerRun;
     }
 
-    const result = await ingestDevWixArticles(opts);
-    return NextResponse.json({ ok: true, result });
+    const { jobId, result } = await withCrawlJob(
+      {
+        kind: 'devwix_ingest',
+        batchLimit: limitPages,
+        metaJson: { maxChunksPerRun: opts.maxChunksPerRun ?? null },
+      },
+      async () => {
+        const result = await ingestDevWixArticles(opts);
+        return {
+          result,
+          finish: {
+            processed: result.fetched,
+            updated: result.stored,
+            skipped: result.skippedUnchanged,
+            metaJson: { stoppedReason: result.stoppedReason ?? null },
+          },
+        };
+      },
+    );
+
+    return NextResponse.json({ ok: true, jobId, result });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }

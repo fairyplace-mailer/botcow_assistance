@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     const { jobId, result } = await withCrawlJob(
       {
         kind: 'devwix_seed',
-        batchLimit: batchLimit ?? undefined,
+        ...(typeof batchLimit === 'number' ? { batchLimit } : {}),
         metaJson: { sitemapUrl: opts.sitemapUrl ?? null },
       },
       async () => {

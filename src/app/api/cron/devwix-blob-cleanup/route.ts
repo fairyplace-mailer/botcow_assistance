@@ -3,10 +3,14 @@ import { NextResponse } from 'next/server';
 import { prisma } from '../../../../backend/db';
 import { deleteMarkdownBlob, listDevWixBlobs } from '../../../../backend/devWixDocs/blob';
 import { withCrawlJob } from '../../../../backend/crawlJobs';
+import { requireCronSecret } from '../../../../backend/cronAuth';
 
 export const runtime = 'nodejs';
 
 export async function GET(req: Request) {
+  const authResp = requireCronSecret(req);
+  if (authResp) return authResp;
+
   try {
     const { searchParams } = new URL(req.url);
     const limitDeletes = Math.max(1, Math.min(500, Number(searchParams.get('limitDeletes') ?? '100')));

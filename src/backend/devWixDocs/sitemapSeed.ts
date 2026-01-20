@@ -2,6 +2,9 @@ import { prisma } from '../db';
 
 const DEFAULT_SITEMAP_URL = 'https://dev.wix.com/docs/sitemap.xml';
 
+// If Wix ever exposes localized docs under /docs/<lang>/..., ignore those.
+const LANG_PREFIX_RE = /^\/docs\/(?!rest\/|sdk\/|api\/|reference\/)([a-z]{2})(?:-[a-z]{2})?\//i;
+
 function isAllowedDocsUrl(url: string): boolean {
   try {
     const u = new URL(url);
@@ -10,6 +13,9 @@ function isAllowedDocsUrl(url: string): boolean {
 
     const denyPrefixes = ['/docs/rest/', '/docs/sdk/', '/docs/api/', '/docs/reference/'];
     if (denyPrefixes.some((p) => u.pathname.startsWith(p))) return false;
+
+    // If path looks like /docs/fr/... or /docs/es/... => localized.
+    if (LANG_PREFIX_RE.test(u.pathname)) return false;
 
     return true;
   } catch {

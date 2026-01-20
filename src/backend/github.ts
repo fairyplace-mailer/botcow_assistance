@@ -1,8 +1,8 @@
 import { Octokit } from '@octokit/rest';
 import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
 import { logEvent } from './log';
-import { kvGetJson, kvSetJson } from './kv';
 import { githubCodeSearchGraphql } from './githubGraphqlSearch';
+import { githubCacheGet, githubCacheSet } from './githubCache';
 
 let githubClient: Octokit | null = null;
 
@@ -138,12 +138,6 @@ export function __resetSearchStateForTests() {
   searchInflight.clear();
 }
 
-function cacheKeyToKvKey(cacheKey: string) {
-  // Avoid overly long keys + unsafe characters
-  const safe = cacheKey.replace(/[^a-zA-Z0-9._\-:=/]/g, '_');
-  return `github:searchCache:${safe}`;
-}
-
 export async function getFile(path: string, repo?: string, ref?: string) {
   const github = getGithubClient();
   const { owner, repo: repoName } = parseRepo(repo);
@@ -275,9 +269,8 @@ export async function searchInRepo(options: {
   });
 
   const cacheKey = `${q}::per_page=${per_page}::page=1`;
-  const kvKey = cacheKeyToKvKey(cacheKey);
 
-  const cached = await kvGetJson<{ data: SearchInRepoResultItem[] }>(kvKey);
+  const cached = await githubCacheGet<{ data: SearchInRepoResultItem[] }>(cacheKey);
   if (cached?.data) {
     await logEvent('github_search_cache_hit', {
       page: 1,
@@ -311,11 +304,7 @@ export async function searchInRepo(options: {
       url: item.url,
     }));
 
-    await kvSetJson(
-      kvKey,
-      { data: items },
-      { ttlSeconds: Math.floor(SEARCH_CACHE_TTL_MS / 1000) },
-    );
+    await githubCacheSet(cacheKey, { data: items }, Math.floor(SEARCH_CACHE_TTL_MS / 1000));
 
     return items;
   })();

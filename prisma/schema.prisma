@@ -13,6 +13,27 @@ model KvItem {
   updatedAt DateTime @updatedAt
 }
 
+model CrawlJob {
+  id            String    @id @default(cuid())
+  kind          String
+  startedAt     DateTime
+  finishedAt    DateTime?
+  status        String
+  batchLimit    Int?
+  processed     Int?
+  inserted      Int?
+  updated       Int?
+  deleted       Int?
+  skipped       Int?
+  errorsJson    Json?
+  metaJson      Json?
+
+  createdAt     DateTime  @default(now())
+
+  @@index([kind, startedAt])
+  @@index([status])
+}
+
 model DocPage {
   id          String   @id @default(cuid())
   url         String   @unique

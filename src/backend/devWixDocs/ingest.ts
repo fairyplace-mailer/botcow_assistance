@@ -38,7 +38,7 @@ const KV_LAST_RUN_KEY = 'devwix:ingest:lastRunAt';
 
 function markdownToTextForChunking(md: string): string {
   // Simple heuristic: markdown as plain text.
-  // Token-based chunking is applied after this step.
+  // Approx-token chunking is applied after this step.
   return md
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`]*`/g, ' ')
@@ -55,6 +55,25 @@ function isDefinitivelyGone(status: number): boolean {
 function vectorLiteral(vec: number[]): string {
   // pgvector accepts: '[1,2,3]'::vector
   return `[${vec.join(',')}]`;
+}
+
+function extractHtmlLang(html: string): string | null {
+  const m = html.match(/<html\b[^>]*\blang\s*=\s*['\"]?([^'\"\s>]+)[^>]*>/i);
+  return m?.[1]?.trim() ?? null;
+}
+
+function isEnglishLang(lang: string | null): boolean {
+  if (!lang) return true; // if not provided, accept (wix pages usually are EN)
+  const norm = lang.toLowerCase();
+  return norm === 'en' || norm.startsWith('en-');
+}
+
+async function deleteDocPageAndAssets(url: string): Promise<void> {
+  const existing = await prisma.docPage.findUnique({ where: { url } });
+  if (existing?.blobPath) {
+    await deleteMarkdownBlob(existing.blobPath).catch(() => undefined);
+  }
+  await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
 }
 
 export async function ingestDevWixArticles(
@@ -132,31 +151,38 @@ export async function ingestDevWixArticles(
     if (res.ok) {
       const html = await res.text();
       startHtmlBytes = html.length;
-      const { title, markdown } = htmlToMarkdown(html);
-      const contentHash = hashText(markdown);
 
-      const blob = await putDevWixMarkdown(startUrl, markdown);
+      const lang = extractHtmlLang(html);
+      if (!isEnglishLang(lang)) {
+        // If Wix ever localizes the landing page, ignore it.
+        await deleteDocPageAndAssets(startUrl);
+      } else {
+        const { title, markdown } = htmlToMarkdown(html);
+        const contentHash = hashText(markdown);
 
-      await prisma.docPage.upsert({
-        where: { url: startUrl },
-        create: {
-          url: startUrl,
-          title,
-          text: markdownToTextForChunking(markdown),
-          contentHash,
-          blobPath: blob.blobPath,
-          fetchedAt: runStartedAt,
-          lastSeenAt: runStartedAt,
-        },
-        update: {
-          title,
-          text: markdownToTextForChunking(markdown),
-          contentHash,
-          blobPath: blob.blobPath,
-          fetchedAt: runStartedAt,
-          lastSeenAt: runStartedAt,
-        },
-      });
+        const blob = await putDevWixMarkdown(startUrl, markdown);
+
+        await prisma.docPage.upsert({
+          where: { url: startUrl },
+          create: {
+            url: startUrl,
+            title,
+            text: markdownToTextForChunking(markdown),
+            contentHash,
+            blobPath: blob.blobPath,
+            fetchedAt: runStartedAt,
+            lastSeenAt: runStartedAt,
+          },
+          update: {
+            title,
+            text: markdownToTextForChunking(markdown),
+            contentHash,
+            blobPath: blob.blobPath,
+            fetchedAt: runStartedAt,
+            lastSeenAt: runStartedAt,
+          },
+        });
+      }
     }
   } catch (e: any) {
     startFetchErrorName = e?.name ?? null;
@@ -208,11 +234,7 @@ export async function ingestDevWixArticles(
 
       if (isDefinitivelyGone(res.status)) {
         // Per wix_spec: if page is removed -> delete it and its chunks AND blob.
-        const existing = await prisma.docPage.findUnique({ where: { url } });
-        if (existing?.blobPath) {
-          await deleteMarkdownBlob(existing.blobPath).catch(() => undefined);
-        }
-        await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
+        await deleteDocPageAndAssets(url);
         continue;
       }
 
@@ -223,6 +245,13 @@ export async function ingestDevWixArticles(
 
       const html = await res.text();
       fetched += 1;
+
+      const lang = extractHtmlLang(html);
+      if (!isEnglishLang(lang)) {
+        // Per request: ignore localized versions.
+        await deleteDocPageAndAssets(url);
+        continue;
+      }
 
       const { title, markdown } = htmlToMarkdown(html);
       const contentHash = hashText(markdown);
@@ -292,7 +321,7 @@ export async function ingestDevWixArticles(
         // Store embedding vector via raw SQL to pgvector column.
         // Prisma does not natively support pgvector in schema, so we use Unsupported + $executeRaw.
         await prisma.$executeRawUnsafe(
-          `UPDATE "DocChunk" SET "embedding" = '${vectorLiteral(emb.vector)}'::vector WHERE id = '${created.id}'`,
+          `UPDATE \"DocChunk\" SET \"embedding\" = '${vectorLiteral(emb.vector)}'::vector WHERE id = '${created.id}'`,
         );
 
         chunksUpserted += 1;

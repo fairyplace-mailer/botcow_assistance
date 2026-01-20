@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { requireAdminBearerAuth } from '../../../../../backend/auth/adminAuth';
+import { withCrawlJob } from '../../../../../backend/crawlJobs';
 import { ingestDevWixArticles } from '../../../../../backend/devWixDocs/ingest';
 
 export const runtime = 'nodejs';
@@ -20,8 +21,30 @@ export async function POST(req: Request) {
       opts.maxChunksPerRun = maxChunksPerRun;
     }
 
-    const result = await ingestDevWixArticles(opts);
-    return NextResponse.json({ ok: true, result });
+    const { jobId, result } = await withCrawlJob(
+      {
+        kind: 'devwix_ingest_admin',
+        batchLimit: limitPages,
+        ...(typeof maxChunksPerRun === 'number' ? { metaJson: { maxChunksPerRun } } : {}),
+      },
+      async () => {
+        const r = await ingestDevWixArticles(opts);
+        return {
+          result: r,
+          finish: {
+            processed: r.processed,
+            updated: r.updated,
+            skipped: r.skipped,
+            metaJson: {
+              stoppedReason: r.stoppedReason ?? null,
+              maxChunksPerRun: r.maxChunksPerRun ?? null,
+            },
+          },
+        };
+      },
+    );
+
+    return NextResponse.json({ ok: true, jobId, result });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }

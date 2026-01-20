@@ -1,5 +1,3 @@
-import { get_encoding } from '@dqbd/tiktoken';
-
 export type TokenChunkOpts = {
   chunkTokens?: number;
   overlapTokens?: number;
@@ -10,41 +8,49 @@ export type TokenChunk = {
   tokenCount: number;
 };
 
+// Approximate tokenization for English:
+// A commonly used heuristic is ~4 characters per token.
+// This avoids WASM/tokenizer bundling issues in Next/Turbopack while keeping
+// chunk sizes aligned with the spec (500–1000 tokens).
+const CHARS_PER_TOKEN = 4;
+
+function clampInt(n: number, min: number, max: number): number {
+  const x = Math.trunc(Number.isFinite(n) ? n : min);
+  return Math.max(min, Math.min(max, x));
+}
+
 /**
- * Token-based chunking using OpenAI-compatible encoding.
+ * Chunk text into ~token-sized slices using a char-based approximation.
  *
  * Notes:
- * - Uses @dqbd/tiktoken which works better with Next/Turbopack than `tiktoken`.
- * - `decode()` returns bytes, so we convert via TextDecoder.
+ * - Designed for EN text (dev.wix.com/docs). For other languages the heuristic
+ *   may be off; those pages are ignored elsewhere.
  */
 export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChunk[] {
-  const chunkTokens = Math.max(1, Math.min(2000, Number(opts?.chunkTokens ?? 800)));
-  const overlapTokens = Math.max(0, Math.min(chunkTokens - 1, Number(opts?.overlapTokens ?? 120)));
+  const chunkTokens = clampInt(Number(opts?.chunkTokens ?? 800), 1, 2000);
+  const overlapTokens = clampInt(Number(opts?.overlapTokens ?? 120), 0, chunkTokens - 1);
 
   const t = text.trim();
   if (!t) return [];
 
-  const enc = get_encoding('cl100k_base');
-  const td = new TextDecoder();
-  try {
-    const tokens = enc.encode(t);
-    const chunks: TokenChunk[] = [];
+  const chunkChars = Math.max(1, chunkTokens * CHARS_PER_TOKEN);
+  const overlapChars = overlapTokens * CHARS_PER_TOKEN;
 
-    let i = 0;
-    while (i < tokens.length) {
-      const end = Math.min(tokens.length, i + chunkTokens);
-      const slice = tokens.slice(i, end);
-      const decodedBytes = enc.decode(slice);
-      const decoded = td.decode(decodedBytes).trim();
-      if (decoded) chunks.push({ text: decoded, tokenCount: slice.length });
+  const chunks: TokenChunk[] = [];
 
-      if (end === tokens.length) break;
-      i = end - overlapTokens;
-      if (i < 0) i = 0;
+  let i = 0;
+  while (i < t.length) {
+    const end = Math.min(t.length, i + chunkChars);
+    const slice = t.slice(i, end).trim();
+    if (slice) {
+      const approxTokens = Math.max(1, Math.ceil(slice.length / CHARS_PER_TOKEN));
+      chunks.push({ text: slice, tokenCount: approxTokens });
     }
 
-    return chunks;
-  } finally {
-    enc.free();
+    if (end === t.length) break;
+    i = end - overlapChars;
+    if (i < 0) i = 0;
   }
+
+  return chunks;
 }

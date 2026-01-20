@@ -35,30 +35,32 @@ export async function GET(req: Request) {
       async () => {
         // Find orphan chunks (page was deleted but chunk remained). Should be impossible with FK,
         // but kept for safety if schema ever drifts.
-        const orphanChunkIds = await prisma.docChunk.findMany({
+        const orphanChunkRows: Array<{ id: string }> = await prisma.docChunk.findMany({
           select: { id: true },
           where: { page: null },
           take: limit,
         });
+        const orphanChunkIds = orphanChunkRows.map((x: { id: string }) => x.id);
 
         let deletedOrphanChunks = 0;
         if (!dryRun && orphanChunkIds.length > 0) {
           const res = await prisma.docChunk.deleteMany({
-            where: { id: { in: orphanChunkIds.map((x) => x.id) } },
+            where: { id: { in: orphanChunkIds } },
           });
           deletedOrphanChunks = res.count;
         }
 
         // Invalid DocPages (defensive; normally url is required+unique)
-        const invalidPages = await prisma.docPage.findMany({
+        const invalidPageRows: Array<{ id: string }> = await prisma.docPage.findMany({
           select: { id: true },
           where: { url: '' },
           take: limit,
         });
+        const invalidPageIds = invalidPageRows.map((x: { id: string }) => x.id);
 
         let deletedInvalidPages = 0;
-        if (!dryRun && invalidPages.length > 0) {
-          const res = await prisma.docPage.deleteMany({ where: { id: { in: invalidPages.map((x) => x.id) } } });
+        if (!dryRun && invalidPageIds.length > 0) {
+          const res = await prisma.docPage.deleteMany({ where: { id: { in: invalidPageIds } } });
           deletedInvalidPages = res.count;
         }
 
@@ -69,12 +71,12 @@ export async function GET(req: Request) {
             dryRun,
             limit,
             orphanChunksFound: orphanChunkIds.length,
-            invalidPagesFound: invalidPages.length,
+            invalidPagesFound: invalidPageIds.length,
             deletedOrphanChunks,
             deletedInvalidPages,
           },
           finish: {
-            processed: orphanChunkIds.length + invalidPages.length,
+            processed: orphanChunkIds.length + invalidPageIds.length,
             deleted,
           },
         };

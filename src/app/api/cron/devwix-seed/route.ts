@@ -2,10 +2,14 @@ import { NextResponse } from 'next/server';
 
 import { seedDevWixFromSitemap } from '../../../../backend/devWixDocs/sitemapSeed';
 import { withCrawlJob } from '../../../../backend/crawlJobs';
+import { requireCronSecret } from '../../../../backend/cronAuth';
 
 export const runtime = 'nodejs';
 
 export async function GET(req: Request) {
+  const authResp = requireCronSecret(req);
+  if (authResp) return authResp;
+
   try {
     const { searchParams } = new URL(req.url);
 

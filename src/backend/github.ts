@@ -1,7 +1,8 @@
 import { Octokit } from '@octokit/rest';
 import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
 import { logEvent } from './log';
-import { kvGetJson, kvSetJson } from './kv';
+import { githubCodeSearchGraphql } from './githubGraphqlSearch';
+import { githubCacheGet, githubCacheSet } from './githubCache';
 
 let githubClient: Octokit | null = null;
 
@@ -85,10 +86,6 @@ export type NormalizedJob = {
   html_url?: string | null;
 };
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
 function clampInt(value: unknown, min: number, max: number, fallback: number) {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -122,97 +119,6 @@ function buildSearchQuery(args: {
   return q;
 }
 
-type SearchCodeParams = {
-  q: string;
-  per_page: number;
-  page: number;
-};
-
-function getHeaderValue(headers: any, name: string): string | undefined {
-  if (!headers) return undefined;
-  const lower = name.toLowerCase();
-  return headers[name] ?? headers[lower];
-}
-
-function isSecondaryRateLimitError(error: any): boolean {
-  const msg =
-    (typeof error?.message === 'string' ? error.message : '') +
-    ' ' +
-    (typeof error?.response?.data?.message === 'string'
-      ? error.response.data.message
-      : '');
-  return /secondary rate limit/i.test(msg);
-}
-
-async function searchCodeWithRetry(params: SearchCodeParams) {
-  const maxRetries = 4;
-  const github = getGithubClient();
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await github.search.code({
-        q: params.q,
-        per_page: params.per_page,
-        page: params.page,
-      });
-    } catch (error: any) {
-      const status = error?.status ?? error?.response?.status;
-      const headers = error?.response?.headers;
-
-      const remainingStr = getHeaderValue(headers, 'x-ratelimit-remaining');
-      const resetStr = getHeaderValue(headers, 'x-ratelimit-reset');
-      const remaining =
-        remainingStr !== undefined ? Number.parseInt(remainingStr, 10) : undefined;
-      const resetSec =
-        resetStr !== undefined ? Number.parseInt(resetStr, 10) : undefined;
-
-      const isRateLimitExceeded = status === 403 && remaining === 0;
-      const isSecondary = status === 403 && isSecondaryRateLimitError(error);
-
-      if (attempt >= maxRetries || (!isRateLimitExceeded && !isSecondary)) {
-        throw error;
-      }
-
-      if (isRateLimitExceeded && resetSec) {
-        const resetMs = resetSec * 1000;
-        const now = Date.now();
-        const jitterMs = 100 + Math.floor(Math.random() * 400);
-        const waitMs = Math.max(0, resetMs - now) + jitterMs;
-
-        // Best-effort: do not break the request if logging fails.
-        try {
-          await logEvent('github_search_rate_limited_wait', {
-            attempt,
-            waitMs,
-            remaining,
-            resetSec,
-          });
-        } catch {
-          // ignore
-        }
-
-        await sleep(waitMs);
-        continue;
-      }
-
-      // Secondary rate limit / abuse detection fallback
-      const backoffMs = Math.min(20000, 1000 * 2 ** attempt);
-      try {
-        await logEvent('github_search_secondary_rate_limit_backoff', {
-          attempt,
-          backoffMs,
-        });
-      } catch {
-        // ignore
-      }
-      await sleep(backoffMs);
-    }
-  }
-
-  // Unreachable due to throw/return in loop.
-  throw new Error('searchCodeWithRetry: exhausted');
-}
-
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 
 type SearchInRepoResultItem = {
@@ -230,12 +136,6 @@ const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
  */
 export function __resetSearchStateForTests() {
   searchInflight.clear();
-}
-
-function cacheKeyToKvKey(cacheKey: string) {
-  // Avoid overly long keys + unsafe characters
-  const safe = cacheKey.replace(/[^a-zA-Z0-9._\-:=/]/g, '_');
-  return `github:searchCache:${safe}`;
 }
 
 export async function getFile(path: string, repo?: string, ref?: string) {
@@ -357,7 +257,9 @@ export async function searchInRepo(options: {
   const { owner, repo } = parseRepo(options.repo);
 
   const per_page = clampInt(options.per_page, 1, 50, 20);
-  const page = clampInt(options.page, 1, 5, 1);
+  // GraphQL implementation here returns a single page (first N results).
+  // Keep signature for compatibility.
+  clampInt(options.page, 1, 5, 1);
 
   const q = buildSearchQuery({
     query: options.query,
@@ -366,51 +268,43 @@ export async function searchInRepo(options: {
     ...(options.path ? { path: options.path } : {}),
   });
 
-  const cacheKey = `${q}::per_page=${per_page}::page=${page}`;
-  const kvKey = cacheKeyToKvKey(cacheKey);
+  const cacheKey = `${q}::per_page=${per_page}::page=1`;
 
-  const cached = await kvGetJson<{ data: SearchInRepoResultItem[] }>(kvKey);
+  const cached = await githubCacheGet<{ data: SearchInRepoResultItem[] }>(cacheKey);
   if (cached?.data) {
-    try {
-      await logEvent('github_search_cache_hit', {
-        page,
-        per_page,
-      });
-    } catch {
-      // ignore
-    }
+    await logEvent('github_search_cache_hit', {
+      page: 1,
+      per_page,
+    }).catch(() => undefined);
     return cached.data;
   }
 
   const inflight = searchInflight.get(cacheKey);
   if (inflight) {
-    try {
-      await logEvent('github_search_inflight_join', {
-        page,
-        per_page,
-      });
-    } catch {
-      // ignore
-    }
+    await logEvent('github_search_inflight_join', {
+      page: 1,
+      per_page,
+    }).catch(() => undefined);
     return inflight;
   }
 
   const promise = (async () => {
-    const res = await searchCodeWithRetry({ q, per_page, page });
+    const gqlItems = await githubCodeSearchGraphql({
+      owner,
+      repo,
+      query: options.query,
+      per_page,
+      ...(options.path ? { path: options.path } : {}),
+    });
 
-    const items: SearchInRepoResultItem[] = res.data.items.map((item) => ({
+    const items: SearchInRepoResultItem[] = gqlItems.map((item) => ({
       path: item.path,
-      repository: item.repository.full_name,
-      score: item.score,
-      url: item.html_url,
+      repository: item.repository,
+      score: 0,
+      url: item.url,
     }));
 
-    // Persist cache to survive serverless cold starts.
-    await kvSetJson(
-      kvKey,
-      { data: items },
-      { ttlSeconds: Math.floor(SEARCH_CACHE_TTL_MS / 1000) },
-    );
+    await githubCacheSet(cacheKey, { data: items }, Math.floor(SEARCH_CACHE_TTL_MS / 1000));
 
     return items;
   })();

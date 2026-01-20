@@ -1,5 +1,3 @@
-// src/backend/modelRouter.ts
-
 export type ModelId = 'gpt-5.2' | 'gpt-5.1-codex-max';
 export type ReasoningEffort = 'none' | 'high';
 
@@ -11,8 +9,13 @@ export interface ModelRoutingDecision {
 
 type ModelConfig = Pick<ModelRoutingDecision, 'model' | 'reasoning'>;
 
-// OpenAI embeddings model used for RAG/search/analytics.
-// Kept separate from chat ModelId to avoid breaking chat routing.
+/**
+ * OpenAI embeddings model used for RAG/search/analytics.
+ *
+ * Important:
+ * - Keep separate from chat ModelId to avoid breaking chat routing.
+ * - Embeddings model may change independently from chat models.
+ */
 export const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-large' as const;
 
 /**

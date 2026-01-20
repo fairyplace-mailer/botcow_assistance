@@ -1,3 +1,6 @@
+-- Enable pgvector extension (required for embeddings)
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- CreateTable
 CREATE TABLE "KvItem" (
     "key" TEXT NOT NULL,
@@ -15,7 +18,9 @@ CREATE TABLE "DocPage" (
     "title" TEXT,
     "text" TEXT NOT NULL,
     "contentHash" TEXT NOT NULL,
+    "blobPath" TEXT,
     "fetchedAt" TIMESTAMP(3) NOT NULL,
+    "lastSeenAt" TIMESTAMP(3) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -28,9 +33,12 @@ CREATE TABLE "DocChunk" (
     "pageId" TEXT NOT NULL,
     "idx" INTEGER NOT NULL,
     "content" TEXT NOT NULL,
-    "embeddingJson" JSONB,
+
+    -- pgvector embedding
+    "embedding" vector(3072),
     "embeddingModel" TEXT,
     "dims" INTEGER,
+
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "DocChunk_pkey" PRIMARY KEY ("id")
@@ -41,6 +49,9 @@ CREATE UNIQUE INDEX "DocPage_url_key" ON "DocPage"("url");
 
 -- CreateIndex
 CREATE INDEX "DocPage_fetchedAt_idx" ON "DocPage"("fetchedAt");
+
+-- CreateIndex
+CREATE INDEX "DocPage_lastSeenAt_idx" ON "DocPage"("lastSeenAt");
 
 -- CreateIndex
 CREATE INDEX "DocChunk_pageId_idx" ON "DocChunk"("pageId");

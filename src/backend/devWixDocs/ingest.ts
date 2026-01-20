@@ -1,6 +1,10 @@
 import { prisma } from '../db';
 import { embedText } from '../openai';
 import { kvGetJson, kvSetJson } from '../kv';
+import { deleteMarkdownBlob, putDevWixMarkdown } from './blob';
+import { hashText } from './hash';
+import { htmlToMarkdown } from './markdown';
+import { chunkTextByTokens } from './tokenChunker';
 
 export type IngestStopReason =
   | 'skipped_daily_gate'
@@ -32,96 +36,44 @@ export type IngestResult = {
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 const KV_LAST_RUN_KEY = 'devwix:ingest:lastRunAt';
 
-// Allow: any /docs/... page. We use deny-list to avoid huge API reference sections.
-function isAllowedPath(pathname: string): boolean {
-  if (!pathname.startsWith('/docs/')) return false;
-
-  const denyPrefixes = ['/docs/rest/', '/docs/sdk/', '/docs/api/', '/docs/reference/'];
-  if (denyPrefixes.some((p) => pathname.startsWith(p))) return false;
-
-  return true;
-}
-
-function normalizeUrl(u: string): string | null {
-  try {
-    const url = new URL(u, DEFAULT_START_URL);
-    if (url.hostname !== 'dev.wix.com') return null;
-    url.hash = '';
-    // drop query params to reduce duplicates
-    url.search = '';
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-function extractHrefLinks(html: string): string[] {
-  const out: string[] = [];
-  const re = /<a\s+[^>]*href=["']([^"'#?]+)["'][^>]*>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
-    const raw = m?.[1];
-    if (!raw) continue;
-    const abs = normalizeUrl(raw);
-    if (abs) out.push(abs);
-  }
-  return out;
-}
-
-function extractRegexLinks(html: string): string[] {
-  const out: string[] = [];
-  // Look for any string that contains /docs/... (Next.js may inline route data)
-  const re = /"(\/docs\/[^"]{1,300})"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
-    const raw = m?.[1];
-    if (!raw) continue;
-    const abs = normalizeUrl(raw);
-    if (abs) out.push(abs);
-  }
-  return out;
-}
-
-function stripHtmlToText(html: string): { title: string | null; text: string } {
-  const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  const rawTitle = titleMatch?.[1];
-  const title = rawTitle ? rawTitle.replace(/\s+/g, ' ').trim() : null;
-
-  const text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+function markdownToTextForChunking(md: string): string {
+  // Simple heuristic: markdown as plain text.
+  // Approx-token chunking is applied after this step.
+  return md
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+    .replace(/[#>*_~|-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-
-  return { title, text };
 }
 
-function hashText(text: string): string {
-  // lightweight deterministic hash
-  let h = 2166136261;
-  for (let i = 0; i < text.length; i += 1) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(16);
+function isDefinitivelyGone(status: number): boolean {
+  return status === 404 || status === 410;
 }
 
-function chunkText(text: string, maxChars = 1800, overlap = 200): string[] {
-  const chunks: string[] = [];
-  const t = text.trim();
-  if (!t) return chunks;
+function vectorLiteral(vec: number[]): string {
+  // pgvector accepts: '[1,2,3]'::vector
+  return `[${vec.join(',')}]`;
+}
 
-  let i = 0;
-  while (i < t.length) {
-    const end = Math.min(t.length, i + maxChars);
-    const slice = t.slice(i, end).trim();
-    if (slice) chunks.push(slice);
-    i = end - overlap;
-    if (i < 0) i = 0;
-    if (end === t.length) break;
+function extractHtmlLang(html: string): string | null {
+  const m = html.match(/<html\b[^>]*\blang\s*=\s*['\"]?([^'\"\s>]+)[^>]*>/i);
+  return m?.[1]?.trim() ?? null;
+}
+
+function isEnglishLang(lang: string | null): boolean {
+  if (!lang) return true; // if not provided, accept (wix pages usually are EN)
+  const norm = lang.toLowerCase();
+  return norm === 'en' || norm.startsWith('en-');
+}
+
+async function deleteDocPageAndAssets(url: string): Promise<void> {
+  const existing = await prisma.docPage.findUnique({ where: { url } });
+  if (existing?.blobPath) {
+    await deleteMarkdownBlob(existing.blobPath).catch(() => undefined);
   }
-  return chunks;
+  await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
 }
 
 export async function ingestDevWixArticles(
@@ -131,7 +83,8 @@ export async function ingestDevWixArticles(
     force?: boolean;
   },
 ): Promise<IngestResult> {
-  const limitPages = Math.max(1, Math.min(500, Number(opts?.limitPages ?? 50)));
+  // Per wix_spec: 5–10 pages per run.
+  const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 10)));
   const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 600)));
   const startUrl = DEFAULT_START_URL;
 
@@ -174,21 +127,18 @@ export async function ingestDevWixArticles(
   let skippedUnchanged = 0;
   let chunksUpserted = 0;
 
-  // diagnostics
+  // diagnostics (legacy fields kept for API compatibility)
   let startFetched = false;
   let startStatus: number | null = null;
   let startHtmlBytes: number | null = null;
   let startFetchErrorName: string | null = null;
   let startFetchError: string | null = null;
-  let linksFoundTotal = 0;
-  let linksMatchedAllowed = 0;
-  let sampleLinks: string[] = [];
+  const linksFoundTotal = 0;
+  const linksMatchedAllowed = 0;
+  const sampleLinks: string[] = [];
   let stoppedReason: IngestStopReason | undefined;
 
-  const queue: string[] = [startUrl];
-  const seen = new Set<string>(queue);
-
-  // Fetch start page first to seed queue
+  // Keep a seed record for the landing page (optional).
   try {
     const res = await fetch(startUrl, {
       headers: {
@@ -198,34 +148,42 @@ export async function ingestDevWixArticles(
     });
     startFetched = true;
     startStatus = res.status;
-    const html = await res.text();
-    startHtmlBytes = html.length;
+    if (res.ok) {
+      const html = await res.text();
+      startHtmlBytes = html.length;
 
-    const hrefLinks = extractHrefLinks(html);
-    const rxLinks = extractRegexLinks(html);
-    const allLinks = Array.from(new Set([...hrefLinks, ...rxLinks]));
+      const lang = extractHtmlLang(html);
+      if (!isEnglishLang(lang)) {
+        // If Wix ever localizes the landing page, ignore it.
+        await deleteDocPageAndAssets(startUrl);
+      } else {
+        const { title, markdown } = htmlToMarkdown(html);
+        const contentHash = hashText(markdown);
 
-    linksFoundTotal = allLinks.length;
-    const allowed = allLinks.filter((u) => {
-      try {
-        const url = new URL(u);
-        return isAllowedPath(url.pathname);
-      } catch {
-        return false;
-      }
-    });
-    linksMatchedAllowed = allowed.length;
-    sampleLinks = allowed.slice(0, 5);
+        const blob = await putDevWixMarkdown(startUrl, markdown);
 
-    for (const u of allowed) {
-      if (!seen.has(u)) {
-        seen.add(u);
-        queue.push(u);
+        await prisma.docPage.upsert({
+          where: { url: startUrl },
+          create: {
+            url: startUrl,
+            title,
+            text: markdownToTextForChunking(markdown),
+            contentHash,
+            blobPath: blob.blobPath,
+            fetchedAt: runStartedAt,
+            lastSeenAt: runStartedAt,
+          },
+          update: {
+            title,
+            text: markdownToTextForChunking(markdown),
+            contentHash,
+            blobPath: blob.blobPath,
+            fetchedAt: runStartedAt,
+            lastSeenAt: runStartedAt,
+          },
+        });
       }
     }
-
-    // remove startUrl: it's /docs (not /docs/), not a storable page.
-    queue.shift();
   } catch (e: any) {
     startFetchErrorName = e?.name ?? null;
     startFetchError = e?.message ?? String(e);
@@ -250,118 +208,136 @@ export async function ingestDevWixArticles(
     };
   }
 
-  let discoveredQueued = queue.length;
+  // Choose next URLs to update (controlled fetcher, no spidering).
+  // Skip pages that have not been seeded yet: we only process /docs/... URLs.
+  const targets = await prisma.docPage.findMany({
+    where: {
+      url: { startsWith: 'https://dev.wix.com/docs/' },
+    },
+    orderBy: [{ fetchedAt: 'asc' }],
+    take: limitPages,
+  });
 
-  // Crawl allowed pages
-  while (queue.length > 0 && fetched < limitPages) {
-    const url = queue.shift()!;
-    const u = new URL(url);
+  const discoveredQueued = targets.length;
 
-    if (!isAllowedPath(u.pathname)) continue;
+  for (const t of targets) {
+    if (fetched >= limitPages) break;
 
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
-        Accept: 'text/html,application/xhtml+xml',
-      },
-    });
-
-    if (!res.ok) continue;
-
-    const html = await res.text();
-    fetched += 1;
-
-    const { title, text } = stripHtmlToText(html);
-    const contentHash = hashText(text);
-
-    const existing = await prisma.docPage.findUnique({ where: { url } });
-    if (existing?.contentHash === contentHash) {
-      // still mark as seen
-      await prisma.docPage.update({ where: { url }, data: { lastSeenAt: runStartedAt } }).catch(() => undefined);
-      skippedUnchanged += 1;
-      continue;
-    }
-
-    const page = await prisma.docPage.upsert({
-      where: { url },
-      create: {
-        url,
-        title,
-        text,
-        contentHash,
-        fetchedAt: runStartedAt,
-        lastSeenAt: runStartedAt,
-      },
-      update: {
-        title,
-        text,
-        contentHash,
-        fetchedAt: runStartedAt,
-        lastSeenAt: runStartedAt,
-      },
-    });
-
-    stored += 1;
-
-    // recreate chunks for this page
-    await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
-
-    const chunks = chunkText(text).filter((c): c is string => typeof c === 'string' && c.trim().length > 0);
-    let idx = 0;
-    for (const content of chunks) {
-      if (chunksUpserted >= maxChunksPerRun) {
-        stoppedReason = 'maxChunksPerRun';
-        break;
-      }
-      const emb = await embedText(content);
-      await prisma.docChunk.create({
-        data: {
-          pageId: page.id,
-          idx,
-          content,
-          embeddingJson: emb.vector as any,
-          embeddingModel: emb.model,
-          dims: emb.dims,
+    const url = t.url;
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
+          Accept: 'text/html,application/xhtml+xml',
         },
       });
-      chunksUpserted += 1;
-      idx += 1;
-    }
 
-    if (stoppedReason) break;
-
-    // discover more links from this page
-    const hrefLinks = extractHrefLinks(html);
-    const rxLinks = extractRegexLinks(html);
-    const moreLinks = Array.from(new Set([...hrefLinks, ...rxLinks]));
-
-    for (const next of moreLinks) {
-      try {
-        const nu = new URL(next);
-        if (!isAllowedPath(nu.pathname)) continue;
-        if (!seen.has(next)) {
-          seen.add(next);
-          queue.push(next);
-        }
-      } catch {
-        // ignore
+      if (isDefinitivelyGone(res.status)) {
+        // Per wix_spec: if page is removed -> delete it and its chunks AND blob.
+        await deleteDocPageAndAssets(url);
+        continue;
       }
+
+      if (!res.ok) {
+        // transient errors: do not delete, do not update fetchedAt (so it will be retried)
+        continue;
+      }
+
+      const html = await res.text();
+      fetched += 1;
+
+      const lang = extractHtmlLang(html);
+      if (!isEnglishLang(lang)) {
+        // Per request: ignore localized versions.
+        await deleteDocPageAndAssets(url);
+        continue;
+      }
+
+      const { title, markdown } = htmlToMarkdown(html);
+      const contentHash = hashText(markdown);
+
+      const existing = await prisma.docPage.findUnique({ where: { url } });
+      if (existing?.contentHash === contentHash) {
+        await prisma.docPage
+          .update({ where: { url }, data: { lastSeenAt: runStartedAt } })
+          .catch(() => undefined);
+        skippedUnchanged += 1;
+        continue;
+      }
+
+      // Update blob for canonical markdown.
+      const blob = await putDevWixMarkdown(url, markdown);
+
+      const page = await prisma.docPage.upsert({
+        where: { url },
+        create: {
+          url,
+          title,
+          text: markdownToTextForChunking(markdown),
+          contentHash,
+          blobPath: blob.blobPath,
+          fetchedAt: runStartedAt,
+          lastSeenAt: runStartedAt,
+        },
+        update: {
+          title,
+          text: markdownToTextForChunking(markdown),
+          contentHash,
+          blobPath: blob.blobPath,
+          fetchedAt: runStartedAt,
+          lastSeenAt: runStartedAt,
+        },
+      });
+
+      stored += 1;
+
+      // recreate chunks for this page
+      await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
+
+      const chunkSource = markdownToTextForChunking(markdown);
+      const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens: 800, overlapTokens: 120 });
+
+      let idx = 0;
+      for (const c of tokenChunks) {
+        if (chunksUpserted >= maxChunksPerRun) {
+          stoppedReason = 'maxChunksPerRun';
+          break;
+        }
+        const content = c.text;
+        if (!content || !content.trim()) continue;
+
+        const emb = await embedText(content);
+
+        const created = await prisma.docChunk.create({
+          data: {
+            pageId: page.id,
+            idx,
+            content,
+            embeddingModel: emb.model,
+            dims: emb.dims,
+          },
+        });
+
+        // Store embedding vector via raw SQL to pgvector column.
+        // Prisma does not natively support pgvector in schema, so we use Unsupported + $executeRaw.
+        await prisma.$executeRawUnsafe(
+          `UPDATE \"DocChunk\" SET \"embedding\" = '${vectorLiteral(emb.vector)}'::vector WHERE id = '${created.id}'`,
+        );
+
+        chunksUpserted += 1;
+        idx += 1;
+      }
+
+      if (stoppedReason) break;
+    } catch {
+      // do not delete; try again later
+      continue;
     }
-
-    discoveredQueued = queue.length;
   }
-
-  // Cleanup: remove pages not seen during this run (and their chunks via cascade)
-  await prisma.docPage.deleteMany({
-    where: {
-      lastSeenAt: { lt: runStartedAt },
-    },
-  });
 
   // record last run
   await kvSetJson(KV_LAST_RUN_KEY, new Date().toISOString());
 
-  // Build result without passing `undefined` for optional fields.
   const result: IngestResult = {
     ok: true,
     startUrl,

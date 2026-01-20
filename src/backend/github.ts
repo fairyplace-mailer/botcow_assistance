@@ -296,7 +296,13 @@ export async function searchInRepo(options: {
   }
 
   const promise = (async () => {
-    const gqlItems = await githubCodeSearchGraphql({ owner, repo, query: options.query, path: options.path, per_page });
+    const gqlItems = await githubCodeSearchGraphql({
+      owner,
+      repo,
+      query: options.query,
+      per_page,
+      ...(options.path ? { path: options.path } : {}),
+    });
 
     const items: SearchInRepoResultItem[] = gqlItems.map((item) => ({
       path: item.path,

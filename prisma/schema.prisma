@@ -13,6 +13,16 @@ model KvItem {
   updatedAt DateTime @updatedAt
 }
 
+model GithubCache {
+  key          String   @id
+  responseJson Json
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
 model CrawlJob {
   id            String    @id @default(cuid())
   kind          String

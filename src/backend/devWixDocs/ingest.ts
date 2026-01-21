@@ -28,6 +28,11 @@ export type IngestResult = {
   linksFoundTotal: number;
   linksMatchedAllowed: number;
   sampleLinks: string[];
+
+  // embeddings diagnostics
+  embedFailures: number;
+  lastEmbedErrorName: string | null;
+  lastEmbedError: string | null;
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
@@ -131,6 +136,10 @@ export async function ingestDevWixArticles(
   let skippedUnchanged = 0;
   let chunksUpserted = 0;
 
+  let embedFailures = 0;
+  let lastEmbedErrorName: string | null = null;
+  let lastEmbedError: string | null = null;
+
   // diagnostics (legacy fields kept for API compatibility)
   let startFetched = false;
   let startStatus: number | null = null;
@@ -206,6 +215,9 @@ export async function ingestDevWixArticles(
       linksFoundTotal,
       linksMatchedAllowed,
       sampleLinks,
+      embedFailures,
+      lastEmbedErrorName,
+      lastEmbedError,
     };
   }
 
@@ -325,26 +337,43 @@ export async function ingestDevWixArticles(
         const content = c.text;
         if (!content || !content.trim()) continue;
 
-        const emb = await embedText(content);
-
+        // Always store the chunk content; embeddings may fail due to missing keys/rate limits.
         const created = await prisma.docChunk.create({
           data: {
             pageId: page.id,
             idx,
             content,
-            embeddingModel: emb.model,
-            dims: emb.dims,
+            embeddingModel: null,
+            dims: null,
           },
         });
 
-        await updateDocChunkVector({
-          prisma,
-          chunkId: created.id,
-          embedding: emb.vector,
-          embeddingModel: emb.model,
-        });
+        try {
+          const emb = await embedText(content);
 
-        chunksUpserted += 1;
+          await prisma.docChunk.update({
+            where: { id: created.id },
+            data: {
+              embeddingModel: emb.model,
+              dims: emb.dims,
+            },
+          });
+
+          await updateDocChunkVector({
+            prisma,
+            chunkId: created.id,
+            embedding: emb.vector,
+            embeddingModel: emb.model,
+          });
+
+          chunksUpserted += 1;
+        } catch (e: any) {
+          embedFailures += 1;
+          lastEmbedErrorName = e?.name ?? 'Error';
+          lastEmbedError = e?.message ?? String(e);
+          // keep the chunk without embedding; it can be re-embedded later.
+        }
+
         idx += 1;
       }
 
@@ -378,6 +407,9 @@ export async function ingestDevWixArticles(
     linksFoundTotal,
     linksMatchedAllowed,
     sampleLinks,
+    embedFailures,
+    lastEmbedErrorName,
+    lastEmbedError,
   };
   if (stoppedReason) result.stoppedReason = stoppedReason;
   return result;

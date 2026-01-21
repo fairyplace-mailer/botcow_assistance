@@ -21,12 +21,10 @@ export function chunkTextByTokens(
   text: string,
   opts?: { chunkTokens?: number; overlapTokens?: number }
 ): string[] {
-  // Botcow already uses tiktoken in devWixDocs, but to avoid adding new deps here
-  // and to keep Vercel Hobby stable, we approximate tokens by characters.
+  // Approximation: 1 token ~ 4 chars (English). Keeps us dependency-free.
   const chunkTokens = opts?.chunkTokens ?? 800;
   const overlapTokens = opts?.overlapTokens ?? 120;
 
-  // Rough heuristic: 1 token ~ 4 chars (English).
   const chunkChars = chunkTokens * 4;
   const overlapChars = overlapTokens * 4;
 

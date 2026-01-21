@@ -1,7 +1,7 @@
 import { requireCronSecret } from '@/backend/cronAuth';
 import { withCrawlJob } from '@/backend/crawlJobs';
-import { ingestWebKb, webKbDailyLockKey } from '@/backend/webKb/webKb';
-import { kvGetJson, kvSetJson } from '@/backend/kv';
+import { ingestWebKb } from '@/backend/webKb/webKb';
+import { acquireDailyLock, toUtcIsoDate } from '@/backend/cronLock';
 
 export async function GET(req: Request) {
   requireCronSecret(req);
@@ -9,10 +9,18 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const force = url.searchParams.get('force') === '1' || url.searchParams.get('force') === 'true';
 
-  // Daily lock (UTC)
-  const lockKey = webKbDailyLockKey('web-kb-ingest');
-  const existing = await kvGetJson<{ doneAt: string }>(lockKey);
-  if (existing && !force) {
+  // Daily lock (UTC) — DB-backed, like botcat_chat.
+  const now = new Date();
+  const utcDateKey = toUtcIsoDate(now);
+  const locked = await acquireDailyLock({
+    name: 'web-kb-ingest',
+    utcDateKey,
+    now,
+    lockMinutes: 30,
+    metaJson: { forced: force },
+  });
+
+  if (!locked && !force) {
     return Response.json({ ok: true, skipped: true, reason: 'locked' });
   }
 
@@ -26,8 +34,6 @@ export async function GET(req: Request) {
       };
     },
   );
-
-  await kvSetJson(lockKey, { doneAt: new Date().toISOString() }, 60 * 60 * 36);
 
   return Response.json({ ok: true, forced: force, ...job.metaJson });
 }

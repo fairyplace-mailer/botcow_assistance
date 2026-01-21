@@ -16,7 +16,7 @@ type ModelConfig = Pick<ModelRoutingDecision, 'model' | 'reasoning'>;
  * - Keep separate from chat ModelId to avoid breaking chat routing.
  * - Embeddings model may change independently from chat models.
  */
-export const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-large' as const;
+export const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small' as const;
 
 /**
  * Роутер моделей по содержимому диалога.

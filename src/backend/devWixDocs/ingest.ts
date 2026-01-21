@@ -33,6 +33,21 @@ export type IngestResult = {
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 
+function normalizeMarkdownForHash(md: string): string {
+  // Canonicalize markdown to avoid re-embedding due to insignificant whitespace changes.
+  // Keep code blocks intact (code is critical for Wix docs).
+  return (
+    md
+      .replace(/\r\n?/g, '\n')
+      // trim trailing whitespace per line
+      .replace(/[^\S\n]+$/gm, '')
+      // collapse 3+ blank lines to 2
+      .replace(/\n{3,}/g, '\n\n')
+      .trim() +
+    '\n'
+  );
+}
+
 function markdownToTextForChunking(md: string): string {
   // Important: code examples are part of the docs and MUST be embedded.
   // We keep fenced/inline code, but we still simplify links and whitespace.
@@ -156,7 +171,8 @@ export async function ingestDevWixArticles(
         await deleteDocPageAndAssets(startUrl);
       } else {
         const { title, markdown } = htmlToMarkdown(html);
-        const contentHash = hashText(markdown);
+        const canonicalMarkdown = normalizeMarkdownForHash(markdown);
+        const contentHash = hashText(canonicalMarkdown);
 
         const blob = await putDevWixMarkdown(startUrl, markdown);
 
@@ -265,7 +281,8 @@ export async function ingestDevWixArticles(
       }
 
       const { title, markdown } = htmlToMarkdown(html);
-      const contentHash = hashText(markdown);
+      const canonicalMarkdown = normalizeMarkdownForHash(markdown);
+      const contentHash = hashText(canonicalMarkdown);
 
       const existing = await prisma.docPage.findUnique({ where: { url } });
       if (existing?.contentHash === contentHash) {

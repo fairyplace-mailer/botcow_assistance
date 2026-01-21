@@ -5,6 +5,7 @@ import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
 import { updateDocChunkVector } from './pgvector';
+import type { Prisma } from '@prisma/client';
 
 export type IngestStopReason = 'start_fetch_failed' | 'maxChunksPerRun';
 
@@ -31,8 +32,6 @@ export type IngestResult = {
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
-
-type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
 function markdownToTextForChunking(md: string): string {
   // Important: code examples are part of the docs and MUST be embedded.
@@ -83,7 +82,7 @@ async function claimDueDocPages(params: {
 
   // Claim: inside a transaction, select due pages and immediately push their nextFetchAt
   // forward a bit, so concurrent runs don't pick the same pages.
-  return prisma.$transaction(async (tx: TxClient) => {
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const due = await tx.docPage.findMany({
       where: {
         url: { startsWith: 'https://dev.wix.com/docs/' },

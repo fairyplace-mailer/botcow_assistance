@@ -5,6 +5,7 @@ import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
 import { updateDocChunkVector } from './pgvector';
 import type { Prisma } from '@prisma/client';
+import { canonicalizeDocsUrl, extractLinksFromHtml, isAllowedDocsUrl } from './sitemapSeed';
 
 export type IngestStopReason = 'start_fetch_failed' | 'maxChunksPerRun';
 
@@ -117,6 +118,61 @@ async function claimDueDocPages(params: {
   });
 }
 
+async function queueDiscoveredLinks(params: {
+  baseUrl: string;
+  html: string;
+  now: Date;
+  maxNewPages: number;
+}): Promise<{ linksFoundTotal: number; linksMatchedAllowed: number; inserted: number; sampleLinks: string[] }>
+{
+  const { baseUrl, html, now, maxNewPages } = params;
+
+  let linksFoundTotal = 0;
+  let linksMatchedAllowed = 0;
+  let inserted = 0;
+  const sampleLinks: string[] = [];
+
+  const rawLinks = extractLinksFromHtml(html, baseUrl);
+  linksFoundTotal = rawLinks.length;
+
+  for (const raw of rawLinks) {
+    if (inserted >= maxNewPages) break;
+
+    const canon = canonicalizeDocsUrl(raw);
+    if (!canon) continue;
+    if (!isAllowedDocsUrl(canon)) continue;
+
+    linksMatchedAllowed += 1;
+    if (sampleLinks.length < 20) sampleLinks.push(canon);
+
+    // Upsert with minimal changes; ingest owns scheduling.
+    const existing = await prisma.docPage.findUnique({ where: { url: canon } });
+    if (existing) {
+      await prisma.docPage.update({ where: { url: canon }, data: { lastSeenAt: now } }).catch(() => undefined);
+      continue;
+    }
+
+    await prisma.docPage
+      .create({
+        data: {
+          url: canon,
+          title: null,
+          text: '',
+          contentHash: 'seed',
+          fetchedAt: new Date(0),
+          lastSeenAt: now,
+          nextFetchAt: now,
+          // default refreshIntervalHours applies
+        },
+      })
+      .catch(() => undefined);
+
+    inserted += 1;
+  }
+
+  return { linksFoundTotal, linksMatchedAllowed, inserted, sampleLinks };
+}
+
 export async function ingestDevWixArticles(
   opts?: {
     limitPages?: number;
@@ -140,14 +196,14 @@ export async function ingestDevWixArticles(
   let lastEmbedErrorName: string | null = null;
   let lastEmbedError: string | null = null;
 
-  // diagnostics (legacy fields kept for API compatibility)
+  // diagnostics
   let startFetched = false;
   let startStatus: number | null = null;
   let startHtmlBytes: number | null = null;
   let startFetchErrorName: string | null = null;
   let startFetchError: string | null = null;
-  const linksFoundTotal = 0;
-  const linksMatchedAllowed = 0;
+  let linksFoundTotal = 0;
+  let linksMatchedAllowed = 0;
   const sampleLinks: string[] = [];
   let stoppedReason: IngestStopReason | undefined;
 
@@ -192,6 +248,19 @@ export async function ingestDevWixArticles(
             lastSeenAt: runStartedAt,
           },
         });
+
+        // Queue links discovered from the landing page.
+        const queued = await queueDiscoveredLinks({
+          baseUrl: startUrl,
+          html,
+          now: runStartedAt,
+          maxNewPages: 200,
+        });
+        linksFoundTotal += queued.linksFoundTotal;
+        linksMatchedAllowed += queued.linksMatchedAllowed;
+        for (const l of queued.sampleLinks) {
+          if (sampleLinks.length < 20) sampleLinks.push(l);
+        }
       }
     }
   } catch (e: any) {
@@ -221,7 +290,7 @@ export async function ingestDevWixArticles(
     };
   }
 
-  // Choose next URLs to update (controlled fetcher, no spidering).
+  // Choose next URLs to update (controlled fetcher).
   const targets = opts?.force
     ? await prisma.docPage.findMany({
         where: {
@@ -253,7 +322,7 @@ export async function ingestDevWixArticles(
         .catch(() => undefined);
 
       if (isDefinitivelyGone(res.status)) {
-        // Per wix_spec: if page is removed -> delete it and its chunks.
+        // If page is removed -> delete it and its chunks.
         await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
         continue;
       }
@@ -272,9 +341,22 @@ export async function ingestDevWixArticles(
       const html = await res.text();
       fetched += 1;
 
+      // Queue links discovered from this page (best-effort, capped).
+      const queued = await queueDiscoveredLinks({
+        baseUrl: url,
+        html,
+        now: runStartedAt,
+        maxNewPages: 200,
+      });
+      linksFoundTotal += queued.linksFoundTotal;
+      linksMatchedAllowed += queued.linksMatchedAllowed;
+      for (const l of queued.sampleLinks) {
+        if (sampleLinks.length < 20) sampleLinks.push(l);
+      }
+
       const lang = extractHtmlLang(html);
       if (!isEnglishLang(lang)) {
-        // Per request: ignore localized versions.
+        // Ignore localized versions.
         await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
         continue;
       }

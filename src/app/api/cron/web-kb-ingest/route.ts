@@ -35,5 +35,5 @@ export async function GET(req: Request) {
     },
   );
 
-  return Response.json({ ok: true, forced: force, ...job.metaJson });
+  return Response.json({ ok: true, forced: force, jobId: job.jobId, result: job.result });
 }

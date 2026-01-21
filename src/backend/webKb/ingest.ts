@@ -96,11 +96,20 @@ export async function ingestWebKb(prisma: PrismaClient, params: IngestWebKbParam
     }
 
     try {
-      const html = await fetchHtml(page.url);
+      const fetchRes = await fetchHtml(page.url);
+      if (!fetchRes.ok) {
+        res.pagesFailed += 1;
+        await prisma.webPage.update({
+          where: { id: page.id },
+          data: { nextFetchAt: new Date(Date.now() + 30 * 60_000) },
+        });
+        continue;
+      }
+
       res.pagesFetched += 1;
 
-      const extracted = extractMainText(html);
-      const contentHash = sha256Hex(extracted.text);
+      const extractedText = extractMainText(fetchRes.html);
+      const contentHash = sha256Hex(extractedText);
 
       const unchanged = page.contentHash && page.contentHash === contentHash;
 
@@ -122,7 +131,7 @@ export async function ingestWebKb(prisma: PrismaClient, params: IngestWebKbParam
       // Rebuild chunks.
       await prisma.webChunk.deleteMany({ where: { pageId: page.id } });
 
-      const chunks = chunkTextByTokens(extracted.text, {
+      const chunks = chunkTextByTokens(extractedText, {
         chunkTokens: 800,
         overlapTokens: 120,
       });

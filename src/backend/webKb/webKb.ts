@@ -64,7 +64,10 @@ function isSameDomain(url: string, domain: string): boolean {
   }
 }
 
-function isAllowedByRules(url: string, source: (typeof WEB_KB_SOURCES)[number]): boolean {
+function isAllowedByRules(
+  url: string,
+  source: (typeof WEB_KB_SOURCES)[number]
+): boolean {
   try {
     const u = new URL(url);
     if (!isSameDomain(url, source.domain)) return false;
@@ -89,8 +92,14 @@ export async function seedWebKb(opts?: {
 }): Promise<WebKbSeedResult> {
   const p = opts?.prisma ?? prisma;
 
-  const maxPagesTotal = Math.max(50, Math.min(800, Number(opts?.maxPagesTotal ?? 400)));
-  const maxDurationMs = Math.max(10_000, Math.min(120_000, Number(opts?.maxDurationMs ?? 70_000)));
+  const maxPagesTotal = Math.max(
+    50,
+    Math.min(800, Number(opts?.maxPagesTotal ?? 400))
+  );
+  const maxDurationMs = Math.max(
+    10_000,
+    Math.min(120_000, Number(opts?.maxDurationMs ?? 70_000))
+  );
 
   const startedAt = Date.now();
   let pagesVisited = 0;
@@ -161,7 +170,7 @@ export async function seedWebKb(opts?: {
       pagesUpserted += 1;
 
       // Discover links for same-domain crawl.
-      const re = /href\s*=\s*"([^"]+)"/gi;
+      const re = /href\s*=\s*\"([^\"]+)\"/gi;
       let m: RegExpExecArray | null;
       while ((m = re.exec(fetchRes.html))) {
         const href = m[1];
@@ -200,9 +209,13 @@ export async function ingestWebKb(opts?: {
   force?: boolean;
 }): Promise<WebKbIngestResult> {
   const p = opts?.prisma ?? prisma;
-  return ingestWebKbCore(p, {
+
+  const params: { maxPages: number; maxDurationMs?: number; force?: boolean } = {
     maxPages: Math.max(1, Math.min(30, Number(opts?.maxPages ?? 15))),
-    maxDurationMs: opts?.maxDurationMs,
-    force: opts?.force,
-  });
+  };
+
+  if (opts?.maxDurationMs !== undefined) params.maxDurationMs = opts.maxDurationMs;
+  if (opts?.force !== undefined) params.force = opts.force;
+
+  return ingestWebKbCore(p, params);
 }

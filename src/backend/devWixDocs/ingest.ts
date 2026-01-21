@@ -1,16 +1,12 @@
 import { prisma } from '../db';
 import { embedText } from '../openai';
-import { kvGetJson, kvSetJson } from '../kv';
 import { deleteMarkdownBlob, putDevWixMarkdown } from './blob';
 import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
 import { updateDocChunkVector } from './pgvector';
 
-export type IngestStopReason =
-  | 'skipped_daily_gate'
-  | 'start_fetch_failed'
-  | 'maxChunksPerRun';
+export type IngestStopReason = 'start_fetch_failed' | 'maxChunksPerRun';
 
 export type IngestResult = {
   ok: true;
@@ -35,7 +31,6 @@ export type IngestResult = {
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
-const KV_LAST_RUN_KEY = 'devwix:ingest:lastRunAt';
 
 function markdownToTextForChunking(md: string): string {
   // Important: code examples are part of the docs and MUST be embedded.
@@ -70,6 +65,46 @@ async function deleteDocPageAndAssets(url: string): Promise<void> {
   await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
 }
 
+function addMinutes(base: Date, minutes: number): Date {
+  return new Date(base.getTime() + minutes * 60 * 1000);
+}
+
+function addHours(base: Date, hours: number): Date {
+  return new Date(base.getTime() + hours * 60 * 60 * 1000);
+}
+
+async function claimDueDocPages(params: {
+  now: Date;
+  limit: number;
+}): Promise<Array<{ id: string; url: string; refreshIntervalHours: number }>> {
+  const { now, limit } = params;
+
+  // Claim: inside a transaction, select due pages and immediately push their nextFetchAt
+  // forward a bit, so concurrent runs don't pick the same pages.
+  return prisma.$transaction(async (tx) => {
+    const due = await tx.docPage.findMany({
+      where: {
+        url: { startsWith: 'https://dev.wix.com/docs/' },
+        OR: [{ nextFetchAt: null }, { nextFetchAt: { lte: now } }],
+      },
+      orderBy: [{ nextFetchAt: 'asc' }, { fetchedAt: 'asc' }],
+      take: limit,
+      select: { id: true, url: true, refreshIntervalHours: true },
+    });
+
+    if (due.length === 0) return [];
+
+    const claimedUntil = addMinutes(now, 10);
+
+    await tx.docPage.updateMany({
+      where: { id: { in: due.map((p) => p.id) } },
+      data: { nextFetchAt: claimedUntil },
+    });
+
+    return due;
+  });
+}
+
 export async function ingestDevWixArticles(
   opts?: {
     limitPages?: number;
@@ -81,39 +116,6 @@ export async function ingestDevWixArticles(
   const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 10)));
   const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 600)));
   const startUrl = DEFAULT_START_URL;
-
-  // Daily gating: cron may call hourly; we only ingest once per ~24h unless forced.
-  // NOTE: this will be replaced by DB-backed CronLock in a follow-up change.
-  if (!opts?.force) {
-    const lastRunAtIso = await kvGetJson<string>(KV_LAST_RUN_KEY);
-    if (lastRunAtIso) {
-      const last = new Date(lastRunAtIso).getTime();
-      if (!Number.isNaN(last)) {
-        const ageMs = Date.now() - last;
-        if (ageMs < 23 * 60 * 60 * 1000) {
-          return {
-            ok: true,
-            startUrl,
-            limitPages,
-            fetched: 0,
-            stored: 0,
-            skippedUnchanged: 0,
-            chunksUpserted: 0,
-            discoveredQueued: 0,
-            stoppedReason: 'skipped_daily_gate',
-            startFetched: false,
-            startStatus: null,
-            startHtmlBytes: null,
-            startFetchErrorName: null,
-            startFetchError: null,
-            linksFoundTotal: 0,
-            linksMatchedAllowed: 0,
-            sampleLinks: [],
-          };
-        }
-      }
-    }
-  }
 
   const runStartedAt = new Date();
 
@@ -204,14 +206,16 @@ export async function ingestDevWixArticles(
   }
 
   // Choose next URLs to update (controlled fetcher, no spidering).
-  // Skip pages that have not been seeded yet: we only process /docs/... URLs.
-  const targets = await prisma.docPage.findMany({
-    where: {
-      url: { startsWith: 'https://dev.wix.com/docs/' },
-    },
-    orderBy: [{ fetchedAt: 'asc' }],
-    take: limitPages,
-  });
+  const targets = opts?.force
+    ? await prisma.docPage.findMany({
+        where: {
+          url: { startsWith: 'https://dev.wix.com/docs/' },
+        },
+        orderBy: [{ fetchedAt: 'asc' }],
+        take: limitPages,
+        select: { id: true, url: true, refreshIntervalHours: true },
+      })
+    : await claimDueDocPages({ now: runStartedAt, limit: limitPages });
 
   const discoveredQueued = targets.length;
 
@@ -227,6 +231,11 @@ export async function ingestDevWixArticles(
         },
       });
 
+      // Track status for operational visibility.
+      await prisma.docPage
+        .update({ where: { url }, data: { httpStatus: res.status } })
+        .catch(() => undefined);
+
       if (isDefinitivelyGone(res.status)) {
         // Per wix_spec: if page is removed -> delete it and its chunks AND blob.
         await deleteDocPageAndAssets(url);
@@ -234,7 +243,13 @@ export async function ingestDevWixArticles(
       }
 
       if (!res.ok) {
-        // transient errors: do not delete, do not update fetchedAt (so it will be retried)
+        // transient errors: backoff a bit
+        await prisma.docPage
+          .update({
+            where: { url },
+            data: { nextFetchAt: addMinutes(runStartedAt, 60) },
+          })
+          .catch(() => undefined);
         continue;
       }
 
@@ -254,7 +269,14 @@ export async function ingestDevWixArticles(
       const existing = await prisma.docPage.findUnique({ where: { url } });
       if (existing?.contentHash === contentHash) {
         await prisma.docPage
-          .update({ where: { url }, data: { lastSeenAt: runStartedAt } })
+          .update({
+            where: { url },
+            data: {
+              lastSeenAt: runStartedAt,
+              fetchedAt: runStartedAt,
+              nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
+            },
+          })
           .catch(() => undefined);
         skippedUnchanged += 1;
         continue;
@@ -273,6 +295,7 @@ export async function ingestDevWixArticles(
           blobPath: blob.blobPath,
           fetchedAt: runStartedAt,
           lastSeenAt: runStartedAt,
+          nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
         },
         update: {
           title,
@@ -281,6 +304,7 @@ export async function ingestDevWixArticles(
           blobPath: blob.blobPath,
           fetchedAt: runStartedAt,
           lastSeenAt: runStartedAt,
+          nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
         },
       });
 
@@ -327,12 +351,15 @@ export async function ingestDevWixArticles(
       if (stoppedReason) break;
     } catch {
       // do not delete; try again later
+      await prisma.docPage
+        .update({
+          where: { url },
+          data: { nextFetchAt: addMinutes(runStartedAt, 60) },
+        })
+        .catch(() => undefined);
       continue;
     }
   }
-
-  // record last run
-  await kvSetJson(KV_LAST_RUN_KEY, new Date().toISOString());
 
   const result: IngestResult = {
     ok: true,

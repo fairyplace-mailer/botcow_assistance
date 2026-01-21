@@ -23,15 +23,85 @@ function isAllowedDocsUrl(url: string): boolean {
   }
 }
 
-function parseSitemapXml(xml: string): string[] {
+function parseSitemapLocs(xml: string): string[] {
   // Minimal XML parsing: extract <loc>...</loc>.
-  // We avoid adding an XML dependency for now.
+  // We avoid adding an XML dependency.
   const out: string[] = [];
   const re = /<loc>([^<]+)<\/loc>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml))) {
     const loc = m[1]?.trim();
     if (loc) out.push(loc);
+  }
+  return out;
+}
+
+function looksLikeSitemapIndex(xml: string): boolean {
+  // sitemapindex contains <sitemap> entries; urlset contains <url> entries.
+  return /<sitemapindex[\s>]/i.test(xml) || /<sitemap>[\s\S]*<loc>/i.test(xml);
+}
+
+async function fetchXml(url: string): Promise<{ ok: true; url: string; xml: string } | { ok: false; url: string; status: number; statusText: string; bodySample: string }> {
+  const res = await fetch(url, {
+    redirect: 'follow',
+    headers: {
+      'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
+      Accept: 'application/xml,text/xml,*/*',
+    },
+  });
+
+  const body = await res.text();
+  if (!res.ok) {
+    return {
+      ok: false,
+      url,
+      status: res.status,
+      statusText: res.statusText,
+      bodySample: body.slice(0, 500),
+    };
+  }
+
+  return { ok: true, url, xml: body };
+}
+
+async function fetchSitemapWithFallbacks(primaryUrl: string): Promise<{ sitemapUrl: string; xml: string }> {
+  const candidates = [
+    primaryUrl,
+    // common alternates
+    'https://dev.wix.com/sitemap.xml',
+    'https://dev.wix.com/docs/sitemap-index.xml',
+    'https://dev.wix.com/sitemap-index.xml',
+    'https://dev.wix.com/sitemap_index.xml',
+    'https://dev.wix.com/docs/sitemap_index.xml',
+  ];
+
+  const errors: string[] = [];
+  for (const url of candidates) {
+    const r = await fetchXml(url);
+    if (r.ok) return { sitemapUrl: r.url, xml: r.xml };
+    errors.push(`${url} -> ${r.status} ${r.statusText}`);
+  }
+
+  throw new Error(`Failed to fetch sitemap from candidates. Tried: ${errors.join('; ')}`);
+}
+
+async function collectUrlsFromSitemapXml(xml: string, limitUrls: number, depthLeft: number): Promise<string[]> {
+  const locs = parseSitemapLocs(xml);
+  if (!looksLikeSitemapIndex(xml) || depthLeft <= 0) {
+    // urlset: locs are page URLs
+    return locs.slice(0, limitUrls);
+  }
+
+  // sitemapindex: locs are sitemap URLs
+  const out: string[] = [];
+  for (const sitemapUrl of locs) {
+    const r = await fetchXml(sitemapUrl);
+    if (!r.ok) continue;
+    const childUrls = await collectUrlsFromSitemapXml(r.xml, limitUrls - out.length, depthLeft - 1);
+    for (const u of childUrls) {
+      out.push(u);
+      if (out.length >= limitUrls) return out;
+    }
   }
   return out;
 }
@@ -53,20 +123,10 @@ export async function seedDevWixFromSitemap(opts?: {
   const sitemapUrl = opts?.sitemapUrl ?? DEFAULT_SITEMAP_URL;
   const limitUrls = Math.max(1, Math.min(5000, Number(opts?.limitUrls ?? 2000)));
 
-  const res = await fetch(sitemapUrl, {
-    headers: {
-      'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
-      Accept: 'application/xml,text/xml,*/*',
-    },
-  });
+  const { sitemapUrl: finalSitemapUrl, xml } = await fetchSitemapWithFallbacks(sitemapUrl);
 
-  if (!res.ok) {
-    // Keep contract simple; caller can treat non-ok as failure.
-    throw new Error(`Failed to fetch sitemap: ${res.status} ${res.statusText}`);
-  }
-
-  const xml = await res.text();
-  const all = parseSitemapXml(xml);
+  // Two-level recursion is enough for most sitemapindex setups.
+  const all = await collectUrlsFromSitemapXml(xml, limitUrls, 2);
   const found = all.length;
 
   const allowedUrls: string[] = [];
@@ -110,7 +170,7 @@ export async function seedDevWixFromSitemap(opts?: {
 
   return {
     ok: true,
-    sitemapUrl,
+    sitemapUrl: finalSitemapUrl,
     found,
     allowed: allowedUrls.length,
     inserted,

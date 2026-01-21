@@ -5,6 +5,7 @@ import { deleteMarkdownBlob, putDevWixMarkdown } from './blob';
 import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
+import { updateDocChunkVector } from './pgvector';
 
 export type IngestStopReason =
   | 'skipped_daily_gate'
@@ -37,11 +38,9 @@ const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 const KV_LAST_RUN_KEY = 'devwix:ingest:lastRunAt';
 
 function markdownToTextForChunking(md: string): string {
-  // Simple heuristic: markdown as plain text.
-  // Approx-token chunking is applied after this step.
+  // Important: code examples are part of the docs and MUST be embedded.
+  // We keep fenced/inline code, but we still simplify links and whitespace.
   return md
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`[^`]*`/g, ' ')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
     .replace(/[#>*_~|-]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -50,11 +49,6 @@ function markdownToTextForChunking(md: string): string {
 
 function isDefinitivelyGone(status: number): boolean {
   return status === 404 || status === 410;
-}
-
-function vectorLiteral(vec: number[]): string {
-  // pgvector accepts: '[1,2,3]'::vector
-  return `[${vec.join(',')}]`;
 }
 
 function extractHtmlLang(html: string): string | null {
@@ -89,6 +83,7 @@ export async function ingestDevWixArticles(
   const startUrl = DEFAULT_START_URL;
 
   // Daily gating: cron may call hourly; we only ingest once per ~24h unless forced.
+  // NOTE: this will be replaced by DB-backed CronLock in a follow-up change.
   if (!opts?.force) {
     const lastRunAtIso = await kvGetJson<string>(KV_LAST_RUN_KEY);
     if (lastRunAtIso) {
@@ -318,11 +313,12 @@ export async function ingestDevWixArticles(
           },
         });
 
-        // Store embedding vector via raw SQL to pgvector column.
-        // Prisma does not natively support pgvector in schema, so we use Unsupported + $executeRaw.
-        await prisma.$executeRawUnsafe(
-          `UPDATE \"DocChunk\" SET \"embedding\" = '${vectorLiteral(emb.vector)}'::vector WHERE id = '${created.id}'`,
-        );
+        await updateDocChunkVector({
+          prisma,
+          chunkId: created.id,
+          embedding: emb.vector,
+          embeddingModel: emb.model,
+        });
 
         chunksUpserted += 1;
         idx += 1;

@@ -85,7 +85,8 @@ export async function seedDevWixFromSitemap(opts?: {
   for (const url of allowedUrls) {
     const existing = await prisma.docPage.findUnique({ where: { url } });
     if (existing) {
-      // do not overwrite fetchedAt/text/contentHash; just mark seen.
+      // Do not overwrite fetchedAt/text/contentHash; just mark seen.
+      // IMPORTANT: do not reset nextFetchAt; ingest owns scheduling.
       await prisma.docPage.update({ where: { url }, data: { lastSeenAt: now } });
       updated += 1;
     } else {
@@ -97,6 +98,10 @@ export async function seedDevWixFromSitemap(opts?: {
           contentHash: 'seed',
           fetchedAt: new Date(0),
           lastSeenAt: now,
+
+          // Make it immediately due for ingest.
+          nextFetchAt: now,
+          // default refreshIntervalHours applies (24)
         },
       });
       inserted += 1;

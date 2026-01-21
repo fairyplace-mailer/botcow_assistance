@@ -1,15 +1,38 @@
 import { prisma } from '../db';
 
-const DEFAULT_SITEMAP_URL = 'https://dev.wix.com/docs/sitemap.xml';
+const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 
 // If Wix ever exposes localized docs under /docs/<lang>/..., ignore those.
 const LANG_PREFIX_RE = /^\/docs\/(?!rest\/|sdk\/|api\/|reference\/)([a-z]{2})(?:-[a-z]{2})?\//i;
+
+function canonicalizeDocsUrl(raw: string): string | null {
+  try {
+    const u = new URL(raw, DEFAULT_START_URL);
+    if (u.hostname !== 'dev.wix.com') return null;
+
+    // Remove fragment + query
+    u.hash = '';
+    u.search = '';
+
+    // Normalize trailing slash (keep /docs itself without trailing slash).
+    if (u.pathname.endsWith('/') && u.pathname !== '/docs/') {
+      u.pathname = u.pathname.slice(0, -1);
+    }
+
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
 
 function isAllowedDocsUrl(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.hostname !== 'dev.wix.com') return false;
-    if (!u.pathname.startsWith('/docs/')) return false;
+    if (!u.pathname.startsWith('/docs')) return false;
+
+    // Only docs subtree.
+    if (!u.pathname.startsWith('/docs')) return false;
 
     const denyPrefixes = ['/docs/rest/', '/docs/sdk/', '/docs/api/', '/docs/reference/'];
     if (denyPrefixes.some((p) => u.pathname.startsWith(p))) return false;
@@ -17,124 +40,173 @@ function isAllowedDocsUrl(url: string): boolean {
     // If path looks like /docs/fr/... or /docs/es/... => localized.
     if (LANG_PREFIX_RE.test(u.pathname)) return false;
 
+    // Filter out obvious assets.
+    if (u.pathname.match(/\.(png|jpe?g|gif|svg|webp|css|js|map|pdf|zip)$/i)) return false;
+
     return true;
   } catch {
     return false;
   }
 }
 
-function parseSitemapLocs(xml: string): string[] {
-  // Minimal XML parsing: extract <loc>...</loc>.
-  // We avoid adding an XML dependency.
+function extractLinksFromHtml(html: string, baseUrl: string): string[] {
   const out: string[] = [];
-  const re = /<loc>([^<]+)<\/loc>/gi;
+
+  // Very small HTML link extractor: href="..." or href='...'
+  const re = /href\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(xml))) {
-    const loc = m[1]?.trim();
-    if (loc) out.push(loc);
+  while ((m = re.exec(html))) {
+    const href = (m[1] ?? m[2] ?? '').trim();
+    if (!href) continue;
+    if (href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) continue;
+
+    const canon = canonicalizeDocsUrl(new URL(href, baseUrl).toString());
+    if (!canon) continue;
+    out.push(canon);
   }
+
   return out;
 }
 
-function looksLikeSitemapIndex(xml: string): boolean {
-  // sitemapindex contains <sitemap> entries; urlset contains <url> entries.
-  return /<sitemapindex[\s>]/i.test(xml) || /<sitemap>[\s\S]*<loc>/i.test(xml);
-}
-
-async function fetchXml(url: string): Promise<{ ok: true; url: string; xml: string } | { ok: false; url: string; status: number; statusText: string; bodySample: string }> {
-  const res = await fetch(url, {
-    redirect: 'follow',
-    headers: {
-      'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
-      Accept: 'application/xml,text/xml,*/*',
-    },
-  });
-
-  const body = await res.text();
-  if (!res.ok) {
-    return {
-      ok: false,
-      url,
-      status: res.status,
-      statusText: res.statusText,
-      bodySample: body.slice(0, 500),
-    };
-  }
-
-  return { ok: true, url, xml: body };
-}
-
-async function fetchSitemapWithFallbacks(primaryUrl: string): Promise<{ sitemapUrl: string; xml: string }> {
-  const candidates = [
-    primaryUrl,
-    // common alternates
-    'https://dev.wix.com/sitemap.xml',
-    'https://dev.wix.com/docs/sitemap-index.xml',
-    'https://dev.wix.com/sitemap-index.xml',
-    'https://dev.wix.com/sitemap_index.xml',
-    'https://dev.wix.com/docs/sitemap_index.xml',
-  ];
-
-  const errors: string[] = [];
-  for (const url of candidates) {
-    const r = await fetchXml(url);
-    if (r.ok) return { sitemapUrl: r.url, xml: r.xml };
-    errors.push(`${url} -> ${r.status} ${r.statusText}`);
-  }
-
-  throw new Error(`Failed to fetch sitemap from candidates. Tried: ${errors.join('; ')}`);
-}
-
-async function collectUrlsFromSitemapXml(xml: string, limitUrls: number, depthLeft: number): Promise<string[]> {
-  const locs = parseSitemapLocs(xml);
-  if (!looksLikeSitemapIndex(xml) || depthLeft <= 0) {
-    // urlset: locs are page URLs
-    return locs.slice(0, limitUrls);
-  }
-
-  // sitemapindex: locs are sitemap URLs
-  const out: string[] = [];
-  for (const sitemapUrl of locs) {
-    const r = await fetchXml(sitemapUrl);
-    if (!r.ok) continue;
-    const childUrls = await collectUrlsFromSitemapXml(r.xml, limitUrls - out.length, depthLeft - 1);
-    for (const u of childUrls) {
-      out.push(u);
-      if (out.length >= limitUrls) return out;
-    }
-  }
-  return out;
-}
-
-export type SeedFromSitemapResult = {
+export type SeedByDiscoveryResult = {
   ok: true;
-  sitemapUrl: string;
-  found: number;
+  startUrl: string;
+  maxPages: number;
+  maxDurationMs: number;
+  fetched: number;
+  discoveredTotal: number;
   allowed: number;
   inserted: number;
   updated: number;
   sample: string[];
+  stoppedReason: 'max_pages' | 'timeout' | 'queue_exhausted' | 'start_fetch_failed';
+  startStatus?: number;
 };
 
-export async function seedDevWixFromSitemap(opts?: {
-  sitemapUrl?: string;
-  limitUrls?: number;
-}): Promise<SeedFromSitemapResult> {
-  const sitemapUrl = opts?.sitemapUrl ?? DEFAULT_SITEMAP_URL;
-  const limitUrls = Math.max(1, Math.min(5000, Number(opts?.limitUrls ?? 2000)));
+export async function seedDevWixByDiscovery(opts?: {
+  startUrl?: string;
+  maxPages?: number;
+  maxDurationMs?: number;
+  force?: boolean;
+}): Promise<SeedByDiscoveryResult> {
+  const startUrl = opts?.startUrl ?? DEFAULT_START_URL;
+  const maxPages = Math.max(1, Math.min(2000, Number(opts?.maxPages ?? 600)));
+  const maxDurationMs = Math.max(5_000, Math.min(10 * 60_000, Number(opts?.maxDurationMs ?? 120_000)));
 
-  const { sitemapUrl: finalSitemapUrl, xml } = await fetchSitemapWithFallbacks(sitemapUrl);
+  const startedAt = Date.now();
 
-  // Two-level recursion is enough for most sitemapindex setups.
-  const all = await collectUrlsFromSitemapXml(xml, limitUrls, 2);
-  const found = all.length;
+  const q: string[] = [];
+  const seen = new Set<string>();
+
+  const startCanon = canonicalizeDocsUrl(startUrl);
+  if (!startCanon) {
+    throw new Error(`Invalid startUrl: ${startUrl}`);
+  }
+
+  q.push(startCanon);
+  seen.add(startCanon);
+
+  let fetched = 0;
+  let discoveredTotal = 0;
+  let allowed = 0;
 
   const allowedUrls: string[] = [];
-  for (const u of all) {
-    if (!isAllowedDocsUrl(u)) continue;
-    allowedUrls.push(u);
-    if (allowedUrls.length >= limitUrls) break;
+
+  // Fetch start page first to ensure we can crawl.
+  let startFetchStatus: number | undefined;
+  try {
+    const res = await fetch(startCanon, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
+        Accept: 'text/html,*/*',
+      },
+    });
+    startFetchStatus = res.status;
+    if (!res.ok) {
+      return {
+        ok: true,
+        startUrl: startCanon,
+        maxPages,
+        maxDurationMs,
+        fetched: 0,
+        discoveredTotal: 0,
+        allowed: 0,
+        inserted: 0,
+        updated: 0,
+        sample: [],
+        stoppedReason: 'start_fetch_failed',
+        startStatus: res.status,
+      };
+    }
+    const html = await res.text();
+    fetched += 1;
+
+    const links = extractLinksFromHtml(html, startCanon);
+    discoveredTotal += links.length;
+    for (const u of links) {
+      if (!seen.has(u)) {
+        seen.add(u);
+        q.push(u);
+      }
+    }
+  } catch {
+    return {
+      ok: true,
+      startUrl: startCanon,
+      maxPages,
+      maxDurationMs,
+      fetched: 0,
+      discoveredTotal: 0,
+      allowed: 0,
+      inserted: 0,
+      updated: 0,
+      sample: [],
+      stoppedReason: 'start_fetch_failed',
+      startStatus: startFetchStatus,
+    };
   }
+
+  // BFS crawl until limits.
+  while (q.length > 0) {
+    if (Date.now() - startedAt > maxDurationMs) break;
+    if (allowedUrls.length >= maxPages) break;
+
+    const url = q.shift() as string;
+
+    if (!isAllowedDocsUrl(url)) continue;
+
+    allowed += 1;
+    allowedUrls.push(url);
+
+    // Crawl a bit deeper to discover more URLs.
+    try {
+      const res = await fetch(url, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
+          Accept: 'text/html,*/*',
+        },
+      });
+      if (!res.ok) continue;
+      const html = await res.text();
+      fetched += 1;
+
+      const links = extractLinksFromHtml(html, url);
+      discoveredTotal += links.length;
+      for (const u of links) {
+        if (!seen.has(u)) {
+          seen.add(u);
+          q.push(u);
+        }
+      }
+    } catch {
+      // ignore fetch errors; seed is best-effort
+    }
+  }
+
+  const stoppedReason: SeedByDiscoveryResult['stoppedReason'] =
+    allowedUrls.length >= maxPages ? 'max_pages' : Date.now() - startedAt > maxDurationMs ? 'timeout' : 'queue_exhausted';
 
   let inserted = 0;
   let updated = 0;
@@ -170,11 +242,16 @@ export async function seedDevWixFromSitemap(opts?: {
 
   return {
     ok: true,
-    sitemapUrl: finalSitemapUrl,
-    found,
+    startUrl: startCanon,
+    maxPages,
+    maxDurationMs,
+    fetched,
+    discoveredTotal,
     allowed: allowedUrls.length,
     inserted,
     updated,
     sample: allowedUrls.slice(0, 20),
+    stoppedReason,
+    ...(startFetchStatus ? { startStatus: startFetchStatus } : {}),
   };
 }

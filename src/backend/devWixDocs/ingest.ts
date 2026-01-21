@@ -32,6 +32,8 @@ export type IngestResult = {
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 
+type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
 function markdownToTextForChunking(md: string): string {
   // Important: code examples are part of the docs and MUST be embedded.
   // We keep fenced/inline code, but we still simplify links and whitespace.
@@ -81,7 +83,7 @@ async function claimDueDocPages(params: {
 
   // Claim: inside a transaction, select due pages and immediately push their nextFetchAt
   // forward a bit, so concurrent runs don't pick the same pages.
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx: TxClient) => {
     const due = await tx.docPage.findMany({
       where: {
         url: { startsWith: 'https://dev.wix.com/docs/' },

@@ -2,7 +2,7 @@ import crypto from "crypto";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 
-import { createEmbeddings } from "@/backend/ai/embeddings";
+import { embedText } from "@/backend/openai";
 import { updateWebChunkVector } from "@/backend/webKb/pgvector";
 import { fetchHtml } from "@/backend/webKb/request";
 import { chunkTextByTokens } from "@/backend/webKb/text";
@@ -102,10 +102,10 @@ export async function ingestWebKb(prisma: PrismaClient, params: IngestWebKbParam
         }
 
         const chunk = chunks[i]!;
-        const embeddingModel = "text-embedding-3-large";
-        const embedding = await createEmbeddings({ input: chunk, model: embeddingModel });
-        const vector = embedding?.[0];
-        if (!vector) throw new Error("embedding_empty");
+        const emb = await embedText(chunk);
+        const vector = emb.vector;
+        const embeddingModel = emb.model;
+        if (!vector?.length) throw new Error("embedding_empty");
 
         const created = await prisma.webChunk.create({
           data: {

@@ -53,7 +53,7 @@ function extractLinksFromHtml(html: string, baseUrl: string): string[] {
   const out: string[] = [];
 
   // Very small HTML link extractor: href="..." or href='...'
-  const re = /href\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+  const re = /href\s*=\s*(?:\"([^\"]+)\"|'([^']+)')/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html))) {
     const href = (m[1] ?? m[2] ?? '').trim();
@@ -163,7 +163,7 @@ export async function seedDevWixByDiscovery(opts?: {
       updated: 0,
       sample: [],
       stoppedReason: 'start_fetch_failed',
-      startStatus: startFetchStatus,
+      ...(startFetchStatus !== undefined ? { startStatus: startFetchStatus } : {}),
     };
   }
 
@@ -252,6 +252,6 @@ export async function seedDevWixByDiscovery(opts?: {
     updated,
     sample: allowedUrls.slice(0, 20),
     stoppedReason,
-    ...(startFetchStatus ? { startStatus: startFetchStatus } : {}),
+    ...(startFetchStatus !== undefined ? { startStatus: startFetchStatus } : {}),
   };
 }

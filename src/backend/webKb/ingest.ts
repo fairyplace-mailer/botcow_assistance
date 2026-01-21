@@ -136,7 +136,7 @@ export async function ingestWebKb(prisma: PrismaClient, params: IngestWebKbParam
         overlapTokens: 120,
       });
 
-      let chunkIndex = 0;
+      let idx = 0;
       for (const chunk of chunks) {
         if (Date.now() - startedAt > maxDurationMs) {
           res.stoppedByTimeout = true;
@@ -148,7 +148,7 @@ export async function ingestWebKb(prisma: PrismaClient, params: IngestWebKbParam
         const created = await prisma.webChunk.create({
           data: {
             pageId: page.id,
-            chunkIndex,
+            idx,
             content: chunk,
             embeddingModel: emb.model,
           },
@@ -162,7 +162,7 @@ export async function ingestWebKb(prisma: PrismaClient, params: IngestWebKbParam
         });
 
         res.chunksWritten += 1;
-        chunkIndex += 1;
+        idx += 1;
       }
 
       res.pagesUpdated += 1;

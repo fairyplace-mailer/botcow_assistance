@@ -16,6 +16,12 @@ export type WebKbSeedResult = {
 
 export type WebKbIngestResult = IngestWebKbResult;
 
+export function webKbDailyLockKey(kind: "seed" | "ingest"): string {
+  // UTC date key, like botcat_chat.
+  const day = new Date().toISOString().slice(0, 10);
+  return `web-kb:${kind}:${day}`;
+}
+
 function normalizeUrl(raw: string): string | null {
   try {
     const u = new URL(raw);

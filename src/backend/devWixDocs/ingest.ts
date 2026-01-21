@@ -1,6 +1,5 @@
 import { prisma } from '../db';
 import { embedText } from '../openai';
-import { deleteMarkdownBlob, putDevWixMarkdown } from './blob';
 import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
@@ -71,14 +70,6 @@ function isEnglishLang(lang: string | null): boolean {
   if (!lang) return true; // if not provided, accept (wix pages usually are EN)
   const norm = lang.toLowerCase();
   return norm === 'en' || norm.startsWith('en-');
-}
-
-async function deleteDocPageAndAssets(url: string): Promise<void> {
-  const existing = await prisma.docPage.findUnique({ where: { url } });
-  if (existing?.blobPath) {
-    await deleteMarkdownBlob(existing.blobPath).catch(() => undefined);
-  }
-  await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
 }
 
 function addMinutes(base: Date, minutes: number): Date {
@@ -168,30 +159,26 @@ export async function ingestDevWixArticles(
       const lang = extractHtmlLang(html);
       if (!isEnglishLang(lang)) {
         // If Wix ever localizes the landing page, ignore it.
-        await deleteDocPageAndAssets(startUrl);
+        await prisma.docPage.delete({ where: { url: startUrl } }).catch(() => undefined);
       } else {
         const { title, markdown } = htmlToMarkdown(html);
         const canonicalMarkdown = normalizeMarkdownForHash(markdown);
         const contentHash = hashText(canonicalMarkdown);
-
-        const blob = await putDevWixMarkdown(startUrl, markdown);
 
         await prisma.docPage.upsert({
           where: { url: startUrl },
           create: {
             url: startUrl,
             title,
-            text: markdownToTextForChunking(markdown),
+            text: markdown,
             contentHash,
-            blobPath: blob.blobPath,
             fetchedAt: runStartedAt,
             lastSeenAt: runStartedAt,
           },
           update: {
             title,
-            text: markdownToTextForChunking(markdown),
+            text: markdown,
             contentHash,
-            blobPath: blob.blobPath,
             fetchedAt: runStartedAt,
             lastSeenAt: runStartedAt,
           },
@@ -254,8 +241,8 @@ export async function ingestDevWixArticles(
         .catch(() => undefined);
 
       if (isDefinitivelyGone(res.status)) {
-        // Per wix_spec: if page is removed -> delete it and its chunks AND blob.
-        await deleteDocPageAndAssets(url);
+        // Per wix_spec: if page is removed -> delete it and its chunks.
+        await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
         continue;
       }
 
@@ -276,7 +263,7 @@ export async function ingestDevWixArticles(
       const lang = extractHtmlLang(html);
       if (!isEnglishLang(lang)) {
         // Per request: ignore localized versions.
-        await deleteDocPageAndAssets(url);
+        await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
         continue;
       }
 
@@ -300,26 +287,21 @@ export async function ingestDevWixArticles(
         continue;
       }
 
-      // Update blob for canonical markdown.
-      const blob = await putDevWixMarkdown(url, markdown);
-
       const page = await prisma.docPage.upsert({
         where: { url },
         create: {
           url,
           title,
-          text: markdownToTextForChunking(markdown),
+          text: markdown,
           contentHash,
-          blobPath: blob.blobPath,
           fetchedAt: runStartedAt,
           lastSeenAt: runStartedAt,
           nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
         },
         update: {
           title,
-          text: markdownToTextForChunking(markdown),
+          text: markdown,
           contentHash,
-          blobPath: blob.blobPath,
           fetchedAt: runStartedAt,
           lastSeenAt: runStartedAt,
           nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),

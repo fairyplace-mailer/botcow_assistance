@@ -4,6 +4,9 @@ export function sha256(text: string): string {
   return crypto.createHash("sha256").update(text).digest("hex");
 }
 
+// Backwards-compatible alias (some modules expect sha256Hex).
+export const sha256Hex = sha256;
+
 function stripTags(html: string): string {
   return html
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")

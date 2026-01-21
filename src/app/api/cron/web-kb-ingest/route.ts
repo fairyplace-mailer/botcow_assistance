@@ -4,7 +4,8 @@ import { ingestWebKb } from '@/backend/webKb/webKb';
 import { acquireDailyLock, toUtcIsoDate } from '@/backend/cronLock';
 
 export async function GET(req: Request) {
-  requireCronSecret(req);
+  const deny = requireCronSecret(req);
+  if (deny) return deny;
 
   const url = new URL(req.url);
   const force = url.searchParams.get('force') === '1' || url.searchParams.get('force') === 'true';

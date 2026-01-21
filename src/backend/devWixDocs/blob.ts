@@ -9,11 +9,21 @@ export type DevWixBlobItem = {
   uploadedAt?: string;
 };
 
+export type DevWixBlobsPage = {
+  keys: string[];
+  cursor?: string;
+};
+
+export type ListDevWixBlobsParams = {
+  cursor?: string;
+  limit?: number;
+};
+
 /**
  * @deprecated Blob storage is disabled for DevWix docs.
  */
-export async function listDevWixBlobs(): Promise<DevWixBlobItem[]> {
-  return [];
+export async function listDevWixBlobs(_params?: ListDevWixBlobsParams): Promise<DevWixBlobsPage> {
+  return { keys: [], cursor: undefined };
 }
 
 /**

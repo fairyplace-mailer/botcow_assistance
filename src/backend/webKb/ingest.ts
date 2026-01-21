@@ -1,32 +1,50 @@
-import crypto from "crypto";
-
 import { Prisma, PrismaClient } from "@prisma/client";
 
 import { embedText } from "@/backend/openai";
 import { updateWebChunkVector } from "@/backend/webKb/pgvector";
 import { fetchHtml } from "@/backend/webKb/request";
 import { chunkTextByTokens } from "@/backend/webKb/text";
-import { classifyRefreshIntervalHours, extractMainText } from "@/backend/webKb/transform";
+import {
+  classifyRefreshIntervalHours,
+  extractMainText,
+  sha256Hex,
+} from "@/backend/webKb/transform";
 
 export type IngestWebKbParams = {
   maxPages: number;
-  maxDurationMs: number;
+  maxDurationMs?: number;
   force?: boolean;
 };
 
+export type IngestWebKbResult = {
+  pagesConsidered: number;
+  pagesFetched: number;
+  pagesUnchanged: number;
+  pagesUpdated: number;
+  pagesFailed: number;
+  chunksWritten: number;
+  stoppedByTimeout: boolean;
+};
+
+function isPast(d: Date, now: Date) {
+  return d.getTime() <= now.getTime();
+}
+
 export async function ingestWebKb(prisma: PrismaClient, params: IngestWebKbParams) {
   const startedAt = Date.now();
-  const deadline = startedAt + params.maxDurationMs;
+  const maxDurationMs = params.maxDurationMs ?? 70_000;
+
+  const res: IngestWebKbResult = {
+    pagesConsidered: 0,
+    pagesFetched: 0,
+    pagesUnchanged: 0,
+    pagesUpdated: 0,
+    pagesFailed: 0,
+    chunksWritten: 0,
+    stoppedByTimeout: false,
+  };
 
   const now = new Date();
-
-  let pagesConsidered = 0;
-  let pagesFetched = 0;
-  let pagesUnchanged = 0;
-  let pagesUpdated = 0;
-  let pagesFailed = 0;
-  let chunksWritten = 0;
-  let stoppedByTimeout = false;
 
   // Claim due pages to avoid double-processing.
   const claimed = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -40,136 +58,138 @@ export async function ingestWebKb(prisma: PrismaClient, params: IngestWebKbParam
       select: { id: true },
     });
 
-    if (due.length === 0) return [] as { id: string }[];
+    const ids = due.map((p) => p.id);
+    if (ids.length === 0) return [] as string[];
 
-    // mark in-progress for 10 minutes
     await tx.webPage.updateMany({
-      where: { id: { in: due.map((d) => d.id) } },
-      data: { nextFetchAt: new Date(Date.now() + 10 * 60 * 1000) },
+      where: { id: { in: ids } },
+      data: { nextFetchAt: new Date(Date.now() + 10 * 60_000) },
     });
 
-    return due;
+    return ids;
   });
 
-  for (const row of claimed) {
-    pagesConsidered += 1;
+  if (claimed.length === 0) {
+    return res;
+  }
 
-    if (Date.now() > deadline) {
-      stoppedByTimeout = true;
+  const pages = await prisma.webPage.findMany({
+    where: { id: { in: claimed } },
+    include: { site: true },
+  });
+
+  for (const page of pages) {
+    if (Date.now() - startedAt > maxDurationMs) {
+      res.stoppedByTimeout = true;
       break;
     }
 
-    const page = await prisma.webPage.findUnique({
-      where: { id: row.id },
-      include: { site: true },
-    });
-    if (!page) continue;
+    res.pagesConsidered += 1;
 
     const refreshIntervalHours =
-      page.refreshIntervalHours ?? classifyRefreshIntervalHours(new URL(page.url));
+      page.refreshIntervalHours ?? classifyRefreshIntervalHours(page.url);
+
+    // If not forced and page is not due (should be rare since we claim due pages), skip.
+    if (!params.force && page.nextFetchAt && !isPast(page.nextFetchAt, now)) {
+      res.pagesUnchanged += 1;
+      continue;
+    }
 
     try {
       const html = await fetchHtml(page.url);
-      pagesFetched += 1;
+      res.pagesFetched += 1;
 
-      const text = extractMainText(html);
-      const contentHash = crypto.createHash("sha256").update(text).digest("hex");
+      const extracted = extractMainText(html);
+      const contentHash = sha256Hex(extracted.text);
 
-      if (page.contentHash && page.contentHash === contentHash) {
-        pagesUnchanged += 1;
+      const unchanged = page.contentHash && page.contentHash === contentHash;
+
+      if (unchanged) {
+        res.pagesUnchanged += 1;
         await prisma.webPage.update({
           where: { id: page.id },
           data: {
-            fetchedAt: new Date(),
-            lastSeenAt: new Date(),
+            fetchedAt: now,
+            lastSeenAt: now,
             contentHash,
             refreshIntervalHours,
-            nextFetchAt: new Date(Date.now() + refreshIntervalHours * 60 * 60 * 1000),
+            nextFetchAt: new Date(now.getTime() + refreshIntervalHours * 3600_000),
           },
         });
         continue;
       }
 
-      const chunks = chunkTextByTokens(text, { chunkTokens: 800, overlapTokens: 120 });
-
-      // Replace all chunks for the page on change.
+      // Rebuild chunks.
       await prisma.webChunk.deleteMany({ where: { pageId: page.id } });
 
-      for (let i = 0; i < chunks.length; i++) {
-        if (Date.now() > deadline) {
-          stoppedByTimeout = true;
+      const chunks = chunkTextByTokens(extracted.text, {
+        chunkTokens: 800,
+        overlapTokens: 120,
+      });
+
+      let chunkIndex = 0;
+      for (const chunk of chunks) {
+        if (Date.now() - startedAt > maxDurationMs) {
+          res.stoppedByTimeout = true;
           break;
         }
 
-        const chunk = chunks[i]!;
         const emb = await embedText(chunk);
-        const vector = emb.vector;
-        const embeddingModel = emb.model;
-        if (!vector?.length) throw new Error("embedding_empty");
 
         const created = await prisma.webChunk.create({
           data: {
             pageId: page.id,
-            idx: i,
+            chunkIndex,
             content: chunk,
-            embeddingModel,
+            embeddingModel: emb.model,
           },
-          select: { id: true },
         });
 
         await updateWebChunkVector({
           prisma,
           chunkId: created.id,
-          embedding: vector,
-          embeddingModel,
+          embedding: emb.vector,
+          embeddingModel: emb.model,
         });
 
-        chunksWritten += 1;
+        res.chunksWritten += 1;
+        chunkIndex += 1;
       }
 
-      pagesUpdated += 1;
+      res.pagesUpdated += 1;
 
       await prisma.webPage.update({
         where: { id: page.id },
         data: {
-          fetchedAt: new Date(),
-          lastSeenAt: new Date(),
+          fetchedAt: now,
+          lastSeenAt: now,
           contentHash,
           refreshIntervalHours,
-          nextFetchAt: new Date(Date.now() + refreshIntervalHours * 60 * 60 * 1000),
+          nextFetchAt: new Date(now.getTime() + refreshIntervalHours * 3600_000),
         },
       });
     } catch (e) {
-      pagesFailed += 1;
-      // backoff 30 minutes on errors
+      res.pagesFailed += 1;
+      // Backoff 30 minutes on failure
       await prisma.webPage.update({
-        where: { id: row.id },
-        data: { nextFetchAt: new Date(Date.now() + 30 * 60 * 1000) },
+        where: { id: page.id },
+        data: { nextFetchAt: new Date(Date.now() + 30 * 60_000) },
       });
+      // eslint-disable-next-line no-console
+      console.warn("[web-kb] ingest page failed", page.url, e);
     }
   }
 
+  // eslint-disable-next-line no-console
   console.log(
-    `[web-kb] ${JSON.stringify({
+    "[web-kb]",
+    JSON.stringify({
       run: "ingest",
-      pagesConsidered,
-      pagesFetched,
-      pagesUnchanged,
-      pagesUpdated,
-      pagesFailed,
-      chunksWritten,
-      stoppedByTimeout,
-      durationMs: Date.now() - startedAt,
-    })}`,
+      ...res,
+      maxPages: params.maxPages,
+      maxDurationMs,
+    })
   );
 
-  return {
-    pagesConsidered,
-    pagesFetched,
-    pagesUnchanged,
-    pagesUpdated,
-    pagesFailed,
-    chunksWritten,
-    stoppedByTimeout,
-  };
+  return res;
 }

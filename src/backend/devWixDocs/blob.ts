@@ -23,7 +23,8 @@ export type ListDevWixBlobsParams = {
  * @deprecated Blob storage is disabled for DevWix docs.
  */
 export async function listDevWixBlobs(_params?: ListDevWixBlobsParams): Promise<DevWixBlobsPage> {
-  return { keys: [], cursor: undefined };
+  // exactOptionalPropertyTypes: do not include `cursor` when absent.
+  return { keys: [] };
 }
 
 /**

@@ -5,7 +5,7 @@ const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 // If Wix ever exposes localized docs under /docs/<lang>/..., ignore those.
 const LANG_PREFIX_RE = /^\/docs\/(?!rest\/|sdk\/|api\/|reference\/)([a-z]{2})(?:-[a-z]{2})?\//i;
 
-function canonicalizeDocsUrl(raw: string): string | null {
+export function canonicalizeDocsUrl(raw: string): string | null {
   try {
     const u = new URL(raw, DEFAULT_START_URL);
     if (u.hostname !== 'dev.wix.com') return null;
@@ -25,7 +25,7 @@ function canonicalizeDocsUrl(raw: string): string | null {
   }
 }
 
-function isAllowedDocsUrl(url: string): boolean {
+export function isAllowedDocsUrl(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.hostname !== 'dev.wix.com') return false;
@@ -49,7 +49,7 @@ function isAllowedDocsUrl(url: string): boolean {
   }
 }
 
-function extractLinksFromHtml(html: string, baseUrl: string): string[] {
+export function extractLinksFromHtml(html: string, baseUrl: string): string[] {
   const out: string[] = [];
 
   // Very small HTML link extractor: href="..." or href='...'

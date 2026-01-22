@@ -3,7 +3,7 @@ import { embedText } from '../openai';
 import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
-import { updateDocChunkVector } from './pgvector';
+import { embeddingToSqlVectorLiteral } from './pgvector';
 import type { Prisma } from '@prisma/client';
 import { canonicalizeDocsUrl, extractLinksFromHtml, isAllowedDocsUrl } from './sitemapSeed';
 
@@ -43,6 +43,8 @@ export type IngestResult = {
   maxDurationMs: number;
   maxEmbeddings: number;
   embeddingsAttempted: number;
+  budgetHit: boolean;
+  budgetHitType: 'time' | 'embeddings' | null;
 
   // perf diagnostics
   msFetch: number;
@@ -205,6 +207,42 @@ async function queueDiscoveredLinks(params: {
   return { linksFoundTotal, linksMatchedAllowed, inserted, sampleLinks };
 }
 
+function buildVectorUpdateSql(params: {
+  updates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }>;
+}): { sql: string; values: any[] } {
+  const { updates } = params;
+  // Build:
+  // UPDATE "DocChunk" AS c
+  // SET embedding = v.embedding::vector,
+  //     embeddingModel = v.model,
+  //     dims = v.dims
+  // FROM (VALUES ($1,$2,$3,$4), ...) AS v(id, embedding, model, dims)
+  // WHERE c.id = v.id
+
+  const values: any[] = [];
+  const rows: string[] = [];
+
+  for (const u of updates) {
+    const i = values.length;
+    values.push(u.id, u.vectorLiteral, u.model, u.dims);
+    rows.push(`($${i + 1}, $${i + 2}, $${i + 3}, $${i + 4})`);
+  }
+
+  const sql = `
+UPDATE "DocChunk" AS c
+SET
+  "embedding" = v.embedding::vector,
+  "embeddingModel" = v.model,
+  "dims" = v.dims
+FROM (VALUES
+  ${rows.join(',\n  ')}
+) AS v(id, embedding, model, dims)
+WHERE c.id = v.id
+`;
+
+  return { sql, values };
+}
+
 export async function ingestDevWixArticles(
   opts?: {
     limitPages?: number;
@@ -294,6 +332,8 @@ export async function ingestDevWixArticles(
         maxDurationMs,
         maxEmbeddings,
         embeddingsAttempted,
+        budgetHit: true,
+        budgetHitType: 'time',
         msFetch,
         msTransform,
         msChunk,
@@ -398,6 +438,8 @@ export async function ingestDevWixArticles(
       maxDurationMs,
       maxEmbeddings,
       embeddingsAttempted,
+      budgetHit: false,
+      budgetHitType: null,
       msFetch,
       msTransform,
       msChunk,
@@ -565,6 +607,8 @@ export async function ingestDevWixArticles(
       const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens: 800, overlapTokens: 120 });
       msChunk += nowMs() - tChunk0;
 
+      const vectorUpdates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }> = [];
+
       let idx = 0;
       for (const c of tokenChunks) {
         if (timeBudget.shouldStop()) {
@@ -607,21 +651,11 @@ export async function ingestDevWixArticles(
           const emb = await embedText(content);
           msEmbed += nowMs() - tEmb0;
 
-          const tDbEmbMeta0 = nowMs();
-          await prisma.docChunk.update({
-            where: { id: created.id },
-            data: {
-              embeddingModel: emb.model,
-              dims: emb.dims,
-            },
-          });
-          msDb += nowMs() - tDbEmbMeta0;
-
-          await updateDocChunkVector({
-            prisma,
-            chunkId: created.id,
-            embedding: emb.vector,
-            embeddingModel: emb.model,
+          vectorUpdates.push({
+            id: created.id,
+            vectorLiteral: embeddingToSqlVectorLiteral(emb.vector),
+            model: emb.model,
+            dims: emb.dims,
           });
 
           chunksUpserted += 1;
@@ -633,6 +667,15 @@ export async function ingestDevWixArticles(
         }
 
         idx += 1;
+      }
+
+      // One DB roundtrip for all vectors for this page.
+      if (vectorUpdates.length > 0 && !timeBudget.shouldStop()) {
+        const tDbVec0 = nowMs();
+        const { sql, values } = buildVectorUpdateSql({ updates: vectorUpdates });
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        await prisma.$executeRawUnsafe(sql, ...values);
+        msDb += nowMs() - tDbVec0;
       }
 
       if (stoppedReason && (stoppedReason === 'time_budget_exhausted' || stoppedReason === 'maxChunksPerRun')) break;
@@ -649,6 +692,14 @@ export async function ingestDevWixArticles(
       continue;
     }
   }
+
+  const budgetHit = stoppedReason === 'time_budget_exhausted' || stoppedReason === 'embed_budget_exhausted';
+  const budgetHitType: 'time' | 'embeddings' | null =
+    stoppedReason === 'time_budget_exhausted'
+      ? 'time'
+      : stoppedReason === 'embed_budget_exhausted'
+        ? 'embeddings'
+        : null;
 
   const result: IngestResult = {
     ok: true,
@@ -673,6 +724,8 @@ export async function ingestDevWixArticles(
     maxDurationMs,
     maxEmbeddings,
     embeddingsAttempted,
+    budgetHit,
+    budgetHitType,
     msFetch,
     msTransform,
     msChunk,

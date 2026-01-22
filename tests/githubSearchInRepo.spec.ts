@@ -1,6 +1,4 @@
-import type { SearchCodeResponse } from '@octokit/types';
-
-// Force KV to always miss in tests (searchInRepo now uses persistent KV)
+// Force KV to always miss in tests (searchInRepo uses persistent KV)
 jest.mock('../src/backend/kv', () => ({
   kvGetJson: jest.fn(async () => null),
   kvSetJson: jest.fn(async () => undefined),
@@ -20,33 +18,30 @@ describe('searchInRepo (cost & reliability)', () => {
     jest.clearAllMocks();
   });
 
-  function makeClient(codeImpl: jest.Mock) {
+  function makeClient(graphqlImpl: jest.Mock) {
     return {
-      search: {
-        code: codeImpl,
-      },
+      graphql: graphqlImpl,
     } as any;
   }
 
-  function okResponse(): SearchCodeResponse {
+  function okGraphqlResponse() {
     return {
-      data: {
-        items: [
+      search: {
+        nodes: [
           {
-            name: 'a',
+            __typename: 'Code',
             path: 'p',
-            sha: 's',
-            html_url: 'u',
-            repository: { full_name: 'o/r' },
+            url: 'u',
+            repository: { nameWithOwner: 'o/r' },
           },
         ],
       },
     } as any;
   }
 
-  it('passes page/per_page to github.search.code', async () => {
-    const code = jest.fn().mockResolvedValue(okResponse());
-    __setGithubClientForTests(makeClient(code));
+  it('calls octokit.graphql with variables { q, first }', async () => {
+    const graphql = jest.fn().mockResolvedValue(okGraphqlResponse());
+    __setGithubClientForTests(makeClient(graphql));
 
     const items = await searchInRepo({
       query: 'foo',
@@ -55,54 +50,41 @@ describe('searchInRepo (cost & reliability)', () => {
     });
 
     expect(items).toHaveLength(1);
-    expect(code).toHaveBeenCalledTimes(1);
-    expect(code.mock.calls[0][0]).toEqual(
+    expect(graphql).toHaveBeenCalledTimes(1);
+
+    const [queryText, variables] = graphql.mock.calls[0];
+    expect(typeof queryText).toBe('string');
+    expect(variables).toEqual(
       expect.objectContaining({
         q: expect.stringContaining('foo'),
-        per_page: 10,
-        page: 3,
+        first: 10,
       }),
     );
   });
 
-  it('caches identical requests (same q/per_page/page)', async () => {
-    const code = jest.fn().mockResolvedValue(okResponse());
-    __setGithubClientForTests(makeClient(code));
+  it('deduplicates inflight requests (same query)', async () => {
+    let resolveFn: ((v: any) => void) | null = null;
 
-    const args = { query: 'foo', per_page: 10, page: 1 };
-
-    const r1 = await searchInRepo(args);
-    const r2 = await searchInRepo(args);
-
-    expect(r1).toEqual(r2);
-    // In this unit test we mock KV as always-miss, so both calls hit GitHub.
-    // Cache behavior is covered by integration/runtime; here we focus on request correctness.
-    expect(code).toHaveBeenCalledTimes(2);
-  });
-
-  it('deduplicates inflight requests', async () => {
-    let resolveFn: ((v: SearchCodeResponse) => void) | null = null;
-
-    const code = jest.fn().mockImplementation(
+    const graphql = jest.fn().mockImplementation(
       () =>
         new Promise((resolve) => {
           resolveFn = resolve;
         }),
     );
 
-    __setGithubClientForTests(makeClient(code));
+    __setGithubClientForTests(makeClient(graphql));
 
     const args = { query: 'bar', per_page: 10, page: 1 };
 
     const p1 = searchInRepo(args);
     const p2 = searchInRepo(args);
 
-    // allow the first call to progress to the point it invokes github.search.code
+    // allow the first call to progress to the point it invokes octokit.graphql
     await Promise.resolve();
 
-    expect(code).toHaveBeenCalledTimes(1);
+    expect(graphql).toHaveBeenCalledTimes(1);
 
-    resolveFn!(okResponse());
+    resolveFn!(okGraphqlResponse());
 
     const [r1, r2] = await Promise.all([p1, p2]);
 
@@ -128,12 +110,12 @@ describe('searchInRepo (cost & reliability)', () => {
     const nowSec = Math.floor(Date.now() / 1000);
     const resetSec = nowSec + 1;
 
-    const code = jest
+    const graphql = jest
       .fn()
       .mockRejectedValueOnce(makeRateLimitError(resetSec))
-      .mockResolvedValueOnce(okResponse());
+      .mockResolvedValueOnce(okGraphqlResponse());
 
-    __setGithubClientForTests(makeClient(code));
+    __setGithubClientForTests(makeClient(graphql));
 
     const promise = searchInRepo({ query: 'baz', per_page: 10, page: 1 });
 
@@ -143,7 +125,7 @@ describe('searchInRepo (cost & reliability)', () => {
     const res = await promise;
 
     expect(res).toHaveLength(1);
-    expect(code).toHaveBeenCalledTimes(2);
+    expect(graphql).toHaveBeenCalledTimes(2);
 
     jest.useRealTimers();
   });

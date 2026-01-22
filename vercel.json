@@ -8,18 +8,6 @@
     {
       "path": "/api/cron/devwix-ingest?limitPages=1",
       "schedule": "*/2 * * * *"
-    },
-    {
-      "path": "/api/cron/devwix-blob-cleanup",
-      "schedule": "20 2 * * *"
-    },
-    {
-      "path": "/api/cron/web-kb-seed",
-      "schedule": "0 1 * * *"
-    },
-    {
-      "path": "/api/cron/web-kb-ingest",
-      "schedule": "10 1 * * *"
     }
   ]
 }

@@ -5,6 +5,11 @@ import { NextResponse } from 'next/server';
  *
  * Expected header:
  *   Authorization: Bearer <CRON_SECRET>
+ *
+ * Dev-only convenience:
+ *   In non-production environments we also allow passing the secret via query param:
+ *     ?token=<CRON_SECRET>
+ *   This makes it possible to trigger cron endpoints from a browser during preview/testing.
  */
 export function requireCronSecret(req: Request): NextResponse | null {
   const secret = process.env.CRON_SECRET;
@@ -17,9 +22,18 @@ export function requireCronSecret(req: Request): NextResponse | null {
   }
 
   const auth = req.headers.get('authorization') ?? '';
-  if (auth !== `Bearer ${secret}`) {
-    return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  if (auth === `Bearer ${secret}`) return null;
+
+  // Dev-only fallback for preview/testing.
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const url = new URL(req.url);
+      const token = url.searchParams.get('token');
+      if (token && token === secret) return null;
+    } catch {
+      // ignore
+    }
   }
 
-  return null;
+  return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 }

@@ -51,3 +51,59 @@ export async function embedText(input: string): Promise<EmbedTextResult> {
     dims: vector.length,
   };
 }
+
+export type EmbedTextsResult = {
+  vectors: number[][];
+  model: string;
+  dims: number;
+};
+
+/**
+ * Batched embeddings call (one request for N inputs).
+ * Returns vectors in the same order as provided inputs.
+ */
+export async function embedTexts(inputs: string[]): Promise<EmbedTextsResult> {
+  const normalized = inputs.map((t) => t.trim());
+  const nonEmpty = normalized.filter(Boolean);
+
+  if (inputs.length === 0) {
+    return { vectors: [], model: OPENAI_EMBEDDING_MODEL, dims: 0 };
+  }
+
+  // If all are empty, return empty vectors.
+  if (nonEmpty.length === 0) {
+    return {
+      vectors: inputs.map(() => []),
+      model: OPENAI_EMBEDDING_MODEL,
+      dims: 0,
+    };
+  }
+
+  // OpenAI embeddings API supports batched input.
+  // We send the normalized strings (including empties as empty strings).
+  const res = await getOpenAIClient().embeddings.create({
+    model: OPENAI_EMBEDDING_MODEL,
+    input: normalized,
+  });
+
+  if (!res.data || res.data.length !== inputs.length) {
+    throw new Error(
+      `OpenAI embeddings: unexpected response size (got ${res.data?.length ?? 0}, expected ${inputs.length})`,
+    );
+  }
+
+  const vectors = res.data.map((d) => {
+    if (!d.embedding) {
+      throw new Error('OpenAI embeddings: missing embedding vector');
+    }
+    return d.embedding;
+  });
+
+  const dims = vectors.find((v) => v.length > 0)?.length ?? 0;
+
+  return {
+    vectors,
+    model: res.model ?? OPENAI_EMBEDDING_MODEL,
+    dims,
+  };
+}

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { seedDevWixFromSitemap } from '../../../../backend/devWixDocs/sitemapSeed';
+import { seedDevWixByDiscovery } from '../../../../backend/devWixDocs/sitemapSeed';
 import { withCrawlJob } from '../../../../backend/crawlJobs';
 import { requireCronSecret } from '../../../../backend/cronAuth';
 
@@ -13,25 +13,38 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
 
-    const sitemapUrl = searchParams.get('sitemapUrl') ?? undefined;
-    const limitUrlsRaw = searchParams.get('limitUrls');
-    const limitUrls = limitUrlsRaw ? Number(limitUrlsRaw) : undefined;
+    const startUrl = searchParams.get('startUrl') ?? undefined;
 
-    const opts: { sitemapUrl?: string; limitUrls?: number } = {
-      ...(sitemapUrl ? { sitemapUrl } : {}),
-      ...(limitUrls !== undefined && Number.isFinite(limitUrls) ? { limitUrls } : {}),
+    const maxPagesRaw = searchParams.get('maxPages');
+    const maxPages = maxPagesRaw ? Number(maxPagesRaw) : undefined;
+
+    const maxDurationMsRaw = searchParams.get('maxDurationMs');
+    const maxDurationMs = maxDurationMsRaw ? Number(maxDurationMsRaw) : undefined;
+
+    const forceRaw = searchParams.get('force');
+    const force = forceRaw ? forceRaw === '1' || forceRaw.toLowerCase() === 'true' : undefined;
+
+    const opts: { startUrl?: string; maxPages?: number; maxDurationMs?: number; force?: boolean } = {
+      ...(startUrl ? { startUrl } : {}),
+      ...(maxPages !== undefined && Number.isFinite(maxPages) ? { maxPages } : {}),
+      ...(maxDurationMs !== undefined && Number.isFinite(maxDurationMs) ? { maxDurationMs } : {}),
+      ...(force !== undefined ? { force } : {}),
     };
 
-    const batchLimit = Number.isFinite(opts.limitUrls) ? (opts.limitUrls as number) : null;
+    const batchLimit = Number.isFinite(opts.maxPages) ? (opts.maxPages as number) : null;
 
     const { jobId, result } = await withCrawlJob(
       {
         kind: 'devwix_seed',
         ...(typeof batchLimit === 'number' ? { batchLimit } : {}),
-        metaJson: { sitemapUrl: opts.sitemapUrl ?? null },
+        metaJson: {
+          startUrl: opts.startUrl ?? null,
+          maxPages: opts.maxPages ?? null,
+          maxDurationMs: opts.maxDurationMs ?? null,
+        },
       },
       async () => {
-        const result = await seedDevWixFromSitemap(opts);
+        const result = await seedDevWixByDiscovery(opts);
         return {
           result,
           finish: {

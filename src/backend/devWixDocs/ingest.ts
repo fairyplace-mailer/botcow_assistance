@@ -7,7 +7,11 @@ import { updateDocChunkVector } from './pgvector';
 import type { Prisma } from '@prisma/client';
 import { canonicalizeDocsUrl, extractLinksFromHtml, isAllowedDocsUrl } from './sitemapSeed';
 
-export type IngestStopReason = 'start_fetch_failed' | 'maxChunksPerRun';
+export type IngestStopReason =
+  | 'start_fetch_failed'
+  | 'maxChunksPerRun'
+  | 'time_budget_exhausted'
+  | 'embed_budget_exhausted';
 
 export type IngestResult = {
   ok: true;
@@ -34,9 +38,18 @@ export type IngestResult = {
   embedFailures: number;
   lastEmbedErrorName: string | null;
   lastEmbedError: string | null;
+
+  // budget diagnostics
+  maxDurationMs: number;
+  maxEmbeddings: number;
+  embeddingsAttempted: number;
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
+
+function nowMs(): number {
+  return Date.now();
+}
 
 function normalizeMarkdownForHash(md: string): string {
   // Canonicalize markdown to avoid re-embedding due to insignificant whitespace changes.
@@ -123,9 +136,9 @@ async function queueDiscoveredLinks(params: {
   html: string;
   now: Date;
   maxNewPages: number;
-}): Promise<{ linksFoundTotal: number; linksMatchedAllowed: number; inserted: number; sampleLinks: string[] }>
-{
-  const { baseUrl, html, now, maxNewPages } = params;
+  timeBudget: { shouldStop: () => boolean };
+}): Promise<{ linksFoundTotal: number; linksMatchedAllowed: number; inserted: number; sampleLinks: string[] }> {
+  const { baseUrl, html, now, maxNewPages, timeBudget } = params;
 
   let linksFoundTotal = 0;
   let linksMatchedAllowed = 0;
@@ -136,6 +149,7 @@ async function queueDiscoveredLinks(params: {
   linksFoundTotal = rawLinks.length;
 
   for (const raw of rawLinks) {
+    if (timeBudget.shouldStop()) break;
     if (inserted >= maxNewPages) break;
 
     const canon = canonicalizeDocsUrl(raw);
@@ -178,14 +192,29 @@ export async function ingestDevWixArticles(
     limitPages?: number;
     maxChunksPerRun?: number;
     force?: boolean;
+    maxDurationMs?: number;
+    maxEmbeddings?: number;
+    maxDiscoveredPages?: number;
   },
 ): Promise<IngestResult> {
   // Per wix_spec: 5–10 pages per run.
-  const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 10)));
-  const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 600)));
+  const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 5)));
+  const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 400)));
+
+  // Vercel Hobby hard timeout ~10s; keep real work within ~6–7s.
+  const maxDurationMs = Math.max(500, Math.min(9000, Number(opts?.maxDurationMs ?? 6500)));
+
+  // Total embeddings per run (across all pages). Keep low for Hobby.
+  const maxEmbeddings = Math.max(0, Math.min(500, Number(opts?.maxEmbeddings ?? 15)));
+
+  // Limit discovered pages enqueued during ingest; seed already handles discovery.
+  const maxDiscoveredPages = Math.max(0, Math.min(500, Number(opts?.maxDiscoveredPages ?? 50)));
+
   const startUrl = DEFAULT_START_URL;
 
   const runStartedAt = new Date();
+  const deadlineMs = nowMs() + maxDurationMs;
+  const timeBudget = { shouldStop: () => nowMs() > deadlineMs };
 
   let fetched = 0;
   let stored = 0;
@@ -195,6 +224,7 @@ export async function ingestDevWixArticles(
   let embedFailures = 0;
   let lastEmbedErrorName: string | null = null;
   let lastEmbedError: string | null = null;
+  let embeddingsAttempted = 0;
 
   // diagnostics
   let startFetched = false;
@@ -209,6 +239,34 @@ export async function ingestDevWixArticles(
 
   // Keep a seed record for the landing page (optional).
   try {
+    if (timeBudget.shouldStop()) {
+      return {
+        ok: true,
+        startUrl,
+        limitPages,
+        fetched,
+        stored,
+        skippedUnchanged,
+        chunksUpserted,
+        discoveredQueued: 0,
+        stoppedReason: 'time_budget_exhausted',
+        startFetched,
+        startStatus,
+        startHtmlBytes,
+        startFetchErrorName,
+        startFetchError,
+        linksFoundTotal,
+        linksMatchedAllowed,
+        sampleLinks,
+        embedFailures,
+        lastEmbedErrorName,
+        lastEmbedError,
+        maxDurationMs,
+        maxEmbeddings,
+        embeddingsAttempted,
+      };
+    }
+
     const res = await fetch(startUrl, {
       headers: {
         'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
@@ -249,17 +307,20 @@ export async function ingestDevWixArticles(
           },
         });
 
-        // Queue links discovered from the landing page.
-        const queued = await queueDiscoveredLinks({
-          baseUrl: startUrl,
-          html,
-          now: runStartedAt,
-          maxNewPages: 200,
-        });
-        linksFoundTotal += queued.linksFoundTotal;
-        linksMatchedAllowed += queued.linksMatchedAllowed;
-        for (const l of queued.sampleLinks) {
-          if (sampleLinks.length < 20) sampleLinks.push(l);
+        if (maxDiscoveredPages > 0 && !timeBudget.shouldStop()) {
+          // Queue links discovered from the landing page.
+          const queued = await queueDiscoveredLinks({
+            baseUrl: startUrl,
+            html,
+            now: runStartedAt,
+            maxNewPages: maxDiscoveredPages,
+            timeBudget,
+          });
+          linksFoundTotal += queued.linksFoundTotal;
+          linksMatchedAllowed += queued.linksMatchedAllowed;
+          for (const l of queued.sampleLinks) {
+            if (sampleLinks.length < 20) sampleLinks.push(l);
+          }
         }
       }
     }
@@ -287,6 +348,9 @@ export async function ingestDevWixArticles(
       embedFailures,
       lastEmbedErrorName,
       lastEmbedError,
+      maxDurationMs,
+      maxEmbeddings,
+      embeddingsAttempted,
     };
   }
 
@@ -304,7 +368,14 @@ export async function ingestDevWixArticles(
 
   const discoveredQueued = targets.length;
 
+  let discoveredRemaining = maxDiscoveredPages;
+
   for (const t of targets) {
+    if (timeBudget.shouldStop()) {
+      stoppedReason = 'time_budget_exhausted';
+      break;
+    }
+
     if (fetched >= limitPages) break;
 
     const url = t.url;
@@ -341,17 +412,21 @@ export async function ingestDevWixArticles(
       const html = await res.text();
       fetched += 1;
 
-      // Queue links discovered from this page (best-effort, capped).
-      const queued = await queueDiscoveredLinks({
-        baseUrl: url,
-        html,
-        now: runStartedAt,
-        maxNewPages: 200,
-      });
-      linksFoundTotal += queued.linksFoundTotal;
-      linksMatchedAllowed += queued.linksMatchedAllowed;
-      for (const l of queued.sampleLinks) {
-        if (sampleLinks.length < 20) sampleLinks.push(l);
+      if (discoveredRemaining > 0 && !timeBudget.shouldStop()) {
+        // Queue links discovered from this page (best-effort, capped).
+        const queued = await queueDiscoveredLinks({
+          baseUrl: url,
+          html,
+          now: runStartedAt,
+          maxNewPages: discoveredRemaining,
+          timeBudget,
+        });
+        discoveredRemaining -= queued.inserted;
+        linksFoundTotal += queued.linksFoundTotal;
+        linksMatchedAllowed += queued.linksMatchedAllowed;
+        for (const l of queued.sampleLinks) {
+          if (sampleLinks.length < 20) sampleLinks.push(l);
+        }
       }
 
       const lang = extractHtmlLang(html);
@@ -412,14 +487,20 @@ export async function ingestDevWixArticles(
 
       let idx = 0;
       for (const c of tokenChunks) {
+        if (timeBudget.shouldStop()) {
+          stoppedReason = 'time_budget_exhausted';
+          break;
+        }
+
         if (chunksUpserted >= maxChunksPerRun) {
           stoppedReason = 'maxChunksPerRun';
           break;
         }
+
         const content = c.text;
         if (!content || !content.trim()) continue;
 
-        // Always store the chunk content; embeddings may fail due to missing keys/rate limits.
+        // Always store the chunk content; embeddings may be budgeted out.
         const created = await prisma.docChunk.create({
           data: {
             pageId: page.id,
@@ -429,6 +510,15 @@ export async function ingestDevWixArticles(
             dims: null,
           },
         });
+
+        // Respect embeddings budget (total per run)
+        if (embeddingsAttempted >= maxEmbeddings) {
+          stoppedReason = stoppedReason ?? 'embed_budget_exhausted';
+          idx += 1;
+          continue;
+        }
+
+        embeddingsAttempted += 1;
 
         try {
           const emb = await embedText(content);
@@ -459,7 +549,7 @@ export async function ingestDevWixArticles(
         idx += 1;
       }
 
-      if (stoppedReason) break;
+      if (stoppedReason && (stoppedReason === 'time_budget_exhausted' || stoppedReason === 'maxChunksPerRun')) break;
     } catch {
       // do not delete; try again later
       await prisma.docPage
@@ -492,6 +582,9 @@ export async function ingestDevWixArticles(
     embedFailures,
     lastEmbedErrorName,
     lastEmbedError,
+    maxDurationMs,
+    maxEmbeddings,
+    embeddingsAttempted,
   };
   if (stoppedReason) result.stoppedReason = stoppedReason;
   return result;

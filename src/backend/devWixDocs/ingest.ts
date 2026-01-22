@@ -11,7 +11,8 @@ export type IngestStopReason =
   | 'start_fetch_failed'
   | 'maxChunksPerRun'
   | 'time_budget_exhausted'
-  | 'embed_budget_exhausted';
+  | 'embed_budget_exhausted'
+  | 'maxChunksPerPage';
 
 export type IngestResult = {
   ok: true;
@@ -45,6 +46,11 @@ export type IngestResult = {
   embeddingsAttempted: number;
   budgetHit: boolean;
   budgetHitType: 'time' | 'embeddings' | null;
+
+  // chunking controls
+  maxChunksPerPage: number;
+  chunkTokens: number;
+  overlapTokens: number;
 
   // perf diagnostics
   msFetch: number;
@@ -249,6 +255,9 @@ export async function ingestDevWixArticles(
     maxEmbeddings?: number;
     maxDiscoveredPages?: number;
     discoverLinks?: boolean;
+    maxChunksPerPage?: number;
+    chunkTokens?: number;
+    overlapTokens?: number;
   },
 ): Promise<IngestResult> {
   const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 1)));
@@ -262,6 +271,11 @@ export async function ingestDevWixArticles(
   const maxDiscoveredPages = Math.max(0, Math.min(500, Number(opts?.maxDiscoveredPages ?? 50)));
 
   const discoverLinks = Boolean(opts?.discoverLinks ?? false);
+
+  // Per-page chunking controls for Hobby.
+  const maxChunksPerPage = Math.max(1, Math.min(50, Number(opts?.maxChunksPerPage ?? 8)));
+  const chunkTokens = Math.max(200, Math.min(2000, Number(opts?.chunkTokens ?? 1100)));
+  const overlapTokens = Math.max(0, Math.min(400, Number(opts?.overlapTokens ?? 150)));
 
   const startUrl = DEFAULT_START_URL;
 
@@ -330,6 +344,9 @@ export async function ingestDevWixArticles(
         embeddingsAttempted,
         budgetHit,
         budgetHitType,
+        maxChunksPerPage,
+        chunkTokens,
+        overlapTokens,
         msFetch,
         msTransform,
         msChunk,
@@ -436,6 +453,9 @@ export async function ingestDevWixArticles(
       embeddingsAttempted,
       budgetHit: false,
       budgetHitType: null,
+      maxChunksPerPage,
+      chunkTokens,
+      overlapTokens,
       msFetch,
       msTransform,
       msChunk,
@@ -595,7 +615,7 @@ export async function ingestDevWixArticles(
 
       const tChunk0 = nowMs();
       const chunkSource = markdownToTextForChunking(markdown);
-      const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens: 800, overlapTokens: 120 });
+      const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens, overlapTokens });
       msChunk += nowMs() - tChunk0;
 
       const embeddingsInputs: Array<{ id: string; content: string }> = [];
@@ -610,6 +630,11 @@ export async function ingestDevWixArticles(
 
         if (chunksUpserted >= maxChunksPerRun) {
           stoppedReason = 'maxChunksPerRun';
+          break;
+        }
+
+        if (idx >= maxChunksPerPage) {
+          stoppedReason = stoppedReason ?? 'maxChunksPerPage';
           break;
         }
 
@@ -673,7 +698,7 @@ export async function ingestDevWixArticles(
         msDb += nowMs() - tDbVec0;
       }
 
-      if (stoppedReason && (stoppedReason === 'time_budget_exhausted' || stoppedReason === 'maxChunksPerRun')) break;
+      if (stoppedReason && stoppedReason !== 'embed_budget_exhausted') break;
     } catch {
       const tDbUpd0 = nowMs();
       await prisma.docPage
@@ -720,6 +745,9 @@ export async function ingestDevWixArticles(
     embeddingsAttempted,
     budgetHit,
     budgetHitType,
+    maxChunksPerPage,
+    chunkTokens,
+    overlapTokens,
     msFetch,
     msTransform,
     msChunk,

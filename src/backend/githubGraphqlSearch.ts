@@ -60,12 +60,12 @@ export type GithubSearchItem = {
 };
 
 const SEARCH_QUERY = `
-  query CodeSearch($query: String!, $first: Int!) {
+  query CodeSearch($q: String!, $first: Int!) {
     rateLimit {
       remaining
       resetAt
     }
-    search(type: CODE, query: $query, first: $first) {
+    search(type: CODE, query: $q, first: $first) {
       codeCount
       nodes {
         __typename
@@ -82,8 +82,9 @@ const SEARCH_QUERY = `
 async function searchCodeGraphqlOnce(args: { q: string; first: number }) {
   const github = getGithubClient();
   // Octokit graphql client is exposed as `octokit.graphql`.
+  // NOTE: variable name `query` is reserved in @octokit/graphql, so we use `q`.
   return await (github as any).graphql(SEARCH_QUERY, {
-    query: args.q,
+    q: args.q,
     first: args.first,
   });
 }

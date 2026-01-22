@@ -43,6 +43,14 @@ export type IngestResult = {
   maxDurationMs: number;
   maxEmbeddings: number;
   embeddingsAttempted: number;
+
+  // perf diagnostics
+  msFetch: number;
+  msTransform: number;
+  msChunk: number;
+  msEmbed: number;
+  msDb: number;
+  msDiscover: number;
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
@@ -97,6 +105,16 @@ function addMinutes(base: Date, minutes: number): Date {
 
 function addHours(base: Date, hours: number): Date {
   return new Date(base.getTime() + hours * 60 * 60 * 1000);
+}
+
+function stripHeavyHtml(html: string): string {
+  // Wix pages contain lots of JS and inline SVG; removing them drastically speeds up HTML->MD.
+  // Keep this conservative: remove only obvious heavy blocks.
+  return html
+    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<svg\b[\s\S]*?<\/svg>/gi, '');
 }
 
 async function claimDueDocPages(params: {
@@ -195,6 +213,7 @@ export async function ingestDevWixArticles(
     maxDurationMs?: number;
     maxEmbeddings?: number;
     maxDiscoveredPages?: number;
+    discoverLinks?: boolean;
   },
 ): Promise<IngestResult> {
   // Per wix_spec: 5–10 pages per run.
@@ -209,6 +228,9 @@ export async function ingestDevWixArticles(
 
   // Limit discovered pages enqueued during ingest; seed already handles discovery.
   const maxDiscoveredPages = Math.max(0, Math.min(500, Number(opts?.maxDiscoveredPages ?? 50)));
+
+  // Discovery during ingest is expensive; default OFF (seed handles it).
+  const discoverLinks = Boolean(opts?.discoverLinks ?? false);
 
   const startUrl = DEFAULT_START_URL;
 
@@ -237,6 +259,14 @@ export async function ingestDevWixArticles(
   const sampleLinks: string[] = [];
   let stoppedReason: IngestStopReason | undefined;
 
+  // perf
+  let msFetch = 0;
+  let msTransform = 0;
+  let msChunk = 0;
+  let msEmbed = 0;
+  let msDb = 0;
+  let msDiscover = 0;
+
   // Keep a seed record for the landing page (optional).
   try {
     if (timeBudget.shouldStop()) {
@@ -264,30 +294,44 @@ export async function ingestDevWixArticles(
         maxDurationMs,
         maxEmbeddings,
         embeddingsAttempted,
+        msFetch,
+        msTransform,
+        msChunk,
+        msEmbed,
+        msDb,
+        msDiscover,
       };
     }
 
+    const tFetch0 = nowMs();
     const res = await fetch(startUrl, {
       headers: {
         'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
         Accept: 'text/html,application/xhtml+xml',
       },
     });
+    msFetch += nowMs() - tFetch0;
+
     startFetched = true;
     startStatus = res.status;
     if (res.ok) {
-      const html = await res.text();
-      startHtmlBytes = html.length;
+      const htmlRaw = await res.text();
+      startHtmlBytes = htmlRaw.length;
+      const html = stripHeavyHtml(htmlRaw);
 
       const lang = extractHtmlLang(html);
       if (!isEnglishLang(lang)) {
         // If Wix ever localizes the landing page, ignore it.
         await prisma.docPage.delete({ where: { url: startUrl } }).catch(() => undefined);
       } else {
+        const tTr0 = nowMs();
         const { title, markdown } = htmlToMarkdown(html);
+        msTransform += nowMs() - tTr0;
+
         const canonicalMarkdown = normalizeMarkdownForHash(markdown);
         const contentHash = hashText(canonicalMarkdown);
 
+        const tDb0 = nowMs();
         await prisma.docPage.upsert({
           where: { url: startUrl },
           create: {
@@ -306,9 +350,11 @@ export async function ingestDevWixArticles(
             lastSeenAt: runStartedAt,
           },
         });
+        msDb += nowMs() - tDb0;
 
-        if (maxDiscoveredPages > 0 && !timeBudget.shouldStop()) {
-          // Queue links discovered from the landing page.
+        // Only run discovery on landing page if explicitly enabled.
+        if (discoverLinks && maxDiscoveredPages > 0 && !timeBudget.shouldStop()) {
+          const tDisc0 = nowMs();
           const queued = await queueDiscoveredLinks({
             baseUrl: startUrl,
             html,
@@ -316,6 +362,7 @@ export async function ingestDevWixArticles(
             maxNewPages: maxDiscoveredPages,
             timeBudget,
           });
+          msDiscover += nowMs() - tDisc0;
           linksFoundTotal += queued.linksFoundTotal;
           linksMatchedAllowed += queued.linksMatchedAllowed;
           for (const l of queued.sampleLinks) {
@@ -351,6 +398,12 @@ export async function ingestDevWixArticles(
       maxDurationMs,
       maxEmbeddings,
       embeddingsAttempted,
+      msFetch,
+      msTransform,
+      msChunk,
+      msEmbed,
+      msDb,
+      msDiscover,
     };
   }
 
@@ -380,40 +433,50 @@ export async function ingestDevWixArticles(
 
     const url = t.url;
     try {
+      const tFetch0 = nowMs();
       const res = await fetch(url, {
         headers: {
           'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
           Accept: 'text/html,application/xhtml+xml',
         },
       });
+      msFetch += nowMs() - tFetch0;
 
       // Track status for operational visibility.
+      const tDbStatus0 = nowMs();
       await prisma.docPage
         .update({ where: { url }, data: { httpStatus: res.status } })
         .catch(() => undefined);
+      msDb += nowMs() - tDbStatus0;
 
       if (isDefinitivelyGone(res.status)) {
         // If page is removed -> delete it and its chunks.
+        const tDbDel0 = nowMs();
         await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
+        msDb += nowMs() - tDbDel0;
         continue;
       }
 
       if (!res.ok) {
         // transient errors: backoff a bit
+        const tDbUpd0 = nowMs();
         await prisma.docPage
           .update({
             where: { url },
             data: { nextFetchAt: addMinutes(runStartedAt, 60) },
           })
           .catch(() => undefined);
+        msDb += nowMs() - tDbUpd0;
         continue;
       }
 
-      const html = await res.text();
+      const htmlRaw = await res.text();
+      const html = stripHeavyHtml(htmlRaw);
       fetched += 1;
 
-      if (discoveredRemaining > 0 && !timeBudget.shouldStop()) {
-        // Queue links discovered from this page (best-effort, capped).
+      // Discovery during ingest: only if explicitly enabled.
+      if (discoverLinks && discoveredRemaining > 0 && !timeBudget.shouldStop()) {
+        const tDisc0 = nowMs();
         const queued = await queueDiscoveredLinks({
           baseUrl: url,
           html,
@@ -421,6 +484,7 @@ export async function ingestDevWixArticles(
           maxNewPages: discoveredRemaining,
           timeBudget,
         });
+        msDiscover += nowMs() - tDisc0;
         discoveredRemaining -= queued.inserted;
         linksFoundTotal += queued.linksFoundTotal;
         linksMatchedAllowed += queued.linksMatchedAllowed;
@@ -432,16 +496,25 @@ export async function ingestDevWixArticles(
       const lang = extractHtmlLang(html);
       if (!isEnglishLang(lang)) {
         // Ignore localized versions.
+        const tDbDel0 = nowMs();
         await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
+        msDb += nowMs() - tDbDel0;
         continue;
       }
 
+      const tTr0 = nowMs();
       const { title, markdown } = htmlToMarkdown(html);
+      msTransform += nowMs() - tTr0;
+
       const canonicalMarkdown = normalizeMarkdownForHash(markdown);
       const contentHash = hashText(canonicalMarkdown);
 
+      const tDbExisting0 = nowMs();
       const existing = await prisma.docPage.findUnique({ where: { url } });
+      msDb += nowMs() - tDbExisting0;
+
       if (existing?.contentHash === contentHash) {
+        const tDbUpd0 = nowMs();
         await prisma.docPage
           .update({
             where: { url },
@@ -452,10 +525,12 @@ export async function ingestDevWixArticles(
             },
           })
           .catch(() => undefined);
+        msDb += nowMs() - tDbUpd0;
         skippedUnchanged += 1;
         continue;
       }
 
+      const tDbUpsert0 = nowMs();
       const page = await prisma.docPage.upsert({
         where: { url },
         create: {
@@ -476,14 +551,19 @@ export async function ingestDevWixArticles(
           nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
         },
       });
+      msDb += nowMs() - tDbUpsert0;
 
       stored += 1;
 
       // recreate chunks for this page
+      const tDbChunks0 = nowMs();
       await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
+      msDb += nowMs() - tDbChunks0;
 
+      const tChunk0 = nowMs();
       const chunkSource = markdownToTextForChunking(markdown);
       const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens: 800, overlapTokens: 120 });
+      msChunk += nowMs() - tChunk0;
 
       let idx = 0;
       for (const c of tokenChunks) {
@@ -500,6 +580,7 @@ export async function ingestDevWixArticles(
         const content = c.text;
         if (!content || !content.trim()) continue;
 
+        const tDbChunk0 = nowMs();
         // Always store the chunk content; embeddings may be budgeted out.
         const created = await prisma.docChunk.create({
           data: {
@@ -510,6 +591,7 @@ export async function ingestDevWixArticles(
             dims: null,
           },
         });
+        msDb += nowMs() - tDbChunk0;
 
         // Respect embeddings budget (total per run)
         if (embeddingsAttempted >= maxEmbeddings) {
@@ -521,8 +603,11 @@ export async function ingestDevWixArticles(
         embeddingsAttempted += 1;
 
         try {
+          const tEmb0 = nowMs();
           const emb = await embedText(content);
+          msEmbed += nowMs() - tEmb0;
 
+          const tDbEmbMeta0 = nowMs();
           await prisma.docChunk.update({
             where: { id: created.id },
             data: {
@@ -530,6 +615,7 @@ export async function ingestDevWixArticles(
               dims: emb.dims,
             },
           });
+          msDb += nowMs() - tDbEmbMeta0;
 
           await updateDocChunkVector({
             prisma,
@@ -552,12 +638,14 @@ export async function ingestDevWixArticles(
       if (stoppedReason && (stoppedReason === 'time_budget_exhausted' || stoppedReason === 'maxChunksPerRun')) break;
     } catch {
       // do not delete; try again later
+      const tDbUpd0 = nowMs();
       await prisma.docPage
         .update({
           where: { url },
           data: { nextFetchAt: addMinutes(runStartedAt, 60) },
         })
         .catch(() => undefined);
+      msDb += nowMs() - tDbUpd0;
       continue;
     }
   }
@@ -585,6 +673,12 @@ export async function ingestDevWixArticles(
     maxDurationMs,
     maxEmbeddings,
     embeddingsAttempted,
+    msFetch,
+    msTransform,
+    msChunk,
+    msEmbed,
+    msDb,
+    msDiscover,
   };
   if (stoppedReason) result.stoppedReason = stoppedReason;
   return result;

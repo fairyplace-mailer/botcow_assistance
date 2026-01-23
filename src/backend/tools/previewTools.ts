@@ -148,11 +148,12 @@ async function previewHttpRequest(args: PreviewHttpRequestArgs): Promise<Preview
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const headers = {
+    const headers: Record<string, string> = {
       ...(args.headers ?? {}),
     };
 
-    let body: string | undefined;
+    // IMPORTANT for exactOptionalPropertyTypes: do not pass body: undefined to fetch.
+    let body: string | null = null;
     if (method !== 'GET' && args.body !== undefined) {
       // Default JSON encoding
       if (!headers['content-type'] && !headers['Content-Type']) {
@@ -161,13 +162,15 @@ async function previewHttpRequest(args: PreviewHttpRequestArgs): Promise<Preview
       body = typeof args.body === 'string' ? args.body : JSON.stringify(args.body);
     }
 
-    const res = await fetch(url, {
+    const init: RequestInit = {
       method,
       headers,
-      body,
       redirect: 'follow',
       signal: controller.signal,
-    });
+      ...(body !== null ? { body } : {}),
+    };
+
+    const res = await fetch(url, init);
 
     const text = await res.text();
 

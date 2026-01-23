@@ -1,55 +1,49 @@
 # Ops
 
-## Environment variables
+## Preview deploys
 
-See `docs/ENVIRONMENT.md`.
+- Preview deploys are created by Vercel.
+- To retrieve the **actual preview URL**, use Vercel API via tools (never guess URLs).
 
-## Cron
+## GitHub code search
 
-### Vercel cron jobs
+`github_search_in_repo` uses **GitHub REST Search API** (`/search/code`).
+GitHub GraphQL `SearchType` currently does **not** include `CODE`, so GraphQL cannot be used for code search.
 
-- `devwix-ingest`: runs **daily at 04:00 UTC** (`0 4 * * *`).
-  - Reason: Vercel Hobby plan allows only daily cron jobs (no more frequent schedules).
-  - If you upgrade to Pro, you can increase frequency if needed.
+## Preview smoke checks (recommended)
 
-## GitHub tools
+This project includes tools to:
+- resolve the latest Vercel preview URL
+- run safe HTTP requests to that URL (SSRF-protected)
+- run a small smoke-check suite against the preview
 
-### github_search_in_repo
+### `preview_get_url`
+Returns the preview deployment URL.
 
-`github_search_in_repo` uses **GitHub REST Search API** (`GET /search/code` via Octokit `octokit.search.code`).
-
-Reason: GitHub GraphQL schema currently does not expose `SearchType = CODE` for code search, so GraphQL cannot be used as a compatible implementation.
-
-Notes on stability:
-- Results are cached (see `src/backend/githubCache.ts`).
-- There is inflight dedupe + retry/backoff for transient failures.
-- GitHub REST calls are also protected by a **global concurrency limiter** (see below).
-
-### Global GitHub REST concurrency limiter
-
-All GitHub **REST** calls in `src/backend/github.ts` are wrapped with a simple concurrency limiter to reduce chances of hitting GitHub secondary rate limits during bursts.
-
-- Implementation: `src/backend/githubRateLimit.ts` (`withGithubRestConcurrencyLimit()`)
-- Default max concurrency: **5** concurrent REST requests.
-
-(If needed later: we can make this configurable via env var, but for now it is a constant to keep behavior stable.)
-
-### github_self_check_search_schema
-
-Self-check tool that introspects GitHub GraphQL schema to list enum values of `SearchType`.
-
-Call it via `/tools/call`:
+Example `/tools/call`:
 
 ```bash
-curl -sS \
+curl -sS "$BASE_URL/tools/call" \
   -H "Authorization: Bearer $BOTCOW_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"github_self_check_search_schema","arguments":{}}' \
-  https://YOUR_DOMAIN/tools/call
+  -d '{"name":"preview_get_url","arguments":{"repo":"fairyplace-mailer/botcow_assistance","branch":"provecta"}}'
 ```
 
-It returns:
+### `preview_http_request`
+Safe HTTP client restricted to `https://*.vercel.app`.
 
-```json
-{ "ok": true, "result": { "ok": true, "searchTypeEnumValues": ["..."] } }
-```
+### `preview_smoke_check`
+Runs these checks:
+- `GET /`
+- `GET /tools`
+- `POST /tools/call`:
+  - `github_get_repo_structure`
+  - `github_get_file`
+  - `github_self_check_search_schema`
+  - `github_search_in_repo` (narrow query)
+
+## Cron (Vercel Hobby)
+
+Vercel Hobby has strict limits on cron frequency.
+For this project:
+- `devwix-ingest` runs **daily 04:00 UTC**: `0 4 * * *`

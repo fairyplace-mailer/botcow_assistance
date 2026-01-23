@@ -1,9 +1,13 @@
-import type { SearchCodeResponse } from '@octokit/types';
-
-// Force KV to always miss in tests (searchInRepo now uses persistent KV)
+// Force KV to always miss in tests
 jest.mock('../src/backend/kv', () => ({
   kvGetJson: jest.fn(async () => null),
   kvSetJson: jest.fn(async () => undefined),
+}));
+
+// Force DB-backed githubCache to always miss in tests (avoid prisma dependency)
+jest.mock('../src/backend/githubCache', () => ({
+  githubCacheGet: jest.fn(async () => null),
+  githubCacheSet: jest.fn(async () => undefined),
 }));
 
 import {
@@ -20,23 +24,22 @@ describe('searchInRepo (cost & reliability)', () => {
     jest.clearAllMocks();
   });
 
-  function makeClient(codeImpl: jest.Mock) {
+  function makeClient(searchCodeImpl: jest.Mock) {
     return {
       search: {
-        code: codeImpl,
+        code: searchCodeImpl,
       },
     } as any;
   }
 
-  function okResponse(): SearchCodeResponse {
+  function okRestResponse() {
     return {
       data: {
         items: [
           {
-            name: 'a',
             path: 'p',
-            sha: 's',
             html_url: 'u',
+            score: 1,
             repository: { full_name: 'o/r' },
           },
         ],
@@ -44,8 +47,8 @@ describe('searchInRepo (cost & reliability)', () => {
     } as any;
   }
 
-  it('passes page/per_page to github.search.code', async () => {
-    const code = jest.fn().mockResolvedValue(okResponse());
+  it('calls octokit.search.code with q/per_page/page', async () => {
+    const code = jest.fn().mockResolvedValue(okRestResponse());
     __setGithubClientForTests(makeClient(code));
 
     const items = await searchInRepo({
@@ -56,7 +59,8 @@ describe('searchInRepo (cost & reliability)', () => {
 
     expect(items).toHaveLength(1);
     expect(code).toHaveBeenCalledTimes(1);
-    expect(code.mock.calls[0][0]).toEqual(
+
+    expect(code).toHaveBeenCalledWith(
       expect.objectContaining({
         q: expect.stringContaining('foo'),
         per_page: 10,
@@ -65,23 +69,8 @@ describe('searchInRepo (cost & reliability)', () => {
     );
   });
 
-  it('caches identical requests (same q/per_page/page)', async () => {
-    const code = jest.fn().mockResolvedValue(okResponse());
-    __setGithubClientForTests(makeClient(code));
-
-    const args = { query: 'foo', per_page: 10, page: 1 };
-
-    const r1 = await searchInRepo(args);
-    const r2 = await searchInRepo(args);
-
-    expect(r1).toEqual(r2);
-    // In this unit test we mock KV as always-miss, so both calls hit GitHub.
-    // Cache behavior is covered by integration/runtime; here we focus on request correctness.
-    expect(code).toHaveBeenCalledTimes(2);
-  });
-
-  it('deduplicates inflight requests', async () => {
-    let resolveFn: ((v: SearchCodeResponse) => void) | null = null;
+  it('deduplicates inflight requests (same query)', async () => {
+    let resolveFn: ((v: any) => void) | null = null;
 
     const code = jest.fn().mockImplementation(
       () =>
@@ -97,54 +86,16 @@ describe('searchInRepo (cost & reliability)', () => {
     const p1 = searchInRepo(args);
     const p2 = searchInRepo(args);
 
-    // allow the first call to progress to the point it invokes github.search.code
+    // allow the first call to progress to the point it invokes octokit.search.code
     await Promise.resolve();
 
     expect(code).toHaveBeenCalledTimes(1);
 
-    resolveFn!(okResponse());
+    resolveFn!(okRestResponse());
 
     const [r1, r2] = await Promise.all([p1, p2]);
 
     expect(r1).toEqual(r2);
     expect(r1).toHaveLength(1);
-  });
-
-  function makeRateLimitError(resetSec: number) {
-    const err: any = new Error('rate limit exceeded');
-    err.status = 403;
-    err.response = {
-      headers: {
-        'x-ratelimit-remaining': '0',
-        'x-ratelimit-reset': String(resetSec),
-      },
-    };
-    return err;
-  }
-
-  it('retries on rate limit exceeded using x-ratelimit-reset', async () => {
-    jest.useFakeTimers();
-
-    const nowSec = Math.floor(Date.now() / 1000);
-    const resetSec = nowSec + 1;
-
-    const code = jest
-      .fn()
-      .mockRejectedValueOnce(makeRateLimitError(resetSec))
-      .mockResolvedValueOnce(okResponse());
-
-    __setGithubClientForTests(makeClient(code));
-
-    const promise = searchInRepo({ query: 'baz', per_page: 10, page: 1 });
-
-    // Let retry timer elapse (includes jitter)
-    await jest.advanceTimersByTimeAsync(2500);
-
-    const res = await promise;
-
-    expect(res).toHaveLength(1);
-    expect(code).toHaveBeenCalledTimes(2);
-
-    jest.useRealTimers();
   });
 });

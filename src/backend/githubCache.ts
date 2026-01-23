@@ -4,10 +4,21 @@ export type GithubCacheGetOptions = {
   now?: Date;
 };
 
-export async function githubCacheGet<T>(key: string, opts: GithubCacheGetOptions = {}): Promise<T | null> {
+function hasGithubCacheModel(client: any): boolean {
+  return !!client && typeof client === 'object' && !!(client as any).githubCache;
+}
+
+export async function githubCacheGet<T>(
+  key: string,
+  opts: GithubCacheGetOptions = {},
+): Promise<T | null> {
   const now = opts.now ?? new Date();
 
-  const row = await prisma.githubCache.findUnique({
+  // In unit tests or environments without DB, prisma model may be absent.
+  // Treat cache as a best-effort optimization and fail open.
+  if (!hasGithubCacheModel(prisma)) return null;
+
+  const row = await (prisma as any).githubCache.findUnique({
     where: { key },
     select: { responseJson: true, expiresAt: true },
   });
@@ -16,7 +27,7 @@ export async function githubCacheGet<T>(key: string, opts: GithubCacheGetOptions
 
   if (row.expiresAt <= now) {
     // Best-effort cleanup
-    await prisma.githubCache.delete({ where: { key } }).catch(() => undefined);
+    await (prisma as any).githubCache.delete({ where: { key } }).catch(() => undefined);
     return null;
   }
 
@@ -32,7 +43,10 @@ export async function githubCacheSet<T>(
   const now = opts.now ?? new Date();
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
 
-  await prisma.githubCache.upsert({
+  // Best-effort; see note in githubCacheGet.
+  if (!hasGithubCacheModel(prisma)) return;
+
+  await (prisma as any).githubCache.upsert({
     where: { key },
     update: { responseJson: value as any, expiresAt },
     create: { key, responseJson: value as any, expiresAt },

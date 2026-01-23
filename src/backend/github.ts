@@ -1,7 +1,6 @@
 import { Octokit } from '@octokit/rest';
 import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
 import { logEvent } from './log';
-import { githubCodeSearchGraphql } from './githubGraphqlSearch';
 import { githubCacheGet, githubCacheSet } from './githubCache';
 
 let githubClient: Octokit | null = null;
@@ -254,12 +253,11 @@ export async function searchInRepo(options: {
   per_page?: number;
   page?: number;
 }): Promise<SearchInRepoResultItem[]> {
+  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const per_page = clampInt(options.per_page, 1, 50, 20);
-  // GraphQL implementation here returns a single page (first N results).
-  // Keep signature for compatibility.
-  clampInt(options.page, 1, 5, 1);
+  const page = clampInt(options.page, 1, 10, 1);
 
   const q = buildSearchQuery({
     query: options.query,
@@ -268,12 +266,12 @@ export async function searchInRepo(options: {
     ...(options.path ? { path: options.path } : {}),
   });
 
-  const cacheKey = `${q}::per_page=${per_page}::page=1`;
+  const cacheKey = `${q}::per_page=${per_page}::page=${page}`;
 
   const cached = await githubCacheGet<{ data: SearchInRepoResultItem[] }>(cacheKey);
   if (cached?.data) {
     await logEvent('github_search_cache_hit', {
-      page: 1,
+      page,
       per_page,
     }).catch(() => undefined);
     return cached.data;
@@ -282,26 +280,29 @@ export async function searchInRepo(options: {
   const inflight = searchInflight.get(cacheKey);
   if (inflight) {
     await logEvent('github_search_inflight_join', {
-      page: 1,
+      page,
       per_page,
     }).catch(() => undefined);
     return inflight;
   }
 
   const promise = (async () => {
-    const gqlItems = await githubCodeSearchGraphql({
-      owner,
-      repo,
-      query: options.query,
+    // Use REST code search for reliability.
+    // NOTE: GraphQL code search is intentionally not used here for now,
+    // because GitHub GraphQL schema support for CODE search varies and may
+    // require special preview headers. We'll revisit and re-enable GraphQL
+    // after validating the correct schema and headers.
+    const res = await github.search.code({
+      q,
       per_page,
-      ...(options.path ? { path: options.path } : {}),
+      page,
     });
 
-    const items: SearchInRepoResultItem[] = gqlItems.map((item) => ({
+    const items: SearchInRepoResultItem[] = (res.data.items || []).map((item: any) => ({
       path: item.path,
-      repository: item.repository,
-      score: 0,
-      url: item.url,
+      repository: item.repository?.full_name ?? `${owner}/${repo}`,
+      score: item.score ?? 0,
+      url: item.html_url,
     }));
 
     await githubCacheSet(cacheKey, { data: items }, Math.floor(SEARCH_CACHE_TTL_MS / 1000));

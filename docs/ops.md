@@ -20,6 +20,20 @@ See `docs/ENVIRONMENT.md`.
 
 Reason: GitHub GraphQL schema currently does not expose `SearchType = CODE` for code search, so GraphQL cannot be used as a compatible implementation.
 
+Notes on stability:
+- Results are cached (see `src/backend/githubCache.ts`).
+- There is inflight dedupe + retry/backoff for transient failures.
+- GitHub REST calls are also protected by a **global concurrency limiter** (see below).
+
+### Global GitHub REST concurrency limiter
+
+All GitHub **REST** calls in `src/backend/github.ts` are wrapped with a simple concurrency limiter to reduce chances of hitting GitHub secondary rate limits during bursts.
+
+- Implementation: `src/backend/githubRateLimit.ts` (`withGithubRestConcurrencyLimit()`)
+- Default max concurrency: **5** concurrent REST requests.
+
+(If needed later: we can make this configurable via env var, but for now it is a constant to keep behavior stable.)
+
 ### github_self_check_search_schema
 
 Self-check tool that introspects GitHub GraphQL schema to list enum values of `SearchType`.

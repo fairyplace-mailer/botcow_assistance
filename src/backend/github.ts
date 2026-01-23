@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
 import { logEvent } from './log';
 import { githubCacheGet, githubCacheSet } from './githubCache';
+import { withGithubRestConcurrencyLimit } from './githubRateLimit';
 
 let githubClient: Octokit | null = null;
 
@@ -251,11 +252,13 @@ async function githubSearchCodeWithRetry(params: {
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      return await github.search.code({
-        q: params.q,
-        per_page: params.per_page,
-        page: params.page,
-      });
+      return await withGithubRestConcurrencyLimit(() =>
+        github.search.code({
+          q: params.q,
+          per_page: params.per_page,
+          page: params.page,
+        }),
+      );
     } catch (error: any) {
       const retryable =
         isPrimaryRateLimit(error) ||
@@ -323,7 +326,9 @@ export async function getFile(path: string, repo?: string, ref?: string) {
     (params as any).ref = ref;
   }
 
-  const res = await github.repos.getContent(params);
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.repos.getContent(params),
+  );
 
   if (!('content' in res.data)) {
     throw new Error(`Not a file: ${path}`);
@@ -344,16 +349,20 @@ export async function getRepoStructure(options?: {
   let ref = options?.ref;
 
   if (!ref) {
-    const repoInfo = await github.repos.get({ owner, repo });
+    const repoInfo = await withGithubRestConcurrencyLimit(() =>
+      github.repos.get({ owner, repo }),
+    );
     ref = repoInfo.data.default_branch || 'main';
   }
 
-  const treeRes = await github.git.getTree({
-    owner,
-    repo,
-    tree_sha: ref,
-    recursive: '1',
-  });
+  const treeRes = await withGithubRestConcurrencyLimit(() =>
+    github.git.getTree({
+      owner,
+      repo,
+      tree_sha: ref,
+      recursive: '1',
+    }),
+  );
 
   const prefix = options?.pathPrefix?.replace(/\/+$/, '');
   const items = (treeRes.data.tree || [])
@@ -395,7 +404,9 @@ export async function listFiles(options?: {
     (params as any).ref = options.ref;
   }
 
-  const res = await github.repos.getContent(params);
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.repos.getContent(params),
+  );
 
   if (Array.isArray(res.data)) {
     return res.data.map((item) => ({
@@ -506,7 +517,9 @@ export async function getRecentCommits(options?: {
     (params as any).sha = branch;
   }
 
-  const res = await github.repos.listCommits(params);
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.repos.listCommits(params),
+  );
 
   return res.data.map((commit) => ({
     sha: commit.sha,
@@ -526,21 +539,25 @@ export async function createBranch(
   const github = getGithubClient();
   const { owner, repo } = parseRepo(repoName);
 
-  const baseRef = await github.git.getRef({
-    owner,
-    repo,
-    ref: `heads/${baseBranch}`,
-  });
+  const baseRef = await withGithubRestConcurrencyLimit(() =>
+    github.git.getRef({
+      owner,
+      repo,
+      ref: `heads/${baseBranch}`,
+    }),
+  );
 
   const sha = baseRef.data.object.sha;
 
   try {
-    const ref = await github.git.createRef({
-      owner,
-      repo,
-      ref: `refs/heads/${branchName}`,
-      sha,
-    });
+    const ref = await withGithubRestConcurrencyLimit(() =>
+      github.git.createRef({
+        owner,
+        repo,
+        ref: `refs/heads/${branchName}`,
+        sha,
+      }),
+    );
 
     return ref.data;
   } catch (error: any) {
@@ -565,12 +582,14 @@ export async function commitFile(options: {
   let sha: string | undefined;
 
   try {
-    const res = await github.repos.getContent({
-      owner,
-      repo,
-      path,
-      ref: branch,
-    });
+    const res = await withGithubRestConcurrencyLimit(() =>
+      github.repos.getContent({
+        owner,
+        repo,
+        path,
+        ref: branch,
+      }),
+    );
 
     if ('sha' in res.data) {
       sha = (res.data as any).sha;
@@ -604,7 +623,9 @@ export async function commitFile(options: {
     params.sha = sha;
   }
 
-  const result = await github.repos.createOrUpdateFileContents(params);
+  const result = await withGithubRestConcurrencyLimit(() =>
+    github.repos.createOrUpdateFileContents(params),
+  );
   return result.data;
 }
 
@@ -619,12 +640,14 @@ export async function deleteFile(options: {
 
   const { path, message, branch } = options;
 
-  const res = await github.repos.getContent({
-    owner,
-    repo,
-    path,
-    ref: branch,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.repos.getContent({
+      owner,
+      repo,
+      path,
+      ref: branch,
+    }),
+  );
 
   if (!('sha' in res.data)) {
     throw new Error(`Cannot delete non-file content: ${path}`);
@@ -632,14 +655,16 @@ export async function deleteFile(options: {
 
   const sha = (res.data as any).sha as string;
 
-  const result = await github.repos.deleteFile({
-    owner,
-    repo,
-    path,
-    message,
-    branch,
-    sha,
-  });
+  const result = await withGithubRestConcurrencyLimit(() =>
+    github.repos.deleteFile({
+      owner,
+      repo,
+      path,
+      message,
+      branch,
+      sha,
+    }),
+  );
 
   return result.data;
 }
@@ -675,7 +700,7 @@ export async function createPullRequest(options: {
     params.body = options.body;
   }
 
-  const pr = await github.pulls.create(params);
+  const pr = await withGithubRestConcurrencyLimit(() => github.pulls.create(params));
   return pr.data;
 }
 
@@ -687,12 +712,14 @@ export async function commentOnPullRequest(options: {
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const res = await github.issues.createComment({
-    owner,
-    repo,
-    issue_number: options.pull_number,
-    body: options.body,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.issues.createComment({
+      owner,
+      repo,
+      issue_number: options.pull_number,
+      body: options.body,
+    }),
+  );
 
   return res.data;
 }
@@ -705,12 +732,14 @@ export async function mergePullRequest(options: {
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const res = await github.pulls.merge({
-    owner,
-    repo,
-    pull_number: options.pull_number,
-    merge_method: options.method ?? 'merge',
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.pulls.merge({
+      owner,
+      repo,
+      pull_number: options.pull_number,
+      merge_method: options.method ?? 'merge',
+    }),
+  );
 
   return res.data;
 }
@@ -743,7 +772,7 @@ export async function runWorkflow(options: {
     params.inputs = options.inputs;
   }
 
-  await github.actions.createWorkflowDispatch(params);
+  await withGithubRestConcurrencyLimit(() => github.actions.createWorkflowDispatch(params));
 
   return { dispatched: true, workflow_id, ref };
 }
@@ -755,11 +784,13 @@ export async function getWorkflowStatus(options: {
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const run = await github.actions.getWorkflowRun({
-    owner,
-    repo,
-    run_id: options.run_id,
-  });
+  const run = await withGithubRestConcurrencyLimit(() =>
+    github.actions.getWorkflowRun({
+      owner,
+      repo,
+      run_id: options.run_id,
+    }),
+  );
 
   return run.data;
 }
@@ -768,12 +799,14 @@ export async function listWorkflowRunJobs(options: { run_id: number; repo?: stri
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const res = await github.actions.listJobsForWorkflowRun({
-    owner,
-    repo,
-    run_id: options.run_id,
-    per_page: 100,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.actions.listJobsForWorkflowRun({
+      owner,
+      repo,
+      run_id: options.run_id,
+      per_page: 100,
+    }),
+  );
 
   const jobs = (res.data.jobs || []).map((j: any) => ({
     id: j.id,
@@ -795,11 +828,13 @@ export async function downloadWorkflowRunLogs(options: {
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const res = await github.actions.downloadWorkflowRunLogs({
-    owner,
-    repo,
-    run_id: options.run_id,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.actions.downloadWorkflowRunLogs({
+      owner,
+      repo,
+      run_id: options.run_id,
+    }),
+  );
 
   const buf = Buffer.from(res.data as any);
 
@@ -835,15 +870,17 @@ export async function listWorkflowRunsForRepo(args: {
   const { owner, repo: repoName } = parseRepo(repo ?? undefined);
 
   if (workflow_id) {
-    const res = await github.actions.listWorkflowRuns({
-      owner,
-      repo: repoName,
-      workflow_id: workflow_id as any,
-      branch: branch ?? undefined,
-      event: event ?? undefined,
-      status: status ?? undefined,
-      per_page: per_page ?? 10,
-    });
+    const res = await withGithubRestConcurrencyLimit(() =>
+      github.actions.listWorkflowRuns({
+        owner,
+        repo: repoName,
+        workflow_id: workflow_id as any,
+        branch: branch ?? undefined,
+        event: event ?? undefined,
+        status: status ?? undefined,
+        per_page: per_page ?? 10,
+      }),
+    );
 
     const runs = (res.data.workflow_runs || []).map((r: any) => ({
       id: r.id,
@@ -862,14 +899,16 @@ export async function listWorkflowRunsForRepo(args: {
     return { total_count: res.data.total_count, runs };
   }
 
-  const res = await github.actions.listWorkflowRunsForRepo({
-    owner,
-    repo: repoName,
-    branch: branch ?? undefined,
-    event: event ?? undefined,
-    status: status ?? undefined,
-    per_page: per_page ?? 10,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.actions.listWorkflowRunsForRepo({
+      owner,
+      repo: repoName,
+      branch: branch ?? undefined,
+      event: event ?? undefined,
+      status: status ?? undefined,
+      per_page: per_page ?? 10,
+    }),
+  );
 
   const runs = (res.data.workflow_runs || []).map((r: any) => ({
     id: r.id,
@@ -914,7 +953,7 @@ export async function createIssue(options: {
     params.assignees = options.assignees;
   }
 
-  const res = await github.issues.create(params);
+  const res = await withGithubRestConcurrencyLimit(() => github.issues.create(params));
   return res.data;
 }
 
@@ -952,7 +991,7 @@ export async function updateIssue(options: {
     params.assignees = options.assignees;
   }
 
-  const res = await github.issues.update(params);
+  const res = await withGithubRestConcurrencyLimit(() => github.issues.update(params));
   return res.data;
 }
 
@@ -976,7 +1015,9 @@ export async function listIssues(options?: {
     params.labels = options.labels;
   }
 
-  const res = await github.issues.listForRepo(params);
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.issues.listForRepo(params),
+  );
 
   return res.data.map((issue) => ({
     number: issue.number,

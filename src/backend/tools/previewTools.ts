@@ -16,6 +16,7 @@ export type PreviewGetUrlArgs = {
 
 export type PreviewGetUrlResult = {
   ok: true;
+  /** Optional because callers may rely on BOTCOW_DEFAULT_REPO */
   repo?: string;
   deploymentId: string;
   url: string; // full https url
@@ -39,10 +40,7 @@ function ensureHttpsUrl(url: string): string {
 function isAllowedPreviewHost(hostname: string): boolean {
   // Strict allowlist: only Vercel preview domains.
   // This intentionally does NOT allow arbitrary domains to avoid SSRF.
-  return (
-    hostname.endsWith('.vercel.app') ||
-    hostname.endsWith('.vercel.app.')
-  );
+  return hostname.endsWith('.vercel.app') || hostname.endsWith('.vercel.app.');
 }
 
 function assertAllowedPreviewUrl(baseUrl: string) {
@@ -70,22 +68,21 @@ async function findPreviewUrl(args: PreviewGetUrlArgs): Promise<PreviewGetUrlRes
       ...(args.git_sha ? { git_sha: args.git_sha } : {}),
       ...(args.branch ? { branch: args.branch } : {}),
       ...(target ? { target } : {}),
-      ...(args.timeWindowMinutes !== undefined
-        ? { timeWindowMinutes: args.timeWindowMinutes }
-        : {}),
+      ...(args.timeWindowMinutes !== undefined ? { timeWindowMinutes: args.timeWindowMinutes } : {}),
     });
 
     const dep = (diag as any)?.deployment;
     if (dep?.id && dep?.url) {
-      return {
+      const out: PreviewGetUrlResult = {
         ok: true,
-        repo: args.repo,
         deploymentId: String(dep.id),
         url: ensureHttpsUrl(String(dep.url)),
         state: dep.state,
         readyState: dep.readyState,
         matchedBy: args.git_sha ? 'git_sha' : 'branch',
       };
+      if (args.repo !== undefined) out.repo = args.repo;
+      return out;
     }
   }
 
@@ -99,15 +96,16 @@ async function findPreviewUrl(args: PreviewGetUrlArgs): Promise<PreviewGetUrlRes
     throw new Error('Latest preview deployment has no id/url');
   }
 
-  return {
+  const out: PreviewGetUrlResult = {
     ok: true,
-    repo: args.repo,
     deploymentId: String(normalized.id),
     url: ensureHttpsUrl(String(normalized.url)),
     state: normalized.state,
     readyState: normalized.readyState,
     matchedBy: 'latest',
   };
+  if (args.repo !== undefined) out.repo = args.repo;
+  return out;
 }
 
 export type PreviewHttpRequestArgs = {
@@ -229,8 +227,7 @@ export const previewToolsSchemas = [
     type: 'function',
     function: {
       name: 'preview_http_request',
-      description:
-        'Perform a safe HTTP request to a Vercel preview deployment URL (SSRF-protected).',
+      description: 'Perform a safe HTTP request to a Vercel preview deployment URL (SSRF-protected).',
       parameters: {
         type: 'object',
         properties: {
@@ -253,8 +250,7 @@ export const previewToolsSchemas = [
     type: 'function',
     function: {
       name: 'preview_smoke_check',
-      description:
-        'Find latest Vercel preview URL and run a small set of HTTP/tool checks against it.',
+      description: 'Find latest Vercel preview URL and run a small set of HTTP/tool checks against it.',
       parameters: {
         type: 'object',
         properties: {

@@ -1,7 +1,13 @@
-// Force KV to always miss in tests (searchInRepo uses persistent KV)
+// Force KV to always miss in tests
 jest.mock('../src/backend/kv', () => ({
   kvGetJson: jest.fn(async () => null),
   kvSetJson: jest.fn(async () => undefined),
+}));
+
+// Force DB-backed githubCache to always miss in tests (avoid prisma dependency)
+jest.mock('../src/backend/githubCache', () => ({
+  githubCacheGet: jest.fn(async () => null),
+  githubCacheSet: jest.fn(async () => undefined),
 }));
 
 import {

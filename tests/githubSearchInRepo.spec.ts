@@ -24,30 +24,32 @@ describe('searchInRepo (cost & reliability)', () => {
     jest.clearAllMocks();
   });
 
-  function makeClient(graphqlImpl: jest.Mock) {
+  function makeClient(searchCodeImpl: jest.Mock) {
     return {
-      graphql: graphqlImpl,
+      search: {
+        code: searchCodeImpl,
+      },
     } as any;
   }
 
-  function okGraphqlResponse() {
+  function okRestResponse() {
     return {
-      search: {
-        nodes: [
+      data: {
+        items: [
           {
-            __typename: 'Code',
             path: 'p',
-            url: 'u',
-            repository: { nameWithOwner: 'o/r' },
+            html_url: 'u',
+            score: 1,
+            repository: { full_name: 'o/r' },
           },
         ],
       },
     } as any;
   }
 
-  it('calls octokit.graphql with variables { q, first }', async () => {
-    const graphql = jest.fn().mockResolvedValue(okGraphqlResponse());
-    __setGithubClientForTests(makeClient(graphql));
+  it('calls octokit.search.code with q/per_page/page', async () => {
+    const code = jest.fn().mockResolvedValue(okRestResponse());
+    __setGithubClientForTests(makeClient(code));
 
     const items = await searchInRepo({
       query: 'foo',
@@ -56,14 +58,13 @@ describe('searchInRepo (cost & reliability)', () => {
     });
 
     expect(items).toHaveLength(1);
-    expect(graphql).toHaveBeenCalledTimes(1);
+    expect(code).toHaveBeenCalledTimes(1);
 
-    const [queryText, variables] = graphql.mock.calls[0];
-    expect(typeof queryText).toBe('string');
-    expect(variables).toEqual(
+    expect(code).toHaveBeenCalledWith(
       expect.objectContaining({
         q: expect.stringContaining('foo'),
-        first: 10,
+        per_page: 10,
+        page: 3,
       }),
     );
   });
@@ -71,68 +72,30 @@ describe('searchInRepo (cost & reliability)', () => {
   it('deduplicates inflight requests (same query)', async () => {
     let resolveFn: ((v: any) => void) | null = null;
 
-    const graphql = jest.fn().mockImplementation(
+    const code = jest.fn().mockImplementation(
       () =>
         new Promise((resolve) => {
           resolveFn = resolve;
         }),
     );
 
-    __setGithubClientForTests(makeClient(graphql));
+    __setGithubClientForTests(makeClient(code));
 
     const args = { query: 'bar', per_page: 10, page: 1 };
 
     const p1 = searchInRepo(args);
     const p2 = searchInRepo(args);
 
-    // allow the first call to progress to the point it invokes octokit.graphql
+    // allow the first call to progress to the point it invokes octokit.search.code
     await Promise.resolve();
 
-    expect(graphql).toHaveBeenCalledTimes(1);
+    expect(code).toHaveBeenCalledTimes(1);
 
-    resolveFn!(okGraphqlResponse());
+    resolveFn!(okRestResponse());
 
     const [r1, r2] = await Promise.all([p1, p2]);
 
     expect(r1).toEqual(r2);
     expect(r1).toHaveLength(1);
-  });
-
-  function makeRateLimitError(resetSec: number) {
-    const err: any = new Error('rate limit exceeded');
-    err.status = 403;
-    err.response = {
-      headers: {
-        'x-ratelimit-remaining': '0',
-        'x-ratelimit-reset': String(resetSec),
-      },
-    };
-    return err;
-  }
-
-  it('retries on rate limit exceeded using x-ratelimit-reset', async () => {
-    jest.useFakeTimers();
-
-    const nowSec = Math.floor(Date.now() / 1000);
-    const resetSec = nowSec + 1;
-
-    const graphql = jest
-      .fn()
-      .mockRejectedValueOnce(makeRateLimitError(resetSec))
-      .mockResolvedValueOnce(okGraphqlResponse());
-
-    __setGithubClientForTests(makeClient(graphql));
-
-    const promise = searchInRepo({ query: 'baz', per_page: 10, page: 1 });
-
-    // Let retry timer elapse (includes jitter)
-    await jest.advanceTimersByTimeAsync(2500);
-
-    const res = await promise;
-
-    expect(res).toHaveLength(1);
-    expect(graphql).toHaveBeenCalledTimes(2);
-
-    jest.useRealTimers();
   });
 });

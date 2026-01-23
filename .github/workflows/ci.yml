@@ -3,7 +3,7 @@ name: build-and-test
 on:
   push:
     branches:
-      - feature/**
+      - provecta
   workflow_dispatch:
 
 jobs:

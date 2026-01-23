@@ -130,11 +130,183 @@ type SearchInRepoResultItem = {
 const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
 
 /**
+ * Minimal concurrency limiter.
+ *
+ * We keep GitHub Search API calls under control to reduce chances of secondary
+ * rate limits.
+ */
+const SEARCH_MAX_CONCURRENCY = 3;
+let searchInFlightCount = 0;
+const searchWaitQueue: Array<() => void> = [];
+
+async function acquireSearchSlot() {
+  if (searchInFlightCount < SEARCH_MAX_CONCURRENCY) {
+    searchInFlightCount += 1;
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    searchWaitQueue.push(() => {
+      searchInFlightCount += 1;
+      resolve();
+    });
+  });
+}
+
+function releaseSearchSlot() {
+  searchInFlightCount = Math.max(0, searchInFlightCount - 1);
+  const next = searchWaitQueue.shift();
+  if (next) next();
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function getRetryAfterMsFromError(error: any): number | null {
+  const retryAfter =
+    error?.response?.headers?.['retry-after'] ??
+    error?.response?.headers?.['Retry-After'];
+  if (!retryAfter) return null;
+
+  const n = Number(retryAfter);
+  if (Number.isFinite(n) && n > 0) return n * 1000;
+
+  // could be HTTP-date; ignore for now
+  return null;
+}
+
+function getRateLimitResetMsFromError(error: any): number | null {
+  const reset =
+    error?.response?.headers?.['x-ratelimit-reset'] ??
+    error?.response?.headers?.['X-RateLimit-Reset'];
+  if (!reset) return null;
+
+  const epochSeconds = Number(reset);
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return null;
+
+  const nowMs = Date.now();
+  const resetMs = epochSeconds * 1000;
+  const waitMs = resetMs - nowMs;
+  return waitMs > 0 ? waitMs : 0;
+}
+
+function isSecondaryRateLimit(error: any): boolean {
+  const status = error?.status ?? error?.response?.status;
+  if (status !== 403) return false;
+
+  const msg =
+    String(error?.message ?? '') +
+    ' ' +
+    String(error?.response?.data?.message ?? '');
+
+  return /secondary rate limit/i.test(msg);
+}
+
+function isPrimaryRateLimit(error: any): boolean {
+  const status = error?.status ?? error?.response?.status;
+  if (status !== 403) return false;
+
+  const msg =
+    String(error?.message ?? '') +
+    ' ' +
+    String(error?.response?.data?.message ?? '');
+
+  return /rate limit exceeded/i.test(msg);
+}
+
+function isRetryableNetworkOrServerError(error: any): boolean {
+  const status = error?.status ?? error?.response?.status;
+  return status === 502 || status === 503 || status === 504;
+}
+
+function computeBackoffMs(args: {
+  attempt: number;
+  baseMs: number;
+  maxMs: number;
+  serverSuggestedMs?: number | null;
+}) {
+  const suggested = args.serverSuggestedMs ?? null;
+  const exp = Math.min(args.maxMs, args.baseMs * Math.pow(2, args.attempt));
+  const jitter = Math.floor(Math.random() * 250);
+
+  // Prefer server suggested wait if present, but still add small jitter.
+  if (suggested !== null) {
+    return Math.min(args.maxMs, Math.max(suggested, exp)) + jitter;
+  }
+
+  return exp + jitter;
+}
+
+async function githubSearchCodeWithRetry(params: {
+  q: string;
+  per_page: number;
+  page: number;
+}) {
+  const github = getGithubClient();
+
+  const maxAttempts = 5;
+  const baseMs = 500;
+  const maxMs = 30_000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await github.search.code({
+        q: params.q,
+        per_page: params.per_page,
+        page: params.page,
+      });
+    } catch (error: any) {
+      const retryable =
+        isPrimaryRateLimit(error) ||
+        isSecondaryRateLimit(error) ||
+        isRetryableNetworkOrServerError(error);
+
+      if (!retryable || attempt === maxAttempts - 1) {
+        await logEvent('github_search_error', {
+          attempt,
+          status: error?.status ?? error?.response?.status ?? null,
+          message: String(error?.message ?? ''),
+        }).catch(() => undefined);
+        throw error;
+      }
+
+      const serverSuggestedMs =
+        getRetryAfterMsFromError(error) ?? getRateLimitResetMsFromError(error);
+
+      const waitMs = computeBackoffMs({
+        attempt,
+        baseMs,
+        maxMs,
+        serverSuggestedMs,
+      });
+
+      await logEvent('github_search_retry_wait', {
+        attempt,
+        waitMs,
+        reason: isSecondaryRateLimit(error)
+          ? 'secondary-rate-limit'
+          : isPrimaryRateLimit(error)
+            ? 'rate-limit'
+            : 'server-or-network',
+      }).catch(() => undefined);
+
+      await sleep(waitMs);
+    }
+  }
+
+  // unreachable
+  throw new Error('githubSearchCodeWithRetry: exhausted retries');
+}
+
+/**
  * Test-only helper to make unit tests deterministic.
  * Not used in runtime code.
  */
 export function __resetSearchStateForTests() {
   searchInflight.clear();
+  searchInFlightCount = 0;
+  searchWaitQueue.splice(0, searchWaitQueue.length);
 }
 
 export async function getFile(path: string, repo?: string, ref?: string) {
@@ -253,7 +425,6 @@ export async function searchInRepo(options: {
   per_page?: number;
   page?: number;
 }): Promise<SearchInRepoResultItem[]> {
-  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const per_page = clampInt(options.per_page, 1, 50, 20);
@@ -287,27 +458,23 @@ export async function searchInRepo(options: {
   }
 
   const promise = (async () => {
-    // Use REST code search for reliability.
-    // NOTE: GraphQL code search is intentionally not used here for now,
-    // because GitHub GraphQL schema support for CODE search varies and may
-    // require special preview headers. We'll revisit and re-enable GraphQL
-    // after validating the correct schema and headers.
-    const res = await github.search.code({
-      q,
-      per_page,
-      page,
-    });
+    await acquireSearchSlot();
+    try {
+      const res = await githubSearchCodeWithRetry({ q, per_page, page });
 
-    const items: SearchInRepoResultItem[] = (res.data.items || []).map((item: any) => ({
-      path: item.path,
-      repository: item.repository?.full_name ?? `${owner}/${repo}`,
-      score: item.score ?? 0,
-      url: item.html_url,
-    }));
+      const items: SearchInRepoResultItem[] = (res.data.items || []).map((item: any) => ({
+        path: item.path,
+        repository: item.repository?.full_name ?? `${owner}/${repo}`,
+        score: item.score ?? 0,
+        url: item.html_url,
+      }));
 
-    await githubCacheSet(cacheKey, { data: items }, Math.floor(SEARCH_CACHE_TTL_MS / 1000));
+      await githubCacheSet(cacheKey, { data: items }, Math.floor(SEARCH_CACHE_TTL_MS / 1000));
 
-    return items;
+      return items;
+    } finally {
+      releaseSearchSlot();
+    }
   })();
 
   searchInflight.set(cacheKey, promise);

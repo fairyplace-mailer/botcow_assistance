@@ -14,6 +14,7 @@ import {
   mergePullRequest,
   searchInRepo,
   updateIssue,
+  getGithubClient,
 } from '../github';
 import {
   githubDiagnoseLatestWorkflowRun,
@@ -484,12 +485,7 @@ export const githubToolHandlers = {
   },
 
   async github_self_check_search_schema() {
-    // Note: GitHub GraphQL does not currently support code search via SearchType.
-    // This self-check is intentionally implemented without importing any legacy GraphQL code-search module.
-    const octokit = (await import('../github')).githubClient; // fallback to the shared client
-    if (!octokit) {
-      throw new Error('GitHub client is not initialized');
-    }
+    const octokit = getGithubClient();
 
     const query = `query SearchTypeIntrospection { __type(name: "SearchType") { enumValues { name } } }`;
     const res: any = await octokit.graphql(query);

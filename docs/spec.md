@@ -1,17 +1,22 @@
-# Botcow Assistance 
+# Spec
 
-## Purpose
+## Constraints
 
-A small web app that runs a chat assistant and includes a set of admin-only tools (GitHub, Vercel, etc.).
+- Work only in the specified repository and branch.
+- Preview deployments only (no production deploy).
 
-## Tooling notes
+## GitHub code search
 
-- `github_search_in_repo` uses **REST** code search (`octokit.search.code` / `GET /search/code`).
-  - Rationale: GitHub GraphQL schema does not currently include `SearchType = CODE`, so GraphQL cannot be used for code search.
-  - Protection: caching + inflight dedupe + retry/backoff + concurrency limits.
+- `github_search_in_repo` MUST use GitHub REST `GET /search/code`.
+- GitHub GraphQL `SearchType` currently has no `CODE` value.
 
-- `github_self_check_search_schema` introspects GitHub GraphQL `SearchType` to list enum values (admin-only tool).
+## Preview verification tools
 
-## Ops
+The project provides preview verification tools:
+- `preview_get_url`: resolves latest Vercel preview URL via Vercel API.
+- `preview_http_request`: SSRF-protected HTTP client restricted to `https://*.vercel.app`.
+- `preview_smoke_check`: runs HTTP + tools smoke checks against the preview.
 
-- Vercel cron `devwix-ingest`: **daily 04:00 UTC** (`0 4 * * *`).
+## Cron schedule (Vercel Hobby)
+
+- `devwix-ingest` runs daily 04:00 UTC (`0 4 * * *`).

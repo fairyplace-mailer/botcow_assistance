@@ -20,7 +20,9 @@ export type PreviewGetUrlResult = {
   repo?: string;
   deploymentId: string;
   url: string; // full https url
+  /** Vercel may return null depending on endpoint/shape; omit when null */
   state?: string;
+  /** Vercel may return null depending on endpoint/shape; omit when null */
   readyState?: string;
   matchedBy: 'git_sha' | 'branch' | 'latest';
 };
@@ -58,6 +60,12 @@ function assertAllowedPreviewUrl(baseUrl: string) {
   }
 }
 
+function addNullableString(target: Record<string, unknown>, key: string, value: unknown) {
+  if (typeof value === 'string' && value.length > 0) {
+    target[key] = value;
+  }
+}
+
 async function findPreviewUrl(args: PreviewGetUrlArgs): Promise<PreviewGetUrlResult> {
   const target = requirePreviewTarget(args.target);
 
@@ -73,16 +81,16 @@ async function findPreviewUrl(args: PreviewGetUrlArgs): Promise<PreviewGetUrlRes
 
     const dep = (diag as any)?.deployment;
     if (dep?.id && dep?.url) {
-      const out: PreviewGetUrlResult = {
+      const out: any = {
         ok: true,
         deploymentId: String(dep.id),
         url: ensureHttpsUrl(String(dep.url)),
-        state: dep.state,
-        readyState: dep.readyState,
         matchedBy: args.git_sha ? 'git_sha' : 'branch',
       };
       if (args.repo !== undefined) out.repo = args.repo;
-      return out;
+      addNullableString(out, 'state', dep.state);
+      addNullableString(out, 'readyState', dep.readyState);
+      return out as PreviewGetUrlResult;
     }
   }
 
@@ -96,16 +104,16 @@ async function findPreviewUrl(args: PreviewGetUrlArgs): Promise<PreviewGetUrlRes
     throw new Error('Latest preview deployment has no id/url');
   }
 
-  const out: PreviewGetUrlResult = {
+  const out: any = {
     ok: true,
     deploymentId: String(normalized.id),
     url: ensureHttpsUrl(String(normalized.url)),
-    state: normalized.state,
-    readyState: normalized.readyState,
     matchedBy: 'latest',
   };
   if (args.repo !== undefined) out.repo = args.repo;
-  return out;
+  addNullableString(out, 'state', normalized.state);
+  addNullableString(out, 'readyState', normalized.readyState);
+  return out as PreviewGetUrlResult;
 }
 
 export type PreviewHttpRequestArgs = {

@@ -19,9 +19,11 @@ import {
 
 describe('searchInRepo (cost & reliability)', () => {
   beforeEach(() => {
+    // Important: clear Jest mocks first to avoid wiping mock call history after
+    // our module-level state reset.
+    jest.clearAllMocks();
     __resetSearchStateForTests();
     __resetGithubClientForTests();
-    jest.clearAllMocks();
   });
 
   function makeClient(searchCodeImpl: jest.Mock) {

@@ -12,21 +12,30 @@ See `docs/ENVIRONMENT.md`.
   - Reason: Vercel Hobby plan allows only daily cron jobs (no more frequent schedules).
   - If you upgrade to Pro, you can increase frequency if needed.
 
-## Manual operations
+## GitHub tools
 
-### Ingest DevWix docs
+### github_search_in_repo
 
-Use the admin endpoints:
+`github_search_in_repo` uses **GitHub REST Search API** (`GET /search/code` via Octokit `octokit.search.code`).
 
-- `POST /api/admin/devwix/seed?maxPages=...`
-- `POST /api/admin/devwix/ingest?limitPages=...`
+Reason: GitHub GraphQL schema currently does not expose `SearchType = CODE` for code search, so GraphQL cannot be used as a compatible implementation.
 
-Or the cron endpoints:
+### github_self_check_search_schema
 
-- `GET /api/cron/devwix-seed?maxPages=...`
-- `GET /api/cron/devwix-ingest?limitPages=...&force=true`
+Self-check tool that introspects GitHub GraphQL schema to list enum values of `SearchType`.
 
-Auth:
+Call it via `/tools/call`:
 
-- Admin endpoints require `Authorization: Bearer $BOTCOW_ADMIN_TOKEN`.
-- Cron endpoints require `Authorization: Bearer $CRON_SECRET`.
+```bash
+curl -sS \
+  -H "Authorization: Bearer $BOTCOW_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"github_self_check_search_schema","arguments":{}}' \
+  https://YOUR_DOMAIN/tools/call
+```
+
+It returns:
+
+```json
+{ "ok": true, "result": { "ok": true, "searchTypeEnumValues": ["..."] } }
+```

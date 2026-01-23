@@ -333,18 +333,27 @@ export const previewToolHandlers = {
 
     // Helper to call /tools/call on the preview (requires admin token header from caller)
     const adminToken = process.env.BOTCOW_ADMIN_TOKEN;
-    const authHeader = adminToken ? { Authorization: `Bearer ${adminToken}` } : undefined;
+
+    // Build headers in a way compatible with exactOptionalPropertyTypes
+    const authHeaders: Record<string, string> = {};
+    if (adminToken) {
+      authHeaders.Authorization = `Bearer ${adminToken}`;
+    }
+    const maybeHeaders = Object.keys(authHeaders).length ? authHeaders : undefined;
 
     await run('POST /tools/call github_get_repo_structure', async () => {
+      const repo = args?.repo ?? process.env.BOTCOW_DEFAULT_REPO;
+      if (!repo) throw new Error('Missing repo for github_get_repo_structure');
+
       const r = await previewHttpRequest({
         baseUrl: preview.url,
         path: '/tools/call',
         method: 'POST',
-        headers: authHeader,
+        ...(maybeHeaders ? { headers: maybeHeaders } : {}),
         body: {
           name: 'github_get_repo_structure',
           arguments: {
-            repo: args?.repo ?? process.env.BOTCOW_DEFAULT_REPO,
+            repo,
             ref: 'provecta',
             pathPrefix: 'src/backend',
           },
@@ -356,15 +365,18 @@ export const previewToolHandlers = {
     });
 
     await run('POST /tools/call github_get_file', async () => {
+      const repo = args?.repo ?? process.env.BOTCOW_DEFAULT_REPO;
+      if (!repo) throw new Error('Missing repo for github_get_file');
+
       const r = await previewHttpRequest({
         baseUrl: preview.url,
         path: '/tools/call',
         method: 'POST',
-        headers: authHeader,
+        ...(maybeHeaders ? { headers: maybeHeaders } : {}),
         body: {
           name: 'github_get_file',
           arguments: {
-            repo: args?.repo ?? process.env.BOTCOW_DEFAULT_REPO,
+            repo,
             ref: 'provecta',
             path: 'docs/spec.md',
           },
@@ -380,7 +392,7 @@ export const previewToolHandlers = {
         baseUrl: preview.url,
         path: '/tools/call',
         method: 'POST',
-        headers: authHeader,
+        ...(maybeHeaders ? { headers: maybeHeaders } : {}),
         body: {
           name: 'github_self_check_search_schema',
           arguments: {},
@@ -393,11 +405,13 @@ export const previewToolHandlers = {
 
     await run('POST /tools/call github_search_in_repo (narrow)', async () => {
       const repo = args?.repo ?? process.env.BOTCOW_DEFAULT_REPO;
+      if (!repo) throw new Error('Missing repo for github_search_in_repo');
+
       const r = await previewHttpRequest({
         baseUrl: preview.url,
         path: '/tools/call',
         method: 'POST',
-        headers: authHeader,
+        ...(maybeHeaders ? { headers: maybeHeaders } : {}),
         body: {
           name: 'github_search_in_repo',
           arguments: {

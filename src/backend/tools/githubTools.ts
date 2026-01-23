@@ -14,6 +14,7 @@ import {
   mergePullRequest,
   searchInRepo,
   updateIssue,
+  getGithubClient,
 } from '../github';
 import {
   githubDiagnoseLatestWorkflowRun,
@@ -30,24 +31,24 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_repo_structure',
-      description: 'Получить структуру репозитория (GitHub).',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
           repo: {
             type: 'string',
             description:
-              'owner/name. Если не задано — используется дефолтный репозиторий.',
+              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           ref: {
             type: 'string',
             description:
-              'Ветка/тег/sha. Если не задано — default branch (внутри инструмента).',
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           pathPrefix: {
             type: 'string',
             description:
-              'Фильтр по префиксу пути (например, "src/backend").',
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
       },
@@ -57,19 +58,19 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_files',
-      description: 'Список файлов/папок по пути (один уровень).',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Путь внутри репозитория.' },
+          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если не задано — используется дефолтный репозиторий.',
+              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           ref: {
             type: 'string',
-            description: 'Ветка/тег/sha. Если не задано — default branch.',
+            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
       },
@@ -79,19 +80,19 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_file',
-      description: 'Получить содержимое файла.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Путь внутри репозитория.' },
+          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если не задано — используется дефолтный репозиторий.',
+              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           ref: {
             type: 'string',
-            description: 'Ветка/тег/sha. Если не задано — default branch.',
+            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
         required: ['path'],
@@ -102,24 +103,24 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_search_in_repo',
-      description: 'Поиск по репозиторию.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Поисковая строка.' },
-          path: { type: 'string', description: 'Ограничить поиск директорией.' },
+          query: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если не задано — используется дефолтный репозиторий.',
+              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           per_page: {
             type: 'number',
-            description: 'Кол-во (рекомендуется ≤ 50).',
+            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           page: {
             type: 'number',
-            description: 'Страница результатов (начиная с 1).',
+            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
         required: ['query'],
@@ -129,8 +130,20 @@ export const githubToolsSchemas = [
   {
     type: 'function',
     function: {
+      name: 'github_self_check_search_schema',
+      description:
+        'Self-check: GitHub GraphQL introspection for SearchType enum values. Helps verify whether CODE is supported in schema.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'github_create_pull_request',
-      description: 'Создать Pull Request.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -148,7 +161,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_merge_pull_request',
-      description: 'Смержить Pull Request выбранным методом.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -164,7 +177,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_issue',
-      description: 'Создать Issue.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -182,7 +195,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_update_issue',
-      description: 'Обновить Issue.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -202,7 +215,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_issues',
-      description: 'Список Issues по фильтрам.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -219,19 +232,19 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_branch',
-      description: 'Создать ветку от baseBranch.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
-          branch: { type: 'string', description: 'Имя новой ветки.' },
+          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           base: {
             type: 'string',
-            description: 'Базовая ветка. По умолчанию: main.',
+            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если не задано — используется дефолтный репозиторий.',
+              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
         required: ['branch'],
@@ -242,21 +255,21 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_commit_file',
-      description: 'Создать или обновить файл (commit) в указанной ветке.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Путь файла в репозитории.' },
+          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           content: {
             type: 'string',
-            description: 'Полное содержимое файла (utf-8).',
+            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           message: { type: 'string', description: 'Commit message.' },
-          branch: { type: 'string', description: 'Ветка, в которую коммитим.' },
+          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если не задано — используется дефолтный репозиторий.',
+              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
         required: ['path', 'content', 'message', 'branch'],
@@ -267,17 +280,17 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_delete_file',
-      description: 'Удалить файл в указанной ветке.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Путь файла в репозитории.' },
+          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           message: { type: 'string', description: 'Commit message.' },
-          branch: { type: 'string', description: 'Ветка, из которой удаляем.' },
+          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           repo: {
             type: 'string',
             description:
-              'owner/name. Если не задано — используется дефолтный репозиторий.',
+              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
         required: ['path', 'message', 'branch'],
@@ -290,7 +303,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_runs',
-      description: 'Получить список GitHub Actions workflow runs.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -306,7 +319,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_run_jobs',
-      description: 'Получить список jobs по workflow run id.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -321,7 +334,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_download_workflow_run_logs',
-      description: 'Скачать логи workflow run (zip base64).',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -338,7 +351,8 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_workflow_run_logs_text',
-      description: 'Достать логи workflow run как текст (распаковка zip).',
+      description:
+        '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -354,8 +368,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_diagnose_workflow_run',
-      description:
-        'Диагностика CI по workflow run: failed jobs + ключевые строки ошибок из логов.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -372,7 +385,7 @@ export const githubToolsSchemas = [
     function: {
       name: 'github_diagnose_latest_workflow_run',
       description:
-        'Диагностика последнего workflow run (logs + failed jobs).',
+        '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -391,8 +404,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_diagnose_actions_setup',
-      description:
-        'Косвенная диагностика GitHub Actions (почему нет ран-ов, 403, permissions). Возвращает чеклист и подсказки.',
+      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
         properties: {
@@ -470,6 +482,19 @@ export const githubToolHandlers = {
     if (args.page !== undefined) options.page = args.page;
 
     return searchInRepo(options);
+  },
+
+  async github_self_check_search_schema() {
+    const octokit = getGithubClient();
+
+    const query = `query SearchTypeIntrospection { __type(name: "SearchType") { enumValues { name } } }`;
+    const res: any = await octokit.graphql(query);
+    const values = res?.__type?.enumValues ?? [];
+
+    return {
+      ok: true,
+      searchTypeEnumValues: values.map((v: any) => v.name),
+    };
   },
 
   async github_create_pull_request(args: {

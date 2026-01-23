@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 import { getDefaultRepoFromConfig, isRepoAllowed } from './config/repos';
 import { logEvent } from './log';
 import { githubCacheGet, githubCacheSet } from './githubCache';
+import { withGithubRestConcurrencyLimit } from './githubRateLimit';
 
 let githubClient: Octokit | null = null;
 
@@ -130,11 +131,185 @@ type SearchInRepoResultItem = {
 const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
 
 /**
+ * Minimal concurrency limiter.
+ *
+ * We keep GitHub Search API calls under control to reduce chances of secondary
+ * rate limits.
+ */
+const SEARCH_MAX_CONCURRENCY = 3;
+let searchInFlightCount = 0;
+const searchWaitQueue: Array<() => void> = [];
+
+async function acquireSearchSlot() {
+  if (searchInFlightCount < SEARCH_MAX_CONCURRENCY) {
+    searchInFlightCount += 1;
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    searchWaitQueue.push(() => {
+      searchInFlightCount += 1;
+      resolve();
+    });
+  });
+}
+
+function releaseSearchSlot() {
+  searchInFlightCount = Math.max(0, searchInFlightCount - 1);
+  const next = searchWaitQueue.shift();
+  if (next) next();
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function getRetryAfterMsFromError(error: any): number | null {
+  const retryAfter =
+    error?.response?.headers?.['retry-after'] ??
+    error?.response?.headers?.['Retry-After'];
+  if (!retryAfter) return null;
+
+  const n = Number(retryAfter);
+  if (Number.isFinite(n) && n > 0) return n * 1000;
+
+  // could be HTTP-date; ignore for now
+  return null;
+}
+
+function getRateLimitResetMsFromError(error: any): number | null {
+  const reset =
+    error?.response?.headers?.['x-ratelimit-reset'] ??
+    error?.response?.headers?.['X-RateLimit-Reset'];
+  if (!reset) return null;
+
+  const epochSeconds = Number(reset);
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return null;
+
+  const nowMs = Date.now();
+  const resetMs = epochSeconds * 1000;
+  const waitMs = resetMs - nowMs;
+  return waitMs > 0 ? waitMs : 0;
+}
+
+function isSecondaryRateLimit(error: any): boolean {
+  const status = error?.status ?? error?.response?.status;
+  if (status !== 403) return false;
+
+  const msg =
+    String(error?.message ?? '') +
+    ' ' +
+    String(error?.response?.data?.message ?? '');
+
+  return /secondary rate limit/i.test(msg);
+}
+
+function isPrimaryRateLimit(error: any): boolean {
+  const status = error?.status ?? error?.response?.status;
+  if (status !== 403) return false;
+
+  const msg =
+    String(error?.message ?? '') +
+    ' ' +
+    String(error?.response?.data?.message ?? '');
+
+  return /rate limit exceeded/i.test(msg);
+}
+
+function isRetryableNetworkOrServerError(error: any): boolean {
+  const status = error?.status ?? error?.response?.status;
+  return status === 502 || status === 503 || status === 504;
+}
+
+function computeBackoffMs(args: {
+  attempt: number;
+  baseMs: number;
+  maxMs: number;
+  serverSuggestedMs?: number | null;
+}) {
+  const suggested = args.serverSuggestedMs ?? null;
+  const exp = Math.min(args.maxMs, args.baseMs * Math.pow(2, args.attempt));
+  const jitter = Math.floor(Math.random() * 250);
+
+  // Prefer server suggested wait if present, but still add small jitter.
+  if (suggested !== null) {
+    return Math.min(args.maxMs, Math.max(suggested, exp)) + jitter;
+  }
+
+  return exp + jitter;
+}
+
+async function githubSearchCodeWithRetry(params: {
+  q: string;
+  per_page: number;
+  page: number;
+}) {
+  const github = getGithubClient();
+
+  const maxAttempts = 5;
+  const baseMs = 500;
+  const maxMs = 30_000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await withGithubRestConcurrencyLimit(() =>
+        github.search.code({
+          q: params.q,
+          per_page: params.per_page,
+          page: params.page,
+        }),
+      );
+    } catch (error: any) {
+      const retryable =
+        isPrimaryRateLimit(error) ||
+        isSecondaryRateLimit(error) ||
+        isRetryableNetworkOrServerError(error);
+
+      if (!retryable || attempt === maxAttempts - 1) {
+        await logEvent('github_search_error', {
+          attempt,
+          status: error?.status ?? error?.response?.status ?? null,
+          message: String(error?.message ?? ''),
+        }).catch(() => undefined);
+        throw error;
+      }
+
+      const serverSuggestedMs =
+        getRetryAfterMsFromError(error) ?? getRateLimitResetMsFromError(error);
+
+      const waitMs = computeBackoffMs({
+        attempt,
+        baseMs,
+        maxMs,
+        serverSuggestedMs,
+      });
+
+      await logEvent('github_search_retry_wait', {
+        attempt,
+        waitMs,
+        reason: isSecondaryRateLimit(error)
+          ? 'secondary-rate-limit'
+          : isPrimaryRateLimit(error)
+            ? 'rate-limit'
+            : 'server-or-network',
+      }).catch(() => undefined);
+
+      await sleep(waitMs);
+    }
+  }
+
+  // unreachable
+  throw new Error('githubSearchCodeWithRetry: exhausted retries');
+}
+
+/**
  * Test-only helper to make unit tests deterministic.
  * Not used in runtime code.
  */
 export function __resetSearchStateForTests() {
   searchInflight.clear();
+  searchInFlightCount = 0;
+  searchWaitQueue.splice(0, searchWaitQueue.length);
 }
 
 export async function getFile(path: string, repo?: string, ref?: string) {
@@ -151,7 +326,9 @@ export async function getFile(path: string, repo?: string, ref?: string) {
     (params as any).ref = ref;
   }
 
-  const res = await github.repos.getContent(params);
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.repos.getContent(params),
+  );
 
   if (!('content' in res.data)) {
     throw new Error(`Not a file: ${path}`);
@@ -172,16 +349,20 @@ export async function getRepoStructure(options?: {
   let ref = options?.ref;
 
   if (!ref) {
-    const repoInfo = await github.repos.get({ owner, repo });
+    const repoInfo = await withGithubRestConcurrencyLimit(() =>
+      github.repos.get({ owner, repo }),
+    );
     ref = repoInfo.data.default_branch || 'main';
   }
 
-  const treeRes = await github.git.getTree({
-    owner,
-    repo,
-    tree_sha: ref,
-    recursive: '1',
-  });
+  const treeRes = await withGithubRestConcurrencyLimit(() =>
+    github.git.getTree({
+      owner,
+      repo,
+      tree_sha: ref,
+      recursive: '1',
+    }),
+  );
 
   const prefix = options?.pathPrefix?.replace(/\/+$/, '');
   const items = (treeRes.data.tree || [])
@@ -223,7 +404,9 @@ export async function listFiles(options?: {
     (params as any).ref = options.ref;
   }
 
-  const res = await github.repos.getContent(params);
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.repos.getContent(params),
+  );
 
   if (Array.isArray(res.data)) {
     return res.data.map((item) => ({
@@ -253,7 +436,6 @@ export async function searchInRepo(options: {
   per_page?: number;
   page?: number;
 }): Promise<SearchInRepoResultItem[]> {
-  const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
   const per_page = clampInt(options.per_page, 1, 50, 20);
@@ -287,27 +469,23 @@ export async function searchInRepo(options: {
   }
 
   const promise = (async () => {
-    // Use REST code search for reliability.
-    // NOTE: GraphQL code search is intentionally not used here for now,
-    // because GitHub GraphQL schema support for CODE search varies and may
-    // require special preview headers. We'll revisit and re-enable GraphQL
-    // after validating the correct schema and headers.
-    const res = await github.search.code({
-      q,
-      per_page,
-      page,
-    });
+    await acquireSearchSlot();
+    try {
+      const res = await githubSearchCodeWithRetry({ q, per_page, page });
 
-    const items: SearchInRepoResultItem[] = (res.data.items || []).map((item: any) => ({
-      path: item.path,
-      repository: item.repository?.full_name ?? `${owner}/${repo}`,
-      score: item.score ?? 0,
-      url: item.html_url,
-    }));
+      const items: SearchInRepoResultItem[] = (res.data.items || []).map((item: any) => ({
+        path: item.path,
+        repository: item.repository?.full_name ?? `${owner}/${repo}`,
+        score: item.score ?? 0,
+        url: item.html_url,
+      }));
 
-    await githubCacheSet(cacheKey, { data: items }, Math.floor(SEARCH_CACHE_TTL_MS / 1000));
+      await githubCacheSet(cacheKey, { data: items }, Math.floor(SEARCH_CACHE_TTL_MS / 1000));
 
-    return items;
+      return items;
+    } finally {
+      releaseSearchSlot();
+    }
   })();
 
   searchInflight.set(cacheKey, promise);
@@ -339,7 +517,9 @@ export async function getRecentCommits(options?: {
     (params as any).sha = branch;
   }
 
-  const res = await github.repos.listCommits(params);
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.repos.listCommits(params),
+  );
 
   return res.data.map((commit) => ({
     sha: commit.sha,
@@ -359,21 +539,25 @@ export async function createBranch(
   const github = getGithubClient();
   const { owner, repo } = parseRepo(repoName);
 
-  const baseRef = await github.git.getRef({
-    owner,
-    repo,
-    ref: `heads/${baseBranch}`,
-  });
+  const baseRef = await withGithubRestConcurrencyLimit(() =>
+    github.git.getRef({
+      owner,
+      repo,
+      ref: `heads/${baseBranch}`,
+    }),
+  );
 
   const sha = baseRef.data.object.sha;
 
   try {
-    const ref = await github.git.createRef({
-      owner,
-      repo,
-      ref: `refs/heads/${branchName}`,
-      sha,
-    });
+    const ref = await withGithubRestConcurrencyLimit(() =>
+      github.git.createRef({
+        owner,
+        repo,
+        ref: `refs/heads/${branchName}`,
+        sha,
+      }),
+    );
 
     return ref.data;
   } catch (error: any) {
@@ -398,12 +582,14 @@ export async function commitFile(options: {
   let sha: string | undefined;
 
   try {
-    const res = await github.repos.getContent({
-      owner,
-      repo,
-      path,
-      ref: branch,
-    });
+    const res = await withGithubRestConcurrencyLimit(() =>
+      github.repos.getContent({
+        owner,
+        repo,
+        path,
+        ref: branch,
+      }),
+    );
 
     if ('sha' in res.data) {
       sha = (res.data as any).sha;
@@ -437,7 +623,9 @@ export async function commitFile(options: {
     params.sha = sha;
   }
 
-  const result = await github.repos.createOrUpdateFileContents(params);
+  const result = await withGithubRestConcurrencyLimit(() =>
+    github.repos.createOrUpdateFileContents(params),
+  );
   return result.data;
 }
 
@@ -452,12 +640,14 @@ export async function deleteFile(options: {
 
   const { path, message, branch } = options;
 
-  const res = await github.repos.getContent({
-    owner,
-    repo,
-    path,
-    ref: branch,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.repos.getContent({
+      owner,
+      repo,
+      path,
+      ref: branch,
+    }),
+  );
 
   if (!('sha' in res.data)) {
     throw new Error(`Cannot delete non-file content: ${path}`);
@@ -465,14 +655,16 @@ export async function deleteFile(options: {
 
   const sha = (res.data as any).sha as string;
 
-  const result = await github.repos.deleteFile({
-    owner,
-    repo,
-    path,
-    message,
-    branch,
-    sha,
-  });
+  const result = await withGithubRestConcurrencyLimit(() =>
+    github.repos.deleteFile({
+      owner,
+      repo,
+      path,
+      message,
+      branch,
+      sha,
+    }),
+  );
 
   return result.data;
 }
@@ -508,7 +700,7 @@ export async function createPullRequest(options: {
     params.body = options.body;
   }
 
-  const pr = await github.pulls.create(params);
+  const pr = await withGithubRestConcurrencyLimit(() => github.pulls.create(params));
   return pr.data;
 }
 
@@ -520,12 +712,14 @@ export async function commentOnPullRequest(options: {
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const res = await github.issues.createComment({
-    owner,
-    repo,
-    issue_number: options.pull_number,
-    body: options.body,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.issues.createComment({
+      owner,
+      repo,
+      issue_number: options.pull_number,
+      body: options.body,
+    }),
+  );
 
   return res.data;
 }
@@ -538,12 +732,14 @@ export async function mergePullRequest(options: {
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const res = await github.pulls.merge({
-    owner,
-    repo,
-    pull_number: options.pull_number,
-    merge_method: options.method ?? 'merge',
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.pulls.merge({
+      owner,
+      repo,
+      pull_number: options.pull_number,
+      merge_method: options.method ?? 'merge',
+    }),
+  );
 
   return res.data;
 }
@@ -576,7 +772,7 @@ export async function runWorkflow(options: {
     params.inputs = options.inputs;
   }
 
-  await github.actions.createWorkflowDispatch(params);
+  await withGithubRestConcurrencyLimit(() => github.actions.createWorkflowDispatch(params));
 
   return { dispatched: true, workflow_id, ref };
 }
@@ -588,11 +784,13 @@ export async function getWorkflowStatus(options: {
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const run = await github.actions.getWorkflowRun({
-    owner,
-    repo,
-    run_id: options.run_id,
-  });
+  const run = await withGithubRestConcurrencyLimit(() =>
+    github.actions.getWorkflowRun({
+      owner,
+      repo,
+      run_id: options.run_id,
+    }),
+  );
 
   return run.data;
 }
@@ -601,12 +799,14 @@ export async function listWorkflowRunJobs(options: { run_id: number; repo?: stri
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const res = await github.actions.listJobsForWorkflowRun({
-    owner,
-    repo,
-    run_id: options.run_id,
-    per_page: 100,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.actions.listJobsForWorkflowRun({
+      owner,
+      repo,
+      run_id: options.run_id,
+      per_page: 100,
+    }),
+  );
 
   const jobs = (res.data.jobs || []).map((j: any) => ({
     id: j.id,
@@ -628,11 +828,13 @@ export async function downloadWorkflowRunLogs(options: {
   const github = getGithubClient();
   const { owner, repo } = parseRepo(options.repo);
 
-  const res = await github.actions.downloadWorkflowRunLogs({
-    owner,
-    repo,
-    run_id: options.run_id,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.actions.downloadWorkflowRunLogs({
+      owner,
+      repo,
+      run_id: options.run_id,
+    }),
+  );
 
   const buf = Buffer.from(res.data as any);
 
@@ -668,15 +870,17 @@ export async function listWorkflowRunsForRepo(args: {
   const { owner, repo: repoName } = parseRepo(repo ?? undefined);
 
   if (workflow_id) {
-    const res = await github.actions.listWorkflowRuns({
-      owner,
-      repo: repoName,
-      workflow_id: workflow_id as any,
-      branch: branch ?? undefined,
-      event: event ?? undefined,
-      status: status ?? undefined,
-      per_page: per_page ?? 10,
-    });
+    const res = await withGithubRestConcurrencyLimit(() =>
+      github.actions.listWorkflowRuns({
+        owner,
+        repo: repoName,
+        workflow_id: workflow_id as any,
+        branch: branch ?? undefined,
+        event: event ?? undefined,
+        status: status ?? undefined,
+        per_page: per_page ?? 10,
+      }),
+    );
 
     const runs = (res.data.workflow_runs || []).map((r: any) => ({
       id: r.id,
@@ -695,14 +899,16 @@ export async function listWorkflowRunsForRepo(args: {
     return { total_count: res.data.total_count, runs };
   }
 
-  const res = await github.actions.listWorkflowRunsForRepo({
-    owner,
-    repo: repoName,
-    branch: branch ?? undefined,
-    event: event ?? undefined,
-    status: status ?? undefined,
-    per_page: per_page ?? 10,
-  });
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.actions.listWorkflowRunsForRepo({
+      owner,
+      repo: repoName,
+      branch: branch ?? undefined,
+      event: event ?? undefined,
+      status: status ?? undefined,
+      per_page: per_page ?? 10,
+    }),
+  );
 
   const runs = (res.data.workflow_runs || []).map((r: any) => ({
     id: r.id,
@@ -747,7 +953,7 @@ export async function createIssue(options: {
     params.assignees = options.assignees;
   }
 
-  const res = await github.issues.create(params);
+  const res = await withGithubRestConcurrencyLimit(() => github.issues.create(params));
   return res.data;
 }
 
@@ -785,7 +991,7 @@ export async function updateIssue(options: {
     params.assignees = options.assignees;
   }
 
-  const res = await github.issues.update(params);
+  const res = await withGithubRestConcurrencyLimit(() => github.issues.update(params));
   return res.data;
 }
 
@@ -809,7 +1015,9 @@ export async function listIssues(options?: {
     params.labels = options.labels;
   }
 
-  const res = await github.issues.listForRepo(params);
+  const res = await withGithubRestConcurrencyLimit(() =>
+    github.issues.listForRepo(params),
+  );
 
   return res.data.map((issue) => ({
     number: issue.number,

@@ -19,9 +19,11 @@ import {
 
 describe('searchInRepo (cost & reliability)', () => {
   beforeEach(() => {
+    // Important: clear Jest mocks first to avoid wiping mock call history after
+    // our module-level state reset.
+    jest.clearAllMocks();
     __resetSearchStateForTests();
     __resetGithubClientForTests();
-    jest.clearAllMocks();
   });
 
   function makeClient(searchCodeImpl: jest.Mock) {
@@ -86,8 +88,10 @@ describe('searchInRepo (cost & reliability)', () => {
     const p1 = searchInRepo(args);
     const p2 = searchInRepo(args);
 
-    // allow the first call to progress to the point it invokes octokit.search.code
-    await Promise.resolve();
+    // Wait until the first request has acquired the search slot and invoked
+    // octokit.search.code. With the added throttle, this is not guaranteed to
+    // happen in a single microtask tick.
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(code).toHaveBeenCalledTimes(1);
 

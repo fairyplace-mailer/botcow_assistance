@@ -1,42 +1,22 @@
-# Spec (BotCow)
+# Spec
 
-> Source of truth: this document defines the required behavior and constraints for this project.
+## Constraints
 
----
+- Work only in the specified repository and branch.
+- Preview deployments only (no production deploy).
 
-## 1) Security
+## GitHub code search
 
-### 1.1 BOTCOW_ADMIN_TOKEN
+- `github_search_in_repo` MUST use GitHub REST `GET /search/code`.
+- GitHub GraphQL `SearchType` currently has no `CODE` value.
 
-Tools endpoints are **owner-only** and require Bearer auth.
+## Preview verification tools
 
-- Env: `BOTCOW_ADMIN_TOKEN`
-- Header: `Authorization: Bearer <BOTCOW_ADMIN_TOKEN>`
+The project provides preview verification tools:
+- `preview_get_url`: resolves latest Vercel preview URL via Vercel API.
+- `preview_http_request`: SSRF-protected HTTP client restricted to `https://*.vercel.app`.
+- `preview_smoke_check`: runs HTTP + tools smoke checks against the preview.
 
-Endpoints:
-- `GET /tools`
-- `POST /tools/call`
+## Cron schedule (Vercel Hobby)
 
-If `BOTCOW_ADMIN_TOKEN` is not configured — endpoints **fail closed** (return 500).
-
----
-
-## 2) Vercel tools policy (preview only)
-
-All Vercel tools must operate in **preview** target only.
-
-- Any attempt to use `target=production` must fail.
-- If `target` is omitted it defaults to `preview`.
-
-Applies to:
-- `vercel_get_latest_deployments`
-- `vercel_trigger_deploy`
-- `vercel_redeploy`
-- `vercel_diagnose_deployment`
-
----
-
-## 3) Repo allowlist and registration
-
-The bot operates only on repositories explicitly listed in `config/repos.yml`.
-New repositories can be added via the owner-only `repo_register` tool.
+- `devwix-ingest` runs daily 04:00 UTC (`0 4 * * *`).

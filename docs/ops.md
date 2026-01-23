@@ -1,32 +1,49 @@
 # Ops
 
-## Environment variables
+## Preview deploys
 
-See `docs/ENVIRONMENT.md`.
+- Preview deploys are created by Vercel.
+- To retrieve the **actual preview URL**, use Vercel API via tools (never guess URLs).
 
-## Cron
+## GitHub code search
 
-### Vercel cron jobs
+`github_search_in_repo` uses **GitHub REST Search API** (`/search/code`).
+GitHub GraphQL `SearchType` currently does **not** include `CODE`, so GraphQL cannot be used for code search.
 
-- `devwix-ingest`: runs **daily at 04:00 UTC** (`0 4 * * *`).
-  - Reason: Vercel Hobby plan allows only daily cron jobs (no more frequent schedules).
-  - If you upgrade to Pro, you can increase frequency if needed.
+## Preview smoke checks (recommended)
 
-## Manual operations
+This project includes tools to:
+- resolve the latest Vercel preview URL
+- run safe HTTP requests to that URL (SSRF-protected)
+- run a small smoke-check suite against the preview
 
-### Ingest DevWix docs
+### `preview_get_url`
+Returns the preview deployment URL.
 
-Use the admin endpoints:
+Example `/tools/call`:
 
-- `POST /api/admin/devwix/seed?maxPages=...`
-- `POST /api/admin/devwix/ingest?limitPages=...`
+```bash
+curl -sS "$BASE_URL/tools/call" \
+  -H "Authorization: Bearer $BOTCOW_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"preview_get_url","arguments":{"repo":"fairyplace-mailer/botcow_assistance","branch":"provecta"}}'
+```
 
-Or the cron endpoints:
+### `preview_http_request`
+Safe HTTP client restricted to `https://*.vercel.app`.
 
-- `GET /api/cron/devwix-seed?maxPages=...`
-- `GET /api/cron/devwix-ingest?limitPages=...&force=true`
+### `preview_smoke_check`
+Runs these checks:
+- `GET /`
+- `GET /tools`
+- `POST /tools/call`:
+  - `github_get_repo_structure`
+  - `github_get_file`
+  - `github_self_check_search_schema`
+  - `github_search_in_repo` (narrow query)
 
-Auth:
+## Cron (Vercel Hobby)
 
-- Admin endpoints require `Authorization: Bearer $BOTCOW_ADMIN_TOKEN`.
-- Cron endpoints require `Authorization: Bearer $CRON_SECRET`.
+Vercel Hobby has strict limits on cron frequency.
+For this project:
+- `devwix-ingest` runs **daily 04:00 UTC**: `0 4 * * *`

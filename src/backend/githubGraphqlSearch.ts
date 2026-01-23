@@ -37,21 +37,46 @@ function buildSearchQuery(args: {
   return q;
 }
 
-function getHeaderValue(headers: any, name: string): string | undefined {
-  if (!headers) return undefined;
-  const lower = name.toLowerCase();
-  return headers[name] ?? headers[lower];
+export type GithubSearchTypeEnumValue = {
+  name: string;
+};
+
+/**
+ * Self-check for GitHub GraphQL schema: lists enum values for SearchType.
+ *
+ * GitHub GraphQL historically does NOT include CODE in SearchType for many tokens/apps,
+ * so code search must use REST /search/code.
+ */
+export async function githubSearchTypeEnumValuesGraphql(): Promise<GithubSearchTypeEnumValue[]> {
+  const github = getGithubClient();
+
+  const QUERY = `
+    query SearchTypeEnumValues {
+      __type(name: "SearchType") {
+        enumValues {
+          name
+        }
+      }
+    }
+  `;
+
+  const data = await (github as any).graphql(QUERY, {});
+
+  const values = (data?.__type?.enumValues ?? []) as any[];
+  const enumValues: GithubSearchTypeEnumValue[] = values
+    .filter(Boolean)
+    .map((v) => ({ name: String(v.name) }));
+
+  await logEvent('github_graphql_searchtype_enum_values', {
+    values: enumValues.map((v) => v.name),
+  }).catch(() => undefined);
+
+  return enumValues;
 }
 
-function isSecondaryRateLimitError(error: any): boolean {
-  const msg =
-    (typeof error?.message === 'string' ? error.message : '') +
-    ' ' +
-    (typeof error?.response?.data?.message === 'string'
-      ? error.response.data.message
-      : '');
-  return /secondary rate limit/i.test(msg);
-}
+// -----------------------
+// Deprecated code-search via GraphQL
+// -----------------------
 
 export type GithubSearchItem = {
   path: string;
@@ -59,115 +84,17 @@ export type GithubSearchItem = {
   url: string;
 };
 
-const SEARCH_QUERY = `
-  query CodeSearch($q: String!, $first: Int!) {
-    rateLimit {
-      remaining
-      resetAt
-    }
-    search(type: CODE, query: $q, first: $first) {
-      codeCount
-      nodes {
-        __typename
-        ... on Code {
-          path
-          url
-          repository { nameWithOwner }
-        }
-      }
-    }
-  }
-`;
-
-async function searchCodeGraphqlOnce(args: { q: string; first: number }) {
-  const github = getGithubClient();
-  // Octokit graphql client is exposed as `octokit.graphql`.
-  // NOTE: variable name `query` is reserved in @octokit/graphql, so we use `q`.
-  return await (github as any).graphql(SEARCH_QUERY, {
-    q: args.q,
-    first: args.first,
-  });
-}
-
-async function searchCodeGraphqlWithRetry(args: { q: string; first: number }) {
-  const maxRetries = 4;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await searchCodeGraphqlOnce(args);
-    } catch (error: any) {
-      const status = error?.status ?? error?.response?.status;
-      const headers = error?.response?.headers;
-
-      const remainingStr = getHeaderValue(headers, 'x-ratelimit-remaining');
-      const resetStr = getHeaderValue(headers, 'x-ratelimit-reset');
-      const remaining =
-        remainingStr !== undefined ? Number.parseInt(remainingStr, 10) : undefined;
-      const resetSec =
-        resetStr !== undefined ? Number.parseInt(resetStr, 10) : undefined;
-
-      const isRateLimitExceeded = status === 403 && remaining === 0;
-      const isSecondary = status === 403 && isSecondaryRateLimitError(error);
-
-      if (attempt >= maxRetries || (!isRateLimitExceeded && !isSecondary)) {
-        throw error;
-      }
-
-      if (isRateLimitExceeded && resetSec) {
-        const resetMs = resetSec * 1000;
-        const now = Date.now();
-        const jitterMs = 100 + Math.floor(Math.random() * 400);
-        const waitMs = Math.max(0, resetMs - now) + jitterMs;
-        await logEvent('github_graphql_search_rate_limited_wait', {
-          attempt,
-          waitMs,
-          remaining,
-          resetSec,
-        }).catch(() => undefined);
-        await sleep(waitMs);
-        continue;
-      }
-
-      const backoffMs = Math.min(20000, 1000 * 2 ** attempt);
-      await logEvent('github_graphql_search_secondary_rate_limit_backoff', {
-        attempt,
-        backoffMs,
-      }).catch(() => undefined);
-      await sleep(backoffMs);
-    }
-  }
-
-  throw new Error('searchCodeGraphqlWithRetry: exhausted');
-}
-
-export async function githubCodeSearchGraphql(options: {
+/**
+ * @deprecated GitHub GraphQL code search is not supported (SearchType lacks CODE).
+ * Use REST search in `searchInRepo` instead.
+ */
+export async function githubCodeSearchGraphql(_options: {
   owner: string;
   repo: string;
   query: string;
   path?: string;
   per_page?: number;
 }): Promise<GithubSearchItem[]> {
-  const first = clampInt(options.per_page, 1, 50, 20);
-  const q = buildSearchQuery({
-    query: options.query,
-    owner: options.owner,
-    repo: options.repo,
-    ...(options.path ? { path: options.path } : {}),
-  });
-
-  const data = await searchCodeGraphqlWithRetry({ q, first });
-  const nodes = (data?.search?.nodes ?? []) as any[];
-
-  const items: GithubSearchItem[] = [];
-  for (const n of nodes) {
-    if (!n) continue;
-    if (n.__typename !== 'Code') continue;
-    items.push({
-      path: n.path,
-      repository: n.repository?.nameWithOwner,
-      url: n.url,
-    });
-  }
-
-  return items;
+  await logEvent('github_graphql_code_search_disabled', {}).catch(() => undefined);
+  return [];
 }

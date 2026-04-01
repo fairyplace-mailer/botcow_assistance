@@ -132,6 +132,8 @@ export function chooseModel(
     const isDeployOrLogs =
       flags.hasVercelWords ||
       flags.hasCICDWords ||
+      flags.hasStackTrace ||
+      flags.hasLargeErrorPayload ||
       /deployment\s+log|build\s+failed|workflow\b|github\s+actions|ci\b/i.test(
         normalized.concatenatedText,
       );

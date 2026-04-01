@@ -232,23 +232,31 @@ export function chooseModel(
     reason,
   };
 
-  return withOptionalDebug(decision, {
+  // exactOptionalPropertyTypes: if scores is undefined, omit the property completely
+  const debugBase = {
     textLength: lastUserTextLength,
     messageCount,
     flags,
-    scores: isDebugMode
+  };
+
+  return withOptionalDebug(
+    decision,
+    isDebugMode
       ? {
-          nanoScore: scores.nanoScore,
-          miniScore: scores.miniScore,
-          fullScore: scores.fullScore,
-          noneScore: scores.noneScore,
-          lowScore: scores.lowScore,
-          mediumScore: scores.mediumScore,
-          highScore: scores.highScore,
-          xhighScore: scores.xhighScore,
+          ...debugBase,
+          scores: {
+            nanoScore: scores.nanoScore,
+            miniScore: scores.miniScore,
+            fullScore: scores.fullScore,
+            noneScore: scores.noneScore,
+            lowScore: scores.lowScore,
+            mediumScore: scores.mediumScore,
+            highScore: scores.highScore,
+            xhighScore: scores.xhighScore,
+          },
         }
-      : undefined,
-  });
+      : debugBase,
+  );
 }
 
 function withOptionalDebug(

@@ -423,15 +423,31 @@ function findLastUserMessage(
   return undefined;
 }
 
+type NormalizedMessages = {
+  concatenatedText: string;
+  totalTextLength: number;
+};
+
 function normalizeAllMessagesToText(
   messages: Array<{ role: string; content: unknown }>,
-): string {
+): NormalizedMessages {
   const parts: string[] = [];
+  let totalTextLength = 0;
+
   for (const m of messages ?? []) {
     const text = normalizeContentToText(m?.content);
-    if (text) parts.push(text);
+    if (text) {
+      parts.push(text);
+      totalTextLength += text.length;
+    }
   }
-  return parts.join('\n\n');
+
+  const concatenatedText = parts.join('\n\n');
+
+  return {
+    concatenatedText,
+    totalTextLength,
+  };
 }
 
 function normalizeContentToText(content: unknown): string | null {

@@ -32,11 +32,6 @@ const MODEL_MINI_NONE: ModelConfig = {
   reasoning: { effort: 'none' },
 };
 
-const MODEL_FULL_HIGH: ModelConfig = {
-  model: 'gpt-5.4',
-  reasoning: { effort: 'high' },
-};
-
 export function chooseModel(
   messages: Array<{ role: string; content: unknown }>,
 ): ModelRoutingDecision {
@@ -131,10 +126,24 @@ export function chooseModel(
     !signals.isLikelyDebugTask
   ) {
     chosenModel = 'gpt-5.4-mini';
-    // operational logs can be long; allow high for big payloads.
-    if (estimatedTotalTextLength < 1200) chosenEffort = 'low';
-    else if (estimatedTotalTextLength < 6000) chosenEffort = 'medium';
-    else chosenEffort = 'high';
+
+    // If we have CI/CD/Vercel/deploy logs, do not downgrade to low.
+    // Tests expect medium+ for such payloads.
+    const isDeployOrLogs =
+      flags.hasVercelWords ||
+      flags.hasCICDWords ||
+      /deployment\s+log|build\s+failed|workflow\b|github\s+actions|ci\b/i.test(
+        normalized.concatenatedText,
+      );
+
+    if (isDeployOrLogs) {
+      chosenEffort = estimatedTotalTextLength < 6000 ? 'medium' : 'high';
+    } else {
+      if (estimatedTotalTextLength < 1200) chosenEffort = 'low';
+      else if (estimatedTotalTextLength < 6000) chosenEffort = 'medium';
+      else chosenEffort = 'high';
+    }
+
     reason = 'pm-or-status-or-ci-cd-or-deploy';
   }
 
@@ -416,14 +425,13 @@ function findLastUserMessage(
 
 function normalizeAllMessagesToText(
   messages: Array<{ role: string; content: unknown }>,
-): { concatenatedText: string; totalTextLength: number } {
+): string {
   const parts: string[] = [];
   for (const m of messages ?? []) {
     const text = normalizeContentToText(m?.content);
     if (text) parts.push(text);
   }
-  const concatenatedText = parts.join('\n\n');
-  return { concatenatedText, totalTextLength: concatenatedText.length };
+  return parts.join('\n\n');
 }
 
 function normalizeContentToText(content: unknown): string | null {

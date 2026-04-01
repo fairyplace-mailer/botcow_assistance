@@ -131,8 +131,10 @@ export function chooseModel(
     !signals.isLikelyDebugTask
   ) {
     chosenModel = 'gpt-5.4-mini';
-    // Vercel/CI logs are often long but still operational; avoid jumping to high.
-    chosenEffort = estimatedTotalTextLength < 1200 ? 'low' : 'medium';
+    // operational logs can be long; allow high for big payloads.
+    if (estimatedTotalTextLength < 1200) chosenEffort = 'low';
+    else if (estimatedTotalTextLength < 6000) chosenEffort = 'medium';
+    else chosenEffort = 'high';
     reason = 'pm-or-status-or-ci-cd-or-deploy';
   }
 

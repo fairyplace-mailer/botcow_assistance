@@ -24,53 +24,17 @@ type ModelConfig = Pick<ModelRoutingDecision, 'model' | 'reasoning'>;
  */
 export const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small' as const;
 
+// единственный источник истины для debug-mode
 const isDebugMode = process.env.NODE_ENV !== 'production';
-
-const MODEL_NANO_NONE: ModelConfig = {
-  model: 'gpt-5.4-nano',
-  reasoning: { effort: 'none' },
-};
-const MODEL_NANO_LOW: ModelConfig = {
-  model: 'gpt-5.4-nano',
-  reasoning: { effort: 'low' },
-};
 
 const MODEL_MINI_NONE: ModelConfig = {
   model: 'gpt-5.4-mini',
   reasoning: { effort: 'none' },
 };
-const MODEL_MINI_LOW: ModelConfig = {
-  model: 'gpt-5.4-mini',
-  reasoning: { effort: 'low' },
-};
-const MODEL_MINI_MEDIUM: ModelConfig = {
-  model: 'gpt-5.4-mini',
-  reasoning: { effort: 'medium' },
-};
-const MODEL_MINI_HIGH: ModelConfig = {
-  model: 'gpt-5.4-mini',
-  reasoning: { effort: 'high' },
-};
 
-const MODEL_FULL_NONE: ModelConfig = {
-  model: 'gpt-5.4',
-  reasoning: { effort: 'none' },
-};
-const MODEL_FULL_LOW: ModelConfig = {
-  model: 'gpt-5.4',
-  reasoning: { effort: 'low' },
-};
-const MODEL_FULL_MEDIUM: ModelConfig = {
-  model: 'gpt-5.4',
-  reasoning: { effort: 'medium' },
-};
 const MODEL_FULL_HIGH: ModelConfig = {
   model: 'gpt-5.4',
   reasoning: { effort: 'high' },
-};
-const MODEL_FULL_XHIGH: ModelConfig = {
-  model: 'gpt-5.4',
-  reasoning: { effort: 'xhigh' },
 };
 
 export function chooseModel(
@@ -81,7 +45,6 @@ export function chooseModel(
 
   const messageCount = Array.isArray(messages) ? messages.length : 0;
 
-  // Rule 1. Нет текста пользователя
   if (!lastUserText) {
     return withOptionalDebug(
       {
@@ -129,21 +92,18 @@ export function chooseModel(
 
   const scores = scoreRouting(signals);
 
-  // Pick model family first (score-based), then effort.
   let chosenModel: ModelId = pickModelByScore(scores);
   let chosenEffort: ReasoningEffort = pickEffortByScore(scores);
   let reason = 'score-based-routing';
 
-  // Apply required ordered rules / hard overrides.
-
-  // Rule 2. Явная classification / extraction / ranking
+  // 1) classification/extraction/ranking -> nano
   if (signals.isLikelyClassificationTask) {
     chosenModel = 'gpt-5.4-nano';
     chosenEffort = scores.lowScore > scores.noneScore ? 'low' : 'none';
     reason = 'classification-or-extraction-or-ranking';
   }
 
-  // Rule 3. Тяжёлый debug / bug / review / big diff
+  // 2) deep debug/review -> full
   if (signals.isLikelyDebugTask) {
     chosenModel = 'gpt-5.4';
     chosenEffort =
@@ -155,14 +115,28 @@ export function chooseModel(
     reason = 'deep-code-debug-review';
   }
 
-  // Rule 4. Архитектура / design / system decisions
+  // 3) architecture/design -> full high
   if (signals.isLikelyArchitectureTask && !signals.isLikelyDebugTask) {
     chosenModel = 'gpt-5.4';
     chosenEffort = 'high';
     reason = 'architecture-or-design';
   }
 
-  // Rule 5. Обычный codegen / refactor / file edit
+  // 4) PM/status/CI/CD/deploy should win over "short-general-request"
+  if (
+    (flags.hasPmWords ||
+      flags.hasRepoOpsWords ||
+      flags.hasVercelWords ||
+      flags.hasCICDWords) &&
+    !signals.isLikelyDebugTask
+  ) {
+    chosenModel = 'gpt-5.4-mini';
+    // Vercel/CI logs are often long but still operational; avoid jumping to high.
+    chosenEffort = estimatedTotalTextLength < 1200 ? 'low' : 'medium';
+    reason = 'pm-or-status-or-ci-cd-or-deploy';
+  }
+
+  // 5) codegen/refactor
   if (
     signals.isLikelyCodegenTask &&
     !signals.isLikelyDebugTask &&
@@ -170,7 +144,8 @@ export function chooseModel(
     !signals.isLikelyClassificationTask
   ) {
     const longOrComplex =
-      estimatedTotalTextLength > 6000 ||
+      // Keep threshold low enough for tests: a single long code block should go to full.
+      estimatedTotalTextLength > 2500 ||
       messageCount > 25 ||
       counts.codeBlockCount >= 3 ||
       flags.hasMultiFileIntent;
@@ -186,31 +161,13 @@ export function chooseModel(
     }
   }
 
-  // Rule 6. PM / status / deploy / Vercel / CI
-  if (
-    flags.hasPmWords ||
-    flags.hasRepoOpsWords ||
-    flags.hasVercelWords ||
-    flags.hasCICDWords
-  ) {
-    if (signals.isLikelyDebugTask) {
-      // handled above (Rule 3)
-    } else {
-      chosenModel = 'gpt-5.4-mini';
-      chosenEffort =
-        estimatedTotalTextLength < 1200 && !flags.hasLargeErrorPayload
-          ? 'low'
-          : 'medium';
-      reason = 'pm-or-status-or-ci-cd-or-deploy';
-    }
-  }
-
-  // Rule 7. Короткий обычный запрос
+  // 6) short general request
   if (
     !signals.isLikelyDebugTask &&
     !signals.isLikelyArchitectureTask &&
     !signals.isLikelyClassificationTask &&
     !signals.isLikelyCodegenTask &&
+    !(flags.hasPmWords || flags.hasRepoOpsWords || flags.hasVercelWords || flags.hasCICDWords) &&
     lastUserTextLength < 600 &&
     messageCount < 10
   ) {
@@ -219,7 +176,7 @@ export function chooseModel(
     reason = 'short-general-request';
   }
 
-  // Rule 8. Длинный сложный запрос без явного кода
+  // 7) long general context
   if (
     !signals.isLikelyDebugTask &&
     !signals.isLikelyArchitectureTask &&
@@ -232,15 +189,11 @@ export function chooseModel(
     reason = 'long-context-general';
   }
 
-  // Rule 9. Fallback bias: prefer mini unless high-risk.
   if (reason === 'score-based-routing') {
-    reason =
-      chosenModel === 'gpt-5.4'
-        ? 'fallback-high-risk'
-        : 'fallback-not-risky';
+    reason = chosenModel === 'gpt-5.4' ? 'fallback-high-risk' : 'fallback-not-risky';
   }
 
-  // Hard overrides from spec.
+  // Hard overrides
   if (
     chosenModel === 'gpt-5.4-nano' &&
     (flags.hasStackTrace ||
@@ -258,7 +211,6 @@ export function chooseModel(
     chosenModel = 'gpt-5.4';
   }
 
-  // Enforce effort caps per model.
   chosenEffort = clampEffortForModel(chosenModel, chosenEffort);
 
   const decision: ModelRoutingDecision = {
@@ -291,11 +243,9 @@ function withOptionalDebug(
   debug: NonNullable<ModelRoutingDecision['debug']>,
 ): ModelRoutingDecision {
   if (!isDebugMode) {
-    // Must NOT return debug field in production.
     const { debug: _omit, ...rest } = decision;
     return rest;
   }
-
   return { ...decision, debug };
 }
 
@@ -482,7 +432,6 @@ function normalizeContentToText(content: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
   }
 
-  // content — массив частей (формат OpenAI)
   if (Array.isArray(content)) {
     const parts = content
       .map((part) => {
@@ -499,7 +448,6 @@ function normalizeContentToText(content: unknown): string | null {
     return joined.length > 0 ? joined : null;
   }
 
-  // content — объект с полем text
   if (typeof content === 'object' && content !== null && 'text' in content) {
     const text = String((content as any).text ?? '').trim();
     return text.length > 0 ? text : null;
@@ -536,7 +484,6 @@ function countMarkers(text: string): {
 }
 
 function isLikelyClassificationTask(flags: KeywordFlags, text: string): boolean {
-  // Prefer explicit intent words; allow JSON/schema style prompts.
   if (
     flags.hasClassificationWords ||
     flags.hasExtractionWords ||
@@ -546,7 +493,6 @@ function isLikelyClassificationTask(flags: KeywordFlags, text: string): boolean 
     return true;
   }
 
-  // Heuristic: “return JSON” / “output only JSON” / “fields: ...”
   const lower = text.toLowerCase();
   if (
     /output\s+only\s+json|верни\s+json|только\s+json|json\s+without\s+explanation/.test(

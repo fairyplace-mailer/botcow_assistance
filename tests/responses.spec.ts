@@ -101,6 +101,52 @@ describe('responses tool loop regressions', () => {
     ]);
   });
 
+  test('follow-up tool request keeps previous_response_id chain', async () => {
+    (handleToolCall as jest.Mock).mockResolvedValueOnce({ ok: true });
+
+    const create = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'resp_chain_1',
+        output: [
+          {
+            type: 'function_call',
+            id: 'fc_chain_1',
+            call_id: 'call_chain_1',
+            name: 'tool_one',
+            arguments: '{}',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: 'resp_chain_2',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+        output_text: 'done',
+      });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({
+      responses: { create },
+    });
+
+    await runAssistant([{ role: 'user', content: 'run tool' }], {
+      model: 'gpt-5.4',
+      reasoning: { effort: 'none' },
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
+    expect(create.mock.calls[1][0].previous_response_id).toBe('resp_chain_1');
+    expect(create.mock.calls[1][0].input).toEqual([
+      { type: 'function_call_output', call_id: 'call_chain_1', output: '{"ok":true}' },
+    ]);
+  });
+
   test('stale call_id is blocked before request', () => {
     const calls = extractFunctionCalls([
       {

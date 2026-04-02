@@ -175,7 +175,7 @@ export async function POST(req: Request) {
   const routing = chooseModel(fullMessages);
 
   try {
-    const result = await runAssistant(fullMessages, routing.model);
+    const result = await runAssistant(fullMessages, routing);
     const ms = Date.now() - startedAt;
 
     const completion = result.completion;

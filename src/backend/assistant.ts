@@ -3,6 +3,7 @@ import { getToolsSchemas, handleToolCall } from './tools';
 import type { ModelRoutingDecision } from './modelRouter';
 import type {
   ChatCompletion,
+  ChatCompletionCreateParamsNonStreaming,
   ChatCompletionMessage,
   ChatCompletionMessageParam,
   ChatCompletionMessageToolCall,
@@ -44,12 +45,20 @@ export async function runAssistant(
   const openai = getOpenAIClient();
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const completion: ChatCompletion = await openai.chat.completions.create({
+    const request: ChatCompletionCreateParamsNonStreaming = {
       model: routing.model,
       messages,
       tools: getToolsSchemas() as ChatCompletionTool[],
       tool_choice: 'auto',
-    });
+    };
+
+    if (routing.reasoning) {
+      (request as ChatCompletionCreateParamsNonStreaming & {
+        reasoning?: ModelRoutingDecision['reasoning'];
+      }).reasoning = routing.reasoning;
+    }
+
+    const completion: ChatCompletion = await openai.chat.completions.create(request);
 
     lastCompletion = completion;
 

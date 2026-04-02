@@ -75,10 +75,18 @@ export function buildResponsesInput(messages: AssistantMessage[]): {
       } as ResponseInputItem;
     });
 
-  return {
-    instructions: systemInstructions || undefined,
+  const built: {
+    instructions?: string;
+    input: ResponseInput;
+  } = {
     input,
   };
+
+  if (systemInstructions) {
+    built.instructions = systemInstructions;
+  }
+
+  return built;
 }
 
 export function getResponseFunctionCalls(output: ResponseOutputItem[] | undefined) {

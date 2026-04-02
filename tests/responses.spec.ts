@@ -138,6 +138,25 @@ describe('responses tool loop regressions', () => {
     ).toThrow('Duplicate function_call call_id in current response cycle: call_dup');
   });
 
+  test('duplicate function_call_output call_id is blocked', () => {
+    const calls = extractFunctionCalls([
+      {
+        type: 'function_call',
+        id: 'fc_1',
+        call_id: 'call_1',
+        name: 'tool_one',
+        arguments: '{}',
+      } as any,
+    ]);
+
+    expect(() =>
+      buildFunctionCallOutputs(calls, [
+        { call_id: 'call_1', output: { value: 1 } },
+        { call_id: 'call_1', output: { value: 2 } },
+      ]),
+    ).toThrow('Duplicate function_call_output call_id in current response cycle: call_1');
+  });
+
   test('function_call_output is normalized to string', () => {
     const calls = extractFunctionCalls([
       {
@@ -157,7 +176,7 @@ describe('responses tool loop regressions', () => {
     });
   });
 
-  test('validator blocks input_text in assistant output context regression', () => {
+  test('validator blocks output_text in input message content', () => {
     expect(() =>
       validateResponsesInput([
         {
@@ -168,10 +187,11 @@ describe('responses tool loop regressions', () => {
     ).toThrow('Responses payload validation failed: unsupported input content type output_text');
   });
 
-  test('buildResponsesInput keeps input_text only in input messages', () => {
+  test('buildResponsesInput keeps input_text only in actual input messages', () => {
     const built = buildResponsesInput([
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'hello' },
+      { role: 'assistant', content: [{ type: 'output_text', text: 'model reply' }] },
     ]);
 
     expect(built.instructions).toBe('sys');

@@ -7,6 +7,41 @@ import {
   retrieveDevWixContext,
 } from '../../../backend/devWixDocs/retrieve';
 
+function getOutputText(response: any): string {
+  if (typeof response?.output_text === 'string' && response.output_text.trim()) {
+    return response.output_text;
+  }
+
+  const output = Array.isArray(response?.output) ? response.output : [];
+
+  for (const item of output) {
+    if (item?.type !== 'message' || !Array.isArray(item?.content)) {
+      continue;
+    }
+
+    const text = item.content
+      .map((part: any) => {
+        if (typeof part?.text === 'string') {
+          return part.text;
+        }
+
+        if (typeof part?.output_text === 'string') {
+          return part.output_text;
+        }
+
+        return '';
+      })
+      .join('')
+      .trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return '';
+}
+
 export async function POST(req: Request) {
   const startedAt = Date.now();
   const { messages } = await req.json();
@@ -15,7 +50,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid messages' }, { status: 400 });
   }
 
-  // System-prompt: жестко описываем роль ассистента и сценарии
   const systemMessage = {
     role: 'system' as const,
     content: `
@@ -139,7 +173,6 @@ export async function POST(req: Request) {
 `,
   };
 
-  // RAG: use latest user message as query
   const lastUser = [...messages].reverse().find((m: any) => m?.role === 'user');
   const userQuery =
     typeof lastUser?.content === 'string' ? lastUser.content : null;
@@ -162,7 +195,6 @@ export async function POST(req: Request) {
         };
       }
     } catch {
-      // RAG is best-effort. Never fail the chat if retrieval fails.
       ragMessage = null;
     }
   }
@@ -180,13 +212,13 @@ export async function POST(req: Request) {
   try {
     const result = await runAssistant(fullMessages, routing);
     const ms = Date.now() - startedAt;
-
-    const completion = result.completion;
+    const response = result.response;
+    const responseText = getOutputText(response);
 
     await logEvent('chat', {
       messages,
       toolCalls: result.toolCalls,
-      hasCompletion: !!completion,
+      hasCompletion: !!response,
       durationMs: ms,
       model: routing.model,
       modelReason: routing.reason,
@@ -194,24 +226,28 @@ export async function POST(req: Request) {
       ...(routingDebug !== undefined ? { routingDebug } : {}),
     });
 
-    if (!completion) {
+    if (!response || !responseText) {
       return NextResponse.json(
         { error: 'Assistant did not produce a final answer' },
         { status: 500 },
       );
     }
 
-    const firstChoice = completion.choices?.[0];
-    const finalMessage = firstChoice?.message ?? null;
-
-    if (!finalMessage) {
-      return NextResponse.json(
-        { error: 'Assistant produced completion without message' },
-        { status: 500 },
-      );
-    }
-
-    return NextResponse.json(completion);
+    return NextResponse.json({
+      id: response.id,
+      object: 'chat.completion',
+      model: response.model,
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: responseText,
+          },
+        },
+      ],
+    });
   } catch (error: any) {
     const ms = Date.now() - startedAt;
 

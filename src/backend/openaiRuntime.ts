@@ -9,6 +9,8 @@ export type ResponsesRuntimeCapabilities = {
   path: 'openai.responses.create';
   reasoning: 'supported' | 'unsupported' | 'unknown';
   sdkVersion: string | null;
+  apiBaseUrl: string | null;
+  runtimeKind: 'openai' | 'custom';
 };
 
 function readPackageVersion(): string | null {
@@ -21,13 +23,29 @@ function readPackageVersion(): string | null {
   }
 }
 
-export const OPENAI_SDK_VERSION = readPackageVersion();
+function normalizeBaseUrl(rawBaseUrl: string | undefined): string | null {
+  const trimmed = rawBaseUrl?.trim();
+  if (!trimmed) {
+    return 'https://api.openai.com/v1';
+  }
 
-export const DEFAULT_RESPONSES_RUNTIME_CAPABILITIES: ResponsesRuntimeCapabilities = {
-  path: 'openai.responses.create',
-  reasoning: 'supported',
-  sdkVersion: OPENAI_SDK_VERSION,
-};
+  return trimmed.replace(/\/+$/, '');
+}
+
+function inferRuntimeKind(apiBaseUrl: string | null): 'openai' | 'custom' {
+  if (!apiBaseUrl) {
+    return 'custom';
+  }
+
+  try {
+    const parsed = new URL(apiBaseUrl);
+    return parsed.hostname === 'api.openai.com' ? 'openai' : 'custom';
+  } catch {
+    return 'custom';
+  }
+}
+
+export const OPENAI_SDK_VERSION = readPackageVersion();
 
 export const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<Exclude<ReasoningEffort, 'none'>>>> = {
   'gpt-5.4': new Set(['low', 'medium', 'high', 'xhigh']),
@@ -36,7 +54,16 @@ export const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<Exc
 };
 
 export function getResponsesRuntimeCapabilities(): ResponsesRuntimeCapabilities {
-  return DEFAULT_RESPONSES_RUNTIME_CAPABILITIES;
+  const apiBaseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL);
+  const runtimeKind = inferRuntimeKind(apiBaseUrl);
+
+  return {
+    path: 'openai.responses.create',
+    reasoning: runtimeKind === 'openai' ? 'supported' : 'unknown',
+    sdkVersion: OPENAI_SDK_VERSION,
+    apiBaseUrl,
+    runtimeKind,
+  };
 }
 
 export function supportsReasoning(
@@ -44,6 +71,10 @@ export function supportsReasoning(
   runtimeCapabilities: ResponsesRuntimeCapabilities,
 ): boolean {
   if (runtimeCapabilities.path !== 'openai.responses.create') {
+    return false;
+  }
+
+  if (runtimeCapabilities.runtimeKind !== 'openai') {
     return false;
   }
 

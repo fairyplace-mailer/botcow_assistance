@@ -46,10 +46,12 @@ export type ResponsesRuntimeCapabilities = {
   sdkVersion: string | null;
 };
 
+const OPENAI_SDK_VERSION = '6.16.0';
+
 const RESPONSES_RUNTIME_CAPABILITIES: ResponsesRuntimeCapabilities = {
   path: 'openai.responses.create',
-  reasoning: 'unknown',
-  sdkVersion: '6.16.0',
+  reasoning: OPENAI_SDK_VERSION === '6.16.0' ? 'supported' : 'unknown',
+  sdkVersion: OPENAI_SDK_VERSION,
 };
 
 const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<ReasoningEffort>>> = {

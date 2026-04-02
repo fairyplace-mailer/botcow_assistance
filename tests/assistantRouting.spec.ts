@@ -25,12 +25,16 @@ describe('assistant routing propagation', () => {
     path: 'openai.responses.create',
     reasoning: 'supported',
     sdkVersion: OPENAI_SDK_VERSION,
+    apiBaseUrl: 'https://api.openai.com/v1',
+    runtimeKind: 'openai',
   };
 
   const runtimeUnsupported: ResponsesRuntimeCapabilities = {
     path: 'openai.responses.create',
     reasoning: 'unsupported',
     sdkVersion: OPENAI_SDK_VERSION,
+    apiBaseUrl: 'https://api.openai.com/v1',
+    runtimeKind: 'openai',
   };
 
   beforeEach(() => {
@@ -116,6 +120,8 @@ describe('assistant routing propagation', () => {
         sentReasoningEffort: 'high',
         reasoningSuppressedReason: null,
         runtimeReasoningSupport: 'supported',
+        runtimeKind: 'openai',
+        apiBaseUrl: 'https://api.openai.com/v1',
         payloadKeys: expect.arrayContaining(['reasoning']),
       }),
     );

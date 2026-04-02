@@ -76,14 +76,14 @@ describe('assistant routing propagation', () => {
     await runAssistant(
       [{ role: 'user', content: 'hello' }],
       {
-        model: 'gpt-5.4-mini',
+        model: 'gpt-4.1-mini',
         reasoning: { effort: 'xhigh' },
       },
     );
 
     expect(create).toHaveBeenCalledTimes(1);
     const request = create.mock.calls[0][0];
-    expect(request.model).toBe('gpt-5.4-mini');
+    expect(request.model).toBe('gpt-4.1-mini');
     expect(Object.prototype.hasOwnProperty.call(request, 'reasoning')).toBe(false);
   });
 });

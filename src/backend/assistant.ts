@@ -263,6 +263,13 @@ export async function runAssistant(
       sdkVersion: runtimeCapabilities.sdkVersion,
       runtimeReasoningSupport: runtimeCapabilities.reasoning,
       previous_response_id: request.previous_response_id ?? null,
+      hasReasoningKey: Object.prototype.hasOwnProperty.call(request, 'reasoning'),
+      reasoningPayload: Object.prototype.hasOwnProperty.call(request, 'reasoning')
+        ? request.reasoning
+        : null,
+      toolCount: Array.isArray(request.tools) ? request.tools.length : 0,
+      inputItemCount: Array.isArray(request.input) ? request.input.length : null,
+      hasInstructions: typeof request.instructions === 'string' && request.instructions.length > 0,
     });
 
     const response = await openai.responses.create(request);

@@ -16,13 +16,19 @@ defaultRepo: fairyplace-mailer/botcow_assistance
 
 repos:
   - repo: fairyplace-mailer/botcow_assistance
-    defaultBranch: botcow-prevectus
+    defaultBranch: provecta
     vercel:
       projectIdEnv: VERCEL_PROJECT_ID_BOTCOW
       teamIdEnv: VERCEL_TEAM_ID
 
   - repo: fairyplace-mailer/botcat_chat
     defaultBranch: feature/ui
+    vercel:
+      projectIdEnv: VERCEL_PROJECT_ID_BOTCAT
+      teamIdEnv: VERCEL_TEAM_ID
+
+  - repo: fairyplace-mailer/botcat
+    defaultBranch: dev
     vercel:
       projectIdEnv: VERCEL_PROJECT_ID_BOTCAT
       teamIdEnv: VERCEL_TEAM_ID

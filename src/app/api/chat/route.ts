@@ -130,7 +130,7 @@ export async function POST(req: Request) {
 — Если в запросе присутствует блок CONTEXT/SOURCES, воспринимай его как актуальную базу знаний.
 — Если ответ можно вывести из контекста — опирайся на него; не выдумывай API/поведение.
 — Если контекст недостаточен — прямо скажи, что в базе знаний нет ответа, и предложи уточнить вопрос.
-— При ссылках на документацию предпочитай указывать Source URL из контекста.
+— При ссылках на документацию предпочитай указывать Source URLs when referencing docs.
 
 Дополнение про использование примеров из контекста при написании кода:
 — Если в CONTEXT/SOURCES есть релевантные фрагменты кода или примеры API, используй их как первичный источник истины (имена, сигнатуры, порядок вызовов).
@@ -171,8 +171,11 @@ export async function POST(req: Request) {
     ? [systemMessage, ragMessage, ...messages]
     : [systemMessage, ...messages];
 
-  // выбор модели
   const routing = chooseModel(fullMessages);
+  const routingDebug =
+    process.env.NODE_ENV !== 'production' && 'debug' in routing
+      ? routing.debug
+      : undefined;
 
   try {
     const result = await runAssistant(fullMessages, routing);
@@ -187,6 +190,8 @@ export async function POST(req: Request) {
       durationMs: ms,
       model: routing.model,
       modelReason: routing.reason,
+      reasoningEffort: routing.reasoning?.effort ?? null,
+      ...(routingDebug !== undefined ? { routingDebug } : {}),
     });
 
     if (!completion) {
@@ -206,8 +211,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // ВАЖНО: возвращаем именно "сырое" completion — как раньше,
-    // чтобы фронт работал как до всех изменений
     return NextResponse.json(completion);
   } catch (error: any) {
     const ms = Date.now() - startedAt;

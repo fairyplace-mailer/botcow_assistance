@@ -115,7 +115,7 @@ describe('assistant routing propagation', () => {
         requestedReasoningEffort: 'high',
         sentReasoningEffort: 'high',
         reasoningSuppressedReason: null,
-        sdkVersion: expect.anything(),
+        sdkVersion: expect.any(String),
         runtimeReasoningSupport: 'supported',
         payloadKeys: expect.arrayContaining(['reasoning']),
       }),

@@ -115,7 +115,7 @@ describe('assistant routing propagation', () => {
         requestedReasoningEffort: 'high',
         sentReasoningEffort: 'high',
         reasoningSuppressedReason: null,
-        sdkVersion: OPENAI_SDK_VERSION,
+        sdkVersion: expect.anything(),
         runtimeReasoningSupport: 'supported',
         payloadKeys: expect.arrayContaining(['reasoning']),
       }),

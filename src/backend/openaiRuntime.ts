@@ -11,7 +11,17 @@ export type ResponsesRuntimeCapabilities = {
   sdkVersion: string | null;
 };
 
-export const OPENAI_SDK_VERSION = '6.16.0';
+function readPackageVersion(): string | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pkg = require('openai/package.json') as { version?: unknown };
+    return typeof pkg?.version === 'string' ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+export const OPENAI_SDK_VERSION = readPackageVersion();
 
 export const DEFAULT_RESPONSES_RUNTIME_CAPABILITIES: ResponsesRuntimeCapabilities = {
   path: 'openai.responses.create',

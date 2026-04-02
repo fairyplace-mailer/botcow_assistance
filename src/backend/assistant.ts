@@ -263,6 +263,8 @@ export async function runAssistant(
       payloadKeys: Object.keys(request).sort(),
       sdkVersion: runtimeCapabilities.sdkVersion,
       runtimeReasoningSupport: runtimeCapabilities.reasoning,
+      runtimeKind: runtimeCapabilities.runtimeKind,
+      apiBaseUrl: runtimeCapabilities.apiBaseUrl,
       previous_response_id: request.previous_response_id ?? null,
       hasReasoningKey: Object.prototype.hasOwnProperty.call(request, 'reasoning'),
       reasoningPayload: Object.prototype.hasOwnProperty.call(request, 'reasoning')

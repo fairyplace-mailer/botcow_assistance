@@ -34,7 +34,7 @@ type InputMessageItem = {
 };
 
 export type ExtractedFunctionCall = {
-  id?: string;
+  id?: string | undefined;
   call_id: string;
   name: string;
   arguments: string;

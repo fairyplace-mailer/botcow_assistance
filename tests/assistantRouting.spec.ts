@@ -112,16 +112,17 @@ describe('assistant routing propagation', () => {
         methodWrapper: 'openai.responses.create',
         model: 'gpt-5.4',
         requestedReasoningEffort: 'high',
-        sentReasoningEffort: null,
-        reasoningSuppressedReason: 'sdk_contract_unknown',
+        sentReasoningEffort: 'high',
+        reasoningSuppressedReason: null,
         sdkVersion: '6.16.0',
-        runtimeReasoningSupport: 'unknown',
+        runtimeReasoningSupport: 'supported',
+        payloadKeys: expect.arrayContaining(['reasoning']),
       }),
     );
 
     const request = create.mock.calls[0][0];
     expect(request.model).toBe('gpt-5.4');
-    expect(Object.prototype.hasOwnProperty.call(request, 'reasoning')).toBe(false);
+    expect(request.reasoning).toEqual({ effort: 'high' });
   });
 
   test('regression: unsupported reasoning path no longer builds payload with reasoning key', () => {

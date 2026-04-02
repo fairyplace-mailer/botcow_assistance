@@ -17,8 +17,16 @@ import {
   extractFunctionCalls,
   validateResponsesInput,
 } from '../src/backend/responses';
-import { runAssistant } from '../src/backend/assistant';
+import {
+  buildResponsesRequest,
+  getResponsesRuntimeCapabilities,
+  resolveReasoningDecision,
+  runAssistant,
+  supportsReasoning,
+  type ResponsesRuntimeCapabilities,
+} from '../src/backend/assistant';
 import { getOpenAIClient } from '../src/backend/openai';
+import { logEvent } from '../src/backend/log';
 import { handleToolCall } from '../src/backend/tools';
 
 describe('responses tool loop regressions', () => {
@@ -247,5 +255,164 @@ describe('responses tool loop regressions', () => {
         content: [{ type: 'input_text', text: 'hello' }],
       },
     ]);
+  });
+
+  test('supportsReasoning returns true only for supported model and runtime path', () => {
+    const supportedRuntime: ResponsesRuntimeCapabilities = {
+      path: 'openai.responses.create',
+      reasoning: 'supported',
+      sdkVersion: '6.16.0',
+    };
+
+    expect(supportsReasoning('gpt-5.4', supportedRuntime)).toBe(true);
+    expect(supportsReasoning('gpt-5.4-mini', supportedRuntime)).toBe(false);
+    expect(supportsReasoning('gpt-5.4-nano', supportedRuntime)).toBe(false);
+    expect(supportsReasoning('gpt-5.4', getResponsesRuntimeCapabilities())).toBe(false);
+  });
+
+  test('responses.create is called with reasoning when model and runtime support it', () => {
+    const built = buildResponsesRequest(
+      [{ role: 'user', content: 'hello' }],
+      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
+      {
+        path: 'openai.responses.create',
+        reasoning: 'supported',
+        sdkVersion: '6.16.0',
+      },
+    );
+
+    expect(built.reasoningDecision).toEqual({
+      requestedReasoningEffort: 'low',
+      sentReasoningEffort: 'low',
+      reasoningSuppressedReason: null,
+    });
+    expect(built.request.reasoning).toEqual({ effort: 'low' });
+  });
+
+  test('responses.create is called without reasoning when model is not supported', () => {
+    const built = buildResponsesRequest(
+      [{ role: 'user', content: 'hello' }],
+      { model: 'gpt-5.4-mini', reasoning: { effort: 'low' } },
+      {
+        path: 'openai.responses.create',
+        reasoning: 'supported',
+        sdkVersion: '6.16.0',
+      },
+    );
+
+    expect(built.reasoningDecision).toEqual({
+      requestedReasoningEffort: 'low',
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'model_not_supported',
+    });
+    expect('reasoning' in built.request).toBe(false);
+  });
+
+  test('responses.create is called without reasoning when runtime is not confirmed', () => {
+    const built = buildResponsesRequest(
+      [{ role: 'user', content: 'hello' }],
+      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
+      {
+        path: 'openai.responses.create',
+        reasoning: 'unknown',
+        sdkVersion: '6.16.0',
+      },
+    );
+
+    expect(built.reasoningDecision).toEqual({
+      requestedReasoningEffort: 'low',
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'sdk_contract_unknown',
+    });
+    expect('reasoning' in built.request).toBe(false);
+  });
+
+  test('resolveReasoningDecision returns runtime_not_supported for unsupported path capability', () => {
+    expect(
+      resolveReasoningDecision(
+        { model: 'gpt-5.4', reasoning: { effort: 'low' } },
+        {
+          path: 'openai.responses.create',
+          reasoning: 'unsupported',
+          sdkVersion: '6.16.0',
+        },
+      ),
+    ).toEqual({
+      requestedReasoningEffort: 'low',
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'runtime_not_supported',
+    });
+  });
+
+  test('logging includes model requested effort sent effort and suppression reason', async () => {
+    const create = jest.fn().mockResolvedValueOnce({
+      id: 'resp_log_1',
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'done' }],
+        },
+      ],
+      output_text: 'done',
+    });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({
+      responses: { create },
+    });
+
+    await runAssistant([{ role: 'user', content: 'hello' }], {
+      model: 'gpt-5.4',
+      reasoning: { effort: 'low' },
+    });
+
+    expect(logEvent).toHaveBeenCalledWith(
+      'openai-request',
+      expect.objectContaining({
+        model: 'gpt-5.4',
+        requestedReasoningEffort: 'low',
+        sentReasoningEffort: null,
+        reasoningSuppressedReason: 'sdk_contract_unknown',
+        payloadKeys: expect.not.arrayContaining(['reasoning']),
+      }),
+    );
+  });
+
+  test('regression: unsupported runtime no longer sends reasoning key', async () => {
+    const create = jest
+      .fn()
+      .mockImplementationOnce(async (payload: Record<string, unknown>) => {
+        if ('reasoning' in payload) {
+          throw new Error("400 Unknown parameter: 'reasoning'");
+        }
+
+        return {
+          id: 'resp_regression_1',
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              content: [{ type: 'output_text', text: 'safe' }],
+            },
+          ],
+          output_text: 'safe',
+        };
+      });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({
+      responses: { create },
+    });
+
+    const result = await runAssistant([{ role: 'user', content: 'hello' }], {
+      model: 'gpt-5.4',
+      reasoning: { effort: 'low' },
+    });
+
+    expect(result.response?.id).toBe('resp_regression_1');
+    expect(create).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        reasoning: expect.anything(),
+      }),
+    );
   });
 });

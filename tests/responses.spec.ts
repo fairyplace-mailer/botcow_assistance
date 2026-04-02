@@ -267,7 +267,7 @@ describe('responses tool loop regressions', () => {
     expect(supportsReasoning('gpt-5.4', supportedRuntime)).toBe(true);
     expect(supportsReasoning('gpt-5.4-mini', supportedRuntime)).toBe(false);
     expect(supportsReasoning('gpt-5.4-nano', supportedRuntime)).toBe(false);
-    expect(supportsReasoning('gpt-5.4', getResponsesRuntimeCapabilities())).toBe(false);
+    expect(supportsReasoning('gpt-5.4', getResponsesRuntimeCapabilities())).toBe(true);
   });
 
   test('responses.create is called with reasoning when model and runtime support it', () => {
@@ -371,19 +371,19 @@ describe('responses tool loop regressions', () => {
       expect.objectContaining({
         model: 'gpt-5.4',
         requestedReasoningEffort: 'low',
-        sentReasoningEffort: null,
-        reasoningSuppressedReason: 'sdk_contract_unknown',
-        payloadKeys: expect.not.arrayContaining(['reasoning']),
+        sentReasoningEffort: 'low',
+        reasoningSuppressedReason: null,
+        payloadKeys: expect.arrayContaining(['reasoning']),
       }),
     );
   });
 
-  test('regression: unsupported runtime no longer sends reasoning key', async () => {
+  test('regression: supported runtime sends reasoning and request does not fail', async () => {
     const create = jest
       .fn()
       .mockImplementationOnce(async (payload: Record<string, unknown>) => {
-        if ('reasoning' in payload) {
-          throw new Error("400 Unknown parameter: 'reasoning'");
+        if (!('reasoning' in payload)) {
+          throw new Error("expected reasoning to be sent for supported runtime");
         }
 
         return {
@@ -410,8 +410,8 @@ describe('responses tool loop regressions', () => {
 
     expect(result.response?.id).toBe('resp_regression_1');
     expect(create).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        reasoning: expect.anything(),
+      expect.objectContaining({
+        reasoning: { effort: 'low' },
       }),
     );
   });

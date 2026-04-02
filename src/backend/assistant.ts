@@ -262,7 +262,8 @@ export async function runAssistant(
   const openai = getOpenAIClient();
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const reasoningDecision = resolveReasoningDecision(routing, getResponsesRuntimeCapabilities());
+    const runtimeCapabilities = getResponsesRuntimeCapabilities();
+    const reasoningDecision = resolveReasoningDecision(routing, runtimeCapabilities);
     lastReasoningDecision = reasoningDecision;
 
     const request: OpenAI.Responses.ResponseCreateParams = {
@@ -284,15 +285,15 @@ export async function runAssistant(
     }
 
     await logEvent('openai-request', {
-      path: 'openai.responses.create',
+      path: runtimeCapabilities.path,
       methodWrapper: 'openai.responses.create',
       model: request.model,
       requestedReasoningEffort: reasoningDecision.requestedReasoningEffort,
       sentReasoningEffort: reasoningDecision.sentReasoningEffort,
       reasoningSuppressedReason: reasoningDecision.reasoningSuppressedReason,
       payloadKeys: Object.keys(request).sort(),
-      sdkVersion: getResponsesRuntimeCapabilities().sdkVersion,
-      runtimeReasoningSupport: getResponsesRuntimeCapabilities().reasoning,
+      sdkVersion: runtimeCapabilities.sdkVersion,
+      runtimeReasoningSupport: runtimeCapabilities.reasoning,
       previous_response_id: request.previous_response_id ?? null,
     });
 

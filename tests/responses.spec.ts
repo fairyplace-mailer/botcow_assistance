@@ -31,8 +31,15 @@ import { logEvent } from '../src/backend/log';
 import { handleToolCall } from '../src/backend/tools';
 
 describe('responses tool loop regressions', () => {
+  const originalBaseUrl = process.env.OPENAI_BASE_URL;
+
   beforeEach(() => {
     jest.resetAllMocks();
+    process.env.OPENAI_BASE_URL = undefined;
+  });
+
+  afterAll(() => {
+    process.env.OPENAI_BASE_URL = originalBaseUrl;
   });
 
   test('one function_call produces one function_call_output with same call_id', () => {
@@ -263,6 +270,8 @@ describe('responses tool loop regressions', () => {
       path: 'openai.responses.create',
       reasoning: 'supported',
       sdkVersion: OPENAI_SDK_VERSION,
+      apiBaseUrl: 'https://api.openai.com/v1',
+      runtimeKind: 'openai',
     };
 
     const currentRuntime = getResponsesRuntimeCapabilities();
@@ -281,6 +290,8 @@ describe('responses tool loop regressions', () => {
         path: 'openai.responses.create',
         reasoning: 'supported',
         sdkVersion: OPENAI_SDK_VERSION,
+        apiBaseUrl: 'https://api.openai.com/v1',
+        runtimeKind: 'openai',
       },
     );
 
@@ -300,6 +311,8 @@ describe('responses tool loop regressions', () => {
         path: 'openai.responses.create',
         reasoning: 'supported',
         sdkVersion: OPENAI_SDK_VERSION,
+        apiBaseUrl: 'https://api.openai.com/v1',
+        runtimeKind: 'openai',
       },
     );
 
@@ -315,6 +328,8 @@ describe('responses tool loop regressions', () => {
         path: 'openai.responses.create',
         reasoning: 'supported',
         sdkVersion: OPENAI_SDK_VERSION,
+        apiBaseUrl: 'https://api.openai.com/v1',
+        runtimeKind: 'openai',
       },
     );
 
@@ -334,6 +349,8 @@ describe('responses tool loop regressions', () => {
         path: 'openai.responses.create',
         reasoning: 'unknown',
         sdkVersion: OPENAI_SDK_VERSION,
+        apiBaseUrl: 'https://gateway.example.com/v1',
+        runtimeKind: 'custom',
       },
     );
 
@@ -353,6 +370,8 @@ describe('responses tool loop regressions', () => {
         path: 'openai.responses.create',
         reasoning: 'unsupported',
         sdkVersion: OPENAI_SDK_VERSION,
+        apiBaseUrl: 'https://api.openai.com/v1',
+        runtimeKind: 'openai',
       },
     );
 
@@ -368,6 +387,8 @@ describe('responses tool loop regressions', () => {
         path: 'openai.responses.create',
         reasoning: 'supported',
         sdkVersion: OPENAI_SDK_VERSION,
+        apiBaseUrl: 'https://api.openai.com/v1',
+        runtimeKind: 'openai',
       },
     );
 
@@ -388,6 +409,8 @@ describe('responses tool loop regressions', () => {
           path: 'openai.responses.create',
           reasoning: 'unsupported',
           sdkVersion: OPENAI_SDK_VERSION,
+          apiBaseUrl: 'https://api.openai.com/v1',
+          runtimeKind: 'openai',
         },
       ),
     ).toEqual({
@@ -438,6 +461,8 @@ describe('responses tool loop regressions', () => {
         hasReasoningKey: expectedHasReasoningKey,
         reasoningPayload: expectedReasoningPayload,
         payloadKeys,
+        runtimeKind: runtime.runtimeKind,
+        apiBaseUrl: runtime.apiBaseUrl,
       }),
     );
   });
@@ -450,6 +475,8 @@ describe('responses tool loop regressions', () => {
         path: 'openai.responses.create',
         reasoning: 'unsupported',
         sdkVersion: OPENAI_SDK_VERSION,
+        apiBaseUrl: 'https://api.openai.com/v1',
+        runtimeKind: 'openai',
       },
     );
 
@@ -464,5 +491,32 @@ describe('responses tool loop regressions', () => {
       }),
     );
     expect('reasoning' in built.request).toBe(false);
+  });
+
+  test('custom base url downgrades runtime to unknown and suppresses reasoning', () => {
+    process.env.OPENAI_BASE_URL = 'https://gateway.example.com/v1';
+
+    const runtime = getResponsesRuntimeCapabilities();
+
+    expect(runtime).toEqual({
+      path: 'openai.responses.create',
+      reasoning: 'unknown',
+      sdkVersion: OPENAI_SDK_VERSION,
+      apiBaseUrl: 'https://gateway.example.com/v1',
+      runtimeKind: 'custom',
+    });
+
+    const built = buildResponsesRequest(
+      [{ role: 'user', content: 'hello' }],
+      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
+      runtime,
+    );
+
+    expect(built.reasoningDecision).toEqual({
+      requestedReasoningEffort: 'low',
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'sdk_contract_unknown',
+    });
+    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
   });
 });

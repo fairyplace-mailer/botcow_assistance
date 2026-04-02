@@ -129,7 +129,7 @@ describe('assistant routing propagation', () => {
         sdkVersion: expect.anything(),
       }),
     );
-    expect(['string', 'object']).toContain(typeof requestLogPayload.sdkVersion);
+    expect(requestLogPayload.sdkVersion === null || typeof requestLogPayload.sdkVersion === 'string').toBe(true);
 
     const request = create.mock.calls[0][0];
     expect(request.model).toBe('gpt-5.4');

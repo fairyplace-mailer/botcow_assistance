@@ -5,6 +5,8 @@ import {
   triggerDeploy,
   redeploy,
   type VercelTarget,
+  listDeployments,
+  getRuntimeLogs,
 } from '../vercel';
 import {
   getVercelContextFromRepo,
@@ -44,13 +46,38 @@ export interface VercelDiagnoseDeploymentArgs {
   timeWindowMinutes?: number;
 }
 
+export interface VercelListDeploymentsArgs {
+  repo?: string;
+  branch?: string;
+  gitSha?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  target?: VercelTarget;
+}
+
+export interface VercelGetRuntimeLogsArgs {
+  repo?: string;
+  deploymentId: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface VercelSearchRuntimeLogsArgs extends VercelGetRuntimeLogsArgs {
+  query?: string;
+  level?: 'info' | 'warn' | 'error';
+  route?: string;
+  functionName?: string;
+}
+
 function getVercelCtxFromRepo(repo?: string) {
   if (!repo) return undefined;
 
   const ctx = getVercelContextFromRepo(repo);
   const cfg = getRepoConfig(repo);
 
-  // Note: cfg is guaranteed here because getVercelContextFromRepo(repo) throws if repo isn't configured.
   const gitRef = cfg?.defaultBranch;
 
   return {
@@ -60,15 +87,11 @@ function getVercelCtxFromRepo(repo?: string) {
 }
 
 function requirePreviewTarget(target?: VercelTarget): VercelTarget {
-  // Default is preview; production is explicitly disabled.
   if (!target) return 'preview';
   if (target === 'preview') return 'preview';
   throw new Error('Production deploys are disabled (preview only)');
 }
 
-/**
- * JSON-tools schemas.
- */
 export const vercelToolsSchemas = [
   {
     type: 'function',
@@ -94,6 +117,67 @@ export const vercelToolsSchemas = [
           },
         },
         required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'vercel_list_deployments',
+      description: 'List Vercel preview deployments with optional filters by repo, branch, git sha, and time window.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string' },
+          branch: { type: 'string' },
+          gitSha: { type: 'string' },
+          since: { type: 'string', description: 'ISO timestamp lower bound.' },
+          until: { type: 'string', description: 'ISO timestamp upper bound.' },
+          limit: { type: 'number' },
+          target: { type: 'string', enum: ['preview'] },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'vercel_get_runtime_logs',
+      description: 'Get Vercel runtime logs for a deploymentId with time range and pagination.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string' },
+          deploymentId: { type: 'string' },
+          since: { type: 'string', description: 'ISO timestamp lower bound.' },
+          until: { type: 'string', description: 'ISO timestamp upper bound.' },
+          limit: { type: 'number' },
+          cursor: { type: 'string' },
+        },
+        required: ['deploymentId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'vercel_search_runtime_logs',
+      description: 'Search Vercel runtime logs by text, level, route, or function name.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string' },
+          deploymentId: { type: 'string' },
+          query: { type: 'string' },
+          level: { type: 'string', enum: ['info', 'warn', 'error'] },
+          route: { type: 'string' },
+          functionName: { type: 'string' },
+          since: { type: 'string', description: 'ISO timestamp lower bound.' },
+          until: { type: 'string', description: 'ISO timestamp upper bound.' },
+          limit: { type: 'number' },
+          cursor: { type: 'string' },
+        },
+        required: ['deploymentId'],
       },
     },
   },
@@ -214,9 +298,6 @@ export const vercelToolsSchemas = [
   },
 ] as const;
 
-/**
- * Tool handlers.
- */
 export const vercelToolHandlers = {
   async vercel_get_latest_deployments(args: VercelGetLatestDeploymentsArgs) {
     const limit = args.limit ?? 5;
@@ -228,6 +309,66 @@ export const vercelToolHandlers = {
     return {
       target: env,
       deployments: (Array.isArray(deployments) ? deployments : []).slice(0, limit),
+    };
+  },
+
+  async vercel_list_deployments(args: VercelListDeploymentsArgs) {
+    const target: VercelTarget = requirePreviewTarget(args.target);
+    const ctx = getVercelCtxFromRepo(args.repo);
+    const deployments = await listDeployments({ ...args, target }, ctx);
+
+    return {
+      target,
+      count: deployments.length,
+      deployments,
+    };
+  },
+
+  async vercel_get_runtime_logs(args: VercelGetRuntimeLogsArgs) {
+    const ctx = getVercelCtxFromRepo(args.repo);
+    return getRuntimeLogs(
+      {
+        deploymentId: args.deploymentId,
+        ...(args.since ? { since: args.since } : {}),
+        ...(args.until ? { until: args.until } : {}),
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(args.cursor ? { cursor: args.cursor } : {}),
+      },
+      ctx,
+    );
+  },
+
+  async vercel_search_runtime_logs(args: VercelSearchRuntimeLogsArgs) {
+    const ctx = getVercelCtxFromRepo(args.repo);
+    const result = await getRuntimeLogs(
+      {
+        deploymentId: args.deploymentId,
+        ...(args.since ? { since: args.since } : {}),
+        ...(args.until ? { until: args.until } : {}),
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(args.cursor ? { cursor: args.cursor } : {}),
+      },
+      ctx,
+    );
+
+    const query = args.query?.toLowerCase();
+    const route = args.route?.toLowerCase();
+    const functionName = args.functionName?.toLowerCase();
+    const level = args.level?.toLowerCase();
+
+    const logs = result.logs.filter((log) => {
+      if (query && !(log.message ?? '').toLowerCase().includes(query)) return false;
+      if (level && (log.level ?? '').toLowerCase() !== level) return false;
+      if (route && !((log.route ?? '').toLowerCase().includes(route))) return false;
+      if (functionName && !((log.functionName ?? '').toLowerCase().includes(functionName))) return false;
+      return true;
+    });
+
+    return {
+      deploymentId: result.deploymentId,
+      count: logs.length,
+      logs,
+      pagination: result.pagination,
     };
   },
 

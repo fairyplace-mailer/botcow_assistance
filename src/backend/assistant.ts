@@ -1,6 +1,6 @@
 import { getOpenAIClient } from './openai';
 import { getToolsSchemas, handleToolCall } from './tools';
-import type { ModelRoutingDecision } from './modelRouter';
+import type { ModelId, ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import type OpenAI from 'openai';
 import type {
   Response,
@@ -32,6 +32,19 @@ interface AssistantResult {
     error?: string;
   }>;
 }
+
+export type ReasoningDecision = {
+  requestedReasoningEffort: ReasoningEffort | null;
+  sentReasoningEffort: ReasoningEffort | null;
+  reasoningSuppressedReason: 'model_not_supported' | 'runtime_not_supported' | 'sdk_contract_unknown' | null;
+};
+
+const REASONING_CAPABLE_MODELS: ReadonlySet<ModelId> = new Set(['gpt-5.4']);
+const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<ReasoningEffort>>> = {
+  'gpt-5.4': new Set(['low', 'medium', 'high', 'xhigh']),
+  'gpt-5.4-mini': new Set(),
+  'gpt-5.4-nano': new Set(),
+};
 
 function normalizeTextContent(content: unknown): string {
   if (typeof content === 'string') {
@@ -113,6 +126,75 @@ function getResponseFunctionCalls(output: ResponseOutputItem[] | undefined) {
   );
 }
 
+function supportsReasoning(model: ModelId): boolean {
+  return REASONING_CAPABLE_MODELS.has(model);
+}
+
+function resolveReasoningDecision(
+  routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
+): ReasoningDecision {
+  const requestedReasoningEffort = routing.reasoning?.effort ?? null;
+
+  if (!requestedReasoningEffort) {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: null,
+    };
+  }
+
+  if (!supportsReasoning(routing.model)) {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'model_not_supported',
+    };
+  }
+
+  const allowedEfforts = REASONING_ALLOWED_EFFORTS[routing.model];
+
+  if (!allowedEfforts?.has(requestedReasoningEffort)) {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'sdk_contract_unknown',
+    };
+  }
+
+  return {
+    requestedReasoningEffort,
+    sentReasoningEffort: requestedReasoningEffort,
+    reasoningSuppressedReason: null,
+  };
+}
+
+export function buildResponsesRequest(
+  messages: AssistantMessage[],
+  routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
+): {
+  request: OpenAI.Responses.ResponseCreateParams;
+  reasoningDecision: ReasoningDecision;
+} {
+  const built = buildResponsesInput(messages);
+  const reasoningDecision = resolveReasoningDecision(routing);
+
+  const request: OpenAI.Responses.ResponseCreateParams = {
+    model: routing.model,
+    input: built.input,
+    tools: getToolsSchemas() as OpenAI.Responses.Tool[],
+  };
+
+  if (built.instructions) {
+    request.instructions = built.instructions;
+  }
+
+  if (reasoningDecision.sentReasoningEffort) {
+    request.reasoning = { effort: reasoningDecision.sentReasoningEffort };
+  }
+
+  return { request, reasoningDecision };
+}
+
 /**
  * Ассистент с поддержкой tools (GitHub + Vercel).
  */
@@ -129,22 +211,7 @@ export async function runAssistant(
   const openai = getOpenAIClient();
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const built = buildResponsesInput(messages);
-
-    const request: OpenAI.Responses.ResponseCreateParams = {
-      model: routing.model,
-      input: built.input,
-      tools: getToolsSchemas() as OpenAI.Responses.Tool[],
-    };
-
-    if (built.instructions) {
-      request.instructions = built.instructions;
-    }
-
-    if (routing.reasoning) {
-      request.reasoning = routing.reasoning;
-    }
-
+    const { request } = buildResponsesRequest(messages, routing);
     const response = await openai.responses.create(request);
 
     lastResponse = response;

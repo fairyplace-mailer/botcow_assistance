@@ -2,7 +2,11 @@ import { getOpenAIClient } from './openai';
 import { getToolsSchemas, handleToolCall } from './tools';
 import type { ModelId, ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import type OpenAI from 'openai';
-import type { Response } from 'openai/resources/responses/responses';
+import type {
+  Response,
+  ResponseStreamEvent,
+} from 'openai/resources/responses/responses';
+import type { Stream } from 'openai/streaming';
 import {
   buildResponsesInput,
   getResponseFunctionCalls,
@@ -186,6 +190,12 @@ function toResponseTools(tools: ReturnType<typeof getToolsSchemas> | undefined):
   });
 }
 
+function isResponseResult(
+  value: Response | Stream<ResponseStreamEvent>,
+): value is Response {
+  return !!value && typeof value === 'object' && 'output' in value;
+}
+
 export function buildResponsesRequest(
   messages: AssistantMessage[],
   routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
@@ -252,6 +262,10 @@ export async function runAssistant(
     });
 
     const response = await openai.responses.create(request);
+
+    if (!isResponseResult(response)) {
+      throw new Error('Streaming Responses API is not supported in assistant runtime');
+    }
 
     lastResponse = response;
 

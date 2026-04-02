@@ -12,6 +12,28 @@ export type AssistantMessage = {
   name?: string;
 };
 
+type ResponseOutputTextPart = {
+  type: 'output_text';
+  text: string;
+};
+
+type ResponseRefusalPart = {
+  type: 'refusal';
+};
+
+function hasOutputText(part: unknown): part is ResponseOutputTextPart {
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'output_text' &&
+    typeof (part as { text?: unknown }).text === 'string'
+  );
+}
+
+function hasRefusal(part: unknown): part is ResponseRefusalPart {
+  return !!part && typeof part === 'object' && (part as { type?: unknown }).type === 'refusal';
+}
+
 export function normalizeTextContent(content: unknown): string {
   if (typeof content === 'string') {
     return content;
@@ -118,12 +140,12 @@ export function extractResponseText(response: Response | null | undefined): stri
 
     const text = item.content
       .map((part) => {
-        if (typeof part?.text === 'string') {
+        if (hasOutputText(part)) {
           return part.text;
         }
 
-        if (typeof (part as { output_text?: unknown })?.output_text === 'string') {
-          return String((part as { output_text?: unknown }).output_text);
+        if (hasRefusal(part)) {
+          return '';
         }
 
         return '';

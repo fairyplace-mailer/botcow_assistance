@@ -136,14 +136,49 @@ export function resolveReasoningDecision(
   };
 }
 
-function toResponseTools(tools: ReturnType<typeof getToolsSchemas>): OpenAI.Responses.Tool[] {
-  return tools.map((tool) => ({
-    type: 'function',
-    name: tool.function.name,
-    description: tool.function.description,
-    parameters: tool.function.parameters,
-    strict: false,
-  }));
+type LegacyToolSchema = {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+};
+
+function isLegacyToolSchema(tool: unknown): tool is LegacyToolSchema {
+  if (!tool || typeof tool !== 'object') {
+    return false;
+  }
+
+  const maybeTool = tool as Record<string, unknown>;
+  const maybeFunction = maybeTool.function;
+
+  return (
+    maybeTool.type === 'function' &&
+    !!maybeFunction &&
+    typeof maybeFunction === 'object' &&
+    typeof (maybeFunction as Record<string, unknown>).name === 'string'
+  );
+}
+
+function toResponseTools(tools: ReturnType<typeof getToolsSchemas> | undefined): OpenAI.Responses.Tool[] {
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return [];
+  }
+
+  return tools.map((tool) => {
+    if (isLegacyToolSchema(tool)) {
+      return {
+        type: 'function',
+        name: tool.function.name,
+        description: tool.function.description,
+        parameters: tool.function.parameters,
+        strict: false,
+      } satisfies OpenAI.Responses.FunctionTool;
+    }
+
+    return tool;
+  });
 }
 
 export function buildResponsesRequest(

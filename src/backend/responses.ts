@@ -21,6 +21,18 @@ type ResponseRefusalPart = {
   type: 'refusal';
 };
 
+type InputTextPart = {
+  type: 'input_text';
+  text: string;
+};
+
+type InputMessageRole = 'user' | 'assistant' | 'system' | 'developer';
+
+type InputMessageItem = {
+  role: InputMessageRole;
+  content: InputTextPart[];
+};
+
 export type ExtractedFunctionCall = {
   id?: string;
   call_id: string;
@@ -72,8 +84,15 @@ export function normalizeTextContent(content: unknown): string {
   return '';
 }
 
-function isInputMessageItem(item: ResponseInputItem): boolean {
-  return 'role' in item;
+function isMessageInputItem(item: ResponseInputItem): item is InputMessageItem {
+  return (
+    !!item &&
+    typeof item === 'object' &&
+    'role' in item &&
+    typeof (item as { role?: unknown }).role === 'string' &&
+    'content' in item &&
+    Array.isArray((item as { content?: unknown }).content)
+  );
 }
 
 export function extractFunctionCalls(output: ResponseOutputItem[] | undefined): ExtractedFunctionCall[] {
@@ -159,7 +178,7 @@ export function validateResponsesInput(items: ResponseInputItem[]): void {
       continue;
     }
 
-    if (!isInputMessageItem(item)) {
+    if (!isMessageInputItem(item)) {
       throw new Error('Responses payload validation failed: unsupported input item shape');
     }
 
@@ -177,6 +196,10 @@ export function validateResponsesInput(items: ResponseInputItem[]): void {
           `Responses payload validation failed: unsupported input content type ${(contentItem as { type?: unknown }).type ?? 'unknown'}`,
         );
       }
+
+      if (typeof (contentItem as { text?: unknown }).text !== 'string') {
+        throw new Error('Responses payload validation failed: input_text.text must be a string');
+      }
     }
   }
 }
@@ -191,18 +214,27 @@ export function buildResponsesInput(messages: AssistantMessage[]): {
     .filter(Boolean)
     .join('\n\n');
 
-  const input: ResponseInputItem[] = messages
-    .filter((message) => message.role !== 'system')
-    .map((message) => {
-      if (message.role === 'tool') {
-        return {
+  const input: ResponseInputItem[] = messages.flatMap((message) => {
+    if (message.role === 'system') {
+      return [];
+    }
+
+    if (message.role === 'tool') {
+      return [
+        {
           type: 'function_call_output',
           call_id: message.tool_call_id ?? '',
           output: normalizeTextContent(message.content),
-        } as ResponseInputItem;
-      }
+        } as ResponseInputItem,
+      ];
+    }
 
-      return {
+    if (message.role === 'assistant') {
+      return [];
+    }
+
+    return [
+      {
         role: message.role,
         content: [
           {
@@ -210,8 +242,9 @@ export function buildResponsesInput(messages: AssistantMessage[]): {
             text: normalizeTextContent(message.content),
           },
         ],
-      } as ResponseInputItem;
-    });
+      } as ResponseInputItem,
+    ];
+  });
 
   validateResponsesInput(input);
 

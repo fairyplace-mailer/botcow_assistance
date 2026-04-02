@@ -275,6 +275,10 @@ export async function runAssistant(
       request.instructions = instructions;
     }
 
+    if (lastResponse?.id) {
+      request.previous_response_id = lastResponse.id;
+    }
+
     if (reasoningDecision.sentReasoningEffort) {
       request.reasoning = { effort: reasoningDecision.sentReasoningEffort };
     }
@@ -289,6 +293,7 @@ export async function runAssistant(
       payloadKeys: Object.keys(request).sort(),
       sdkVersion: getResponsesRuntimeCapabilities().sdkVersion,
       runtimeReasoningSupport: getResponsesRuntimeCapabilities().reasoning,
+      previous_response_id: request.previous_response_id ?? null,
     });
 
     const response = await openai.responses.create(request);
@@ -369,6 +374,7 @@ export async function runAssistant(
         'call_id' in item ? item.call_id : null,
       ),
       nextInput,
+      previous_response_id: response.id ?? null,
     });
 
     currentInput = nextInput;

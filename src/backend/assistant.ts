@@ -2,22 +2,12 @@ import { getOpenAIClient } from './openai';
 import { getToolsSchemas, handleToolCall } from './tools';
 import type { ModelId, ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import type OpenAI from 'openai';
-import type {
-  Response,
-  ResponseInput,
-  ResponseInputItem,
-  ResponseOutputItem,
-} from 'openai/resources/responses/responses';
-
-/**
- * Сообщение для ассистента.
- */
-type AssistantMessage = {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: unknown;
-  tool_call_id?: string;
-  name?: string;
-};
+import type { Response } from 'openai/resources/responses/responses';
+import {
+  buildResponsesInput,
+  getResponseFunctionCalls,
+  type AssistantMessage,
+} from './responses';
 
 /**
  * Результат работы ассистента с tool calls.
@@ -31,6 +21,7 @@ interface AssistantResult {
     ok: boolean;
     error?: string;
   }>;
+  reasoningDecision: ReasoningDecision;
 }
 
 export type ReasoningDecision = {
@@ -46,86 +37,6 @@ const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<ReasoningE
   'gpt-5.4-nano': new Set(),
 };
 
-function normalizeTextContent(content: unknown): string {
-  if (typeof content === 'string') {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((item) => {
-        if (typeof item === 'string') {
-          return item;
-        }
-
-        if (
-          item &&
-          typeof item === 'object' &&
-          'type' in item &&
-          (item as { type?: unknown }).type === 'text' &&
-          'text' in item
-        ) {
-          return String((item as { text?: unknown }).text ?? '');
-        }
-
-        return '';
-      })
-      .join('\n')
-      .trim();
-  }
-
-  return '';
-}
-
-function buildResponsesInput(messages: AssistantMessage[]): {
-  instructions?: string;
-  input: ResponseInput;
-} {
-  const systemInstructions = messages
-    .filter((message) => message.role === 'system')
-    .map((message) => normalizeTextContent(message.content))
-    .filter(Boolean)
-    .join('\n\n');
-
-  const input: ResponseInputItem[] = messages
-    .filter((message) => message.role !== 'system')
-    .map((message) => {
-      if (message.role === 'tool') {
-        return {
-          type: 'function_call_output',
-          call_id: message.tool_call_id ?? '',
-          output: normalizeTextContent(message.content),
-        } as ResponseInputItem;
-      }
-
-      return {
-        role: message.role,
-        content: [
-          {
-            type: 'input_text',
-            text: normalizeTextContent(message.content),
-          },
-        ],
-      } as ResponseInputItem;
-    });
-
-  return {
-    instructions: systemInstructions || undefined,
-    input,
-  };
-}
-
-function getResponseFunctionCalls(output: ResponseOutputItem[] | undefined) {
-  return (output ?? []).filter(
-    (item): item is ResponseOutputItem & {
-      type: 'function_call';
-      call_id: string;
-      name: string;
-      arguments: string;
-    } => item.type === 'function_call',
-  );
-}
-
 function supportsReasoning(model: ModelId): boolean {
   return REASONING_CAPABLE_MODELS.has(model);
 }
@@ -135,7 +46,7 @@ function resolveReasoningDecision(
 ): ReasoningDecision {
   const requestedReasoningEffort = routing.reasoning?.effort ?? null;
 
-  if (!requestedReasoningEffort) {
+  if (!requestedReasoningEffort || requestedReasoningEffort === 'none') {
     return {
       requestedReasoningEffort,
       sentReasoningEffort: null,
@@ -207,11 +118,18 @@ export async function runAssistant(
   let messages: AssistantMessage[] = rawMessages.slice();
   const toolCallsLog: AssistantResult['toolCalls'] = [];
   let lastResponse: Response | null = null;
+  let lastReasoningDecision: ReasoningDecision = {
+    requestedReasoningEffort: routing.reasoning?.effort ?? null,
+    sentReasoningEffort: null,
+    reasoningSuppressedReason: null,
+  };
 
   const openai = getOpenAIClient();
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const { request } = buildResponsesRequest(messages, routing);
+    const { request, reasoningDecision } = buildResponsesRequest(messages, routing);
+    lastReasoningDecision = reasoningDecision;
+
     const response = await openai.responses.create(request);
 
     lastResponse = response;
@@ -219,7 +137,12 @@ export async function runAssistant(
     const functionCalls = getResponseFunctionCalls(response.output);
 
     if (functionCalls.length === 0) {
-      return { response, completion: null, toolCalls: toolCallsLog };
+      return {
+        response,
+        completion: null,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+      };
     }
 
     const toolResultMessages: AssistantMessage[] = [];
@@ -270,9 +193,10 @@ export async function runAssistant(
     messages = [...messages, ...toolResultMessages];
   }
 
-  if (lastResponse) {
-    return { response: lastResponse, completion: null, toolCalls: toolCallsLog };
-  }
-
-  return { response: null, completion: null, toolCalls: toolCallsLog };
+  return {
+    response: lastResponse,
+    completion: null,
+    toolCalls: toolCallsLog,
+    reasoningDecision: lastReasoningDecision,
+  };
 }

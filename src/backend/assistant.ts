@@ -168,13 +168,21 @@ function toResponseTools(tools: ReturnType<typeof getToolsSchemas> | undefined):
 
   return tools.map((tool) => {
     if (isLegacyToolSchema(tool)) {
-      return {
+      const normalized: OpenAI.Responses.FunctionTool = {
         type: 'function',
         name: tool.function.name,
-        description: tool.function.description,
-        parameters: tool.function.parameters,
         strict: false,
-      } satisfies OpenAI.Responses.FunctionTool;
+      };
+
+      if (tool.function.description !== undefined) {
+        normalized.description = tool.function.description;
+      }
+
+      if (tool.function.parameters !== undefined) {
+        normalized.parameters = tool.function.parameters;
+      }
+
+      return normalized;
     }
 
     return tool;

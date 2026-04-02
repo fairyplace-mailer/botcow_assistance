@@ -25,6 +25,7 @@ import {
   supportsReasoning,
   type ResponsesRuntimeCapabilities,
 } from '../src/backend/assistant';
+import { OPENAI_SDK_VERSION } from '../src/backend/openaiRuntime';
 import { getOpenAIClient } from '../src/backend/openai';
 import { logEvent } from '../src/backend/log';
 import { handleToolCall } from '../src/backend/tools';
@@ -261,7 +262,7 @@ describe('responses tool loop regressions', () => {
     const supportedRuntime: ResponsesRuntimeCapabilities = {
       path: 'openai.responses.create',
       reasoning: 'supported',
-      sdkVersion: '6.16.0',
+      sdkVersion: OPENAI_SDK_VERSION,
     };
 
     const currentRuntime = getResponsesRuntimeCapabilities();
@@ -279,7 +280,7 @@ describe('responses tool loop regressions', () => {
       {
         path: 'openai.responses.create',
         reasoning: 'supported',
-        sdkVersion: '6.16.0',
+        sdkVersion: OPENAI_SDK_VERSION,
       },
     );
 
@@ -291,6 +292,21 @@ describe('responses tool loop regressions', () => {
     expect(built.request.reasoning).toEqual({ effort: 'low' });
   });
 
+  test('supported case includes exact reasoning key in payload', () => {
+    const built = buildResponsesRequest(
+      [{ role: 'user', content: 'hello' }],
+      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
+      {
+        path: 'openai.responses.create',
+        reasoning: 'supported',
+        sdkVersion: OPENAI_SDK_VERSION,
+      },
+    );
+
+    expect(Object.keys(built.request).sort()).toEqual(['input', 'model', 'reasoning', 'tools']);
+    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(true);
+  });
+
   test('responses.create is called without reasoning when model is not supported', () => {
     const built = buildResponsesRequest(
       [{ role: 'user', content: 'hello' }],
@@ -298,7 +314,7 @@ describe('responses tool loop regressions', () => {
       {
         path: 'openai.responses.create',
         reasoning: 'supported',
-        sdkVersion: '6.16.0',
+        sdkVersion: OPENAI_SDK_VERSION,
       },
     );
 
@@ -317,7 +333,7 @@ describe('responses tool loop regressions', () => {
       {
         path: 'openai.responses.create',
         reasoning: 'unknown',
-        sdkVersion: '6.16.0',
+        sdkVersion: OPENAI_SDK_VERSION,
       },
     );
 
@@ -329,6 +345,41 @@ describe('responses tool loop regressions', () => {
     expect('reasoning' in built.request).toBe(false);
   });
 
+  test('unsupported case omits reasoning key from exact payload keys', () => {
+    const built = buildResponsesRequest(
+      [{ role: 'user', content: 'hello' }],
+      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
+      {
+        path: 'openai.responses.create',
+        reasoning: 'unsupported',
+        sdkVersion: OPENAI_SDK_VERSION,
+      },
+    );
+
+    expect(Object.keys(built.request).sort()).toEqual(['input', 'model', 'tools']);
+    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
+  });
+
+  test('request builder does not send reasoning key when effort is absent', () => {
+    const built = buildResponsesRequest(
+      [{ role: 'user', content: 'hello' }],
+      { model: 'gpt-5.4', reasoning: undefined },
+      {
+        path: 'openai.responses.create',
+        reasoning: 'supported',
+        sdkVersion: OPENAI_SDK_VERSION,
+      },
+    );
+
+    expect(built.reasoningDecision).toEqual({
+      requestedReasoningEffort: null,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: null,
+    });
+    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
+    expect((built.request as Record<string, unknown>).reasoning).toBeUndefined();
+  });
+
   test('resolveReasoningDecision returns runtime_not_supported for unsupported path capability', () => {
     expect(
       resolveReasoningDecision(
@@ -336,7 +387,7 @@ describe('responses tool loop regressions', () => {
         {
           path: 'openai.responses.create',
           reasoning: 'unsupported',
-          sdkVersion: '6.16.0',
+          sdkVersion: OPENAI_SDK_VERSION,
         },
       ),
     ).toEqual({
@@ -346,7 +397,7 @@ describe('responses tool loop regressions', () => {
     });
   });
 
-  test('logging includes model requested effort sent effort and suppression reason', async () => {
+  test('logging includes model requested effort sent effort suppression reason and reasoning flags', async () => {
     const create = jest.fn().mockResolvedValueOnce({
       id: 'resp_log_1',
       output: [
@@ -371,6 +422,8 @@ describe('responses tool loop regressions', () => {
     const runtime = getResponsesRuntimeCapabilities();
     const expectedSent = runtime.reasoning === 'supported' ? 'low' : null;
     const expectedSuppressedReason = runtime.reasoning === 'supported' ? null : 'sdk_contract_unknown';
+    const expectedHasReasoningKey = runtime.reasoning === 'supported';
+    const expectedReasoningPayload = runtime.reasoning === 'supported' ? { effort: 'low' } : null;
     const payloadKeys = runtime.reasoning === 'supported'
       ? expect.arrayContaining(['reasoning'])
       : expect.not.arrayContaining(['reasoning']);
@@ -382,6 +435,8 @@ describe('responses tool loop regressions', () => {
         requestedReasoningEffort: 'low',
         sentReasoningEffort: expectedSent,
         reasoningSuppressedReason: expectedSuppressedReason,
+        hasReasoningKey: expectedHasReasoningKey,
+        reasoningPayload: expectedReasoningPayload,
         payloadKeys,
       }),
     );
@@ -394,7 +449,7 @@ describe('responses tool loop regressions', () => {
       {
         path: 'openai.responses.create',
         reasoning: 'unsupported',
-        sdkVersion: '6.16.0',
+        sdkVersion: OPENAI_SDK_VERSION,
       },
     );
 

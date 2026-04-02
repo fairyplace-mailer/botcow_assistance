@@ -136,6 +136,16 @@ export function resolveReasoningDecision(
   };
 }
 
+function toResponseTools(tools: ReturnType<typeof getToolsSchemas>): OpenAI.Responses.Tool[] {
+  return tools.map((tool) => ({
+    type: 'function',
+    name: tool.function.name,
+    description: tool.function.description,
+    parameters: tool.function.parameters,
+    strict: false,
+  }));
+}
+
 export function buildResponsesRequest(
   messages: AssistantMessage[],
   routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
@@ -151,7 +161,7 @@ export function buildResponsesRequest(
   const request: OpenAI.Responses.ResponseCreateParams = {
     model: routing.model,
     input: built.input,
-    tools: getToolsSchemas() as OpenAI.Responses.Tool[],
+    tools: toResponseTools(getToolsSchemas()),
   };
 
   if (built.instructions) {

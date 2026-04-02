@@ -171,6 +171,7 @@ function toResponseTools(tools: ReturnType<typeof getToolsSchemas> | undefined):
       const normalized: OpenAI.Responses.FunctionTool = {
         type: 'function',
         name: tool.function.name,
+        parameters: tool.function.parameters ?? null,
         strict: false,
       };
 
@@ -178,14 +179,10 @@ function toResponseTools(tools: ReturnType<typeof getToolsSchemas> | undefined):
         normalized.description = tool.function.description;
       }
 
-      if (tool.function.parameters !== undefined) {
-        normalized.parameters = tool.function.parameters;
-      }
-
       return normalized;
     }
 
-    return tool;
+    return tool as OpenAI.Responses.Tool;
   });
 }
 

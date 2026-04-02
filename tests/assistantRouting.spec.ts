@@ -15,22 +15,26 @@ describe('assistant routing propagation', () => {
     jest.resetAllMocks();
   });
 
-  test('passes model and reasoning to OpenAI request payload', async () => {
+  test('passes reasoning to responses.create for reasoning-capable model', async () => {
     const create = jest.fn().mockResolvedValue({
-      choices: [
+      id: 'resp_1',
+      output: [
         {
-          message: {
-            role: 'assistant',
-            content: 'ok',
-          },
+          type: 'message',
+          role: 'assistant',
+          content: [
+            {
+              type: 'output_text',
+              text: 'ok',
+            },
+          ],
         },
       ],
+      output_text: 'ok',
     });
 
     (getOpenAIClient as jest.Mock).mockReturnValue({
-      chat: {
-        completions: { create },
-      },
+      responses: { create },
     });
 
     await runAssistant(
@@ -42,42 +46,44 @@ describe('assistant routing propagation', () => {
     );
 
     expect(create).toHaveBeenCalledTimes(1);
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'gpt-5.4',
-        reasoning: { effort: 'xhigh' },
-      }),
-    );
+    const request = create.mock.calls[0][0];
+    expect(request.model).toBe('gpt-5.4');
+    expect(request.reasoning).toEqual({ effort: 'xhigh' });
   });
 
-  test('works without reasoning and does not send it', async () => {
+  test('does not send reasoning for unsupported model', async () => {
     const create = jest.fn().mockResolvedValue({
-      choices: [
+      id: 'resp_2',
+      output: [
         {
-          message: {
-            role: 'assistant',
-            content: 'ok',
-          },
+          type: 'message',
+          role: 'assistant',
+          content: [
+            {
+              type: 'output_text',
+              text: 'ok',
+            },
+          ],
         },
       ],
+      output_text: 'ok',
     });
 
     (getOpenAIClient as jest.Mock).mockReturnValue({
-      chat: {
-        completions: { create },
-      },
+      responses: { create },
     });
 
     await runAssistant(
       [{ role: 'user', content: 'hello' }],
       {
         model: 'gpt-5.4-mini',
+        reasoning: { effort: 'xhigh' },
       },
     );
 
     expect(create).toHaveBeenCalledTimes(1);
     const request = create.mock.calls[0][0];
     expect(request.model).toBe('gpt-5.4-mini');
-    expect('reasoning' in request).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(request, 'reasoning')).toBe(false);
   });
 });

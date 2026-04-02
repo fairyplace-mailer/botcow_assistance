@@ -1,6 +1,6 @@
 import { getOpenAIClient } from './openai';
 import { getToolsSchemas, handleToolCall } from './tools';
-import type { ModelId, ModelRoutingDecision, ReasoningEffort } from './modelRouter';
+import type { ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import type OpenAI from 'openai';
 import type {
   Response,
@@ -16,6 +16,13 @@ import {
   type AssistantMessage,
 } from './responses';
 import { logEvent } from './log';
+import {
+  getResponsesRuntimeCapabilities,
+  supportsReasoning,
+  REASONING_ALLOWED_EFFORTS,
+  type ReasoningSuppressedReason,
+  type ResponsesRuntimeCapabilities,
+} from './openaiRuntime';
 
 interface AssistantResult {
   response: Response | null;
@@ -29,53 +36,14 @@ interface AssistantResult {
   reasoningDecision: ReasoningDecision;
 }
 
-export type ReasoningSuppressedReason =
-  | 'model_not_supported'
-  | 'runtime_not_supported'
-  | 'sdk_contract_unknown';
-
 export type ReasoningDecision = {
   requestedReasoningEffort: ReasoningEffort | null;
   sentReasoningEffort: ReasoningEffort | null;
   reasoningSuppressedReason: ReasoningSuppressedReason | null;
 };
 
-export type ResponsesRuntimeCapabilities = {
-  path: 'openai.responses.create';
-  reasoning: 'supported' | 'unsupported' | 'unknown';
-  sdkVersion: string | null;
-};
-
-const RESPONSES_RUNTIME_CAPABILITIES: ResponsesRuntimeCapabilities = {
-  path: 'openai.responses.create',
-  reasoning: 'unknown',
-  sdkVersion: null,
-};
-
-const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<ReasoningEffort>>> = {
-  'gpt-5.4': new Set(['low', 'medium', 'high', 'xhigh']),
-  'gpt-5.4-mini': new Set(),
-  'gpt-5.4-nano': new Set(),
-};
-
-export function getResponsesRuntimeCapabilities(): ResponsesRuntimeCapabilities {
-  return RESPONSES_RUNTIME_CAPABILITIES;
-}
-
-export function supportsReasoning(
-  model: ModelId,
-  runtimeCapabilities: ResponsesRuntimeCapabilities,
-): boolean {
-  if (runtimeCapabilities.path !== 'openai.responses.create') {
-    return false;
-  }
-
-  if (runtimeCapabilities.reasoning !== 'supported') {
-    return false;
-  }
-
-  return (REASONING_ALLOWED_EFFORTS[model]?.size ?? 0) > 0;
-}
+export { getResponsesRuntimeCapabilities, supportsReasoning };
+export type { ResponsesRuntimeCapabilities, ReasoningSuppressedReason };
 
 export function resolveReasoningDecision(
   routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,

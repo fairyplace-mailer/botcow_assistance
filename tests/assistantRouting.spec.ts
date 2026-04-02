@@ -37,39 +37,20 @@ describe('assistant routing propagation', () => {
     (logEvent as jest.Mock).mockResolvedValue(undefined);
   });
 
-  test('responses.create sends reasoning for reasoning-capable model and runtime', async () => {
-    const create = jest.fn().mockResolvedValue({
-      id: 'resp_1',
-      output: [
-        {
-          type: 'message',
-          role: 'assistant',
-          content: [{ type: 'output_text', text: 'ok' }],
-        },
-      ],
-      output_text: 'ok',
-    });
-
-    (getOpenAIClient as jest.Mock).mockReturnValue({
-      responses: { create },
-    });
-
+  test('responses.create sends reasoning for reasoning-capable model and supported runtime', () => {
     const built = buildResponsesRequest(
       [{ role: 'user', content: 'debug this stack trace' }],
       { model: 'gpt-5.4', reasoning: { effort: 'xhigh' } },
       runtimeSupported,
     );
 
+    expect(built.request.model).toBe('gpt-5.4');
     expect(built.request.reasoning).toEqual({ effort: 'xhigh' });
-
-    await runAssistant(
-      [{ role: 'user', content: 'debug this stack trace' }],
-      { model: 'gpt-5.4', reasoning: { effort: 'xhigh' } },
-    );
-
-    const request = create.mock.calls[0][0];
-    expect(request.model).toBe('gpt-5.4');
-    expect(Object.prototype.hasOwnProperty.call(request, 'reasoning')).toBe(false);
+    expect(built.reasoningDecision).toEqual({
+      requestedReasoningEffort: 'xhigh',
+      sentReasoningEffort: 'xhigh',
+      reasoningSuppressedReason: null,
+    });
   });
 
   test('responses.create omits reasoning when runtime is not supported', () => {
@@ -102,7 +83,7 @@ describe('assistant routing propagation', () => {
     expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
   });
 
-  test('logs model, requested effort, sent effort and suppression reason', async () => {
+  test('runAssistant logs model, requested effort, sent effort and suppression reason', async () => {
     const create = jest.fn().mockResolvedValue({
       id: 'resp_2',
       output: [
@@ -127,12 +108,20 @@ describe('assistant routing propagation', () => {
     expect(logEvent).toHaveBeenCalledWith(
       'openai-request',
       expect.objectContaining({
+        path: 'openai.responses.create',
+        methodWrapper: 'openai.responses.create',
         model: 'gpt-5.4',
         requestedReasoningEffort: 'high',
         sentReasoningEffort: null,
         reasoningSuppressedReason: 'sdk_contract_unknown',
+        sdkVersion: '6.16.0',
+        runtimeReasoningSupport: 'unknown',
       }),
     );
+
+    const request = create.mock.calls[0][0];
+    expect(request.model).toBe('gpt-5.4');
+    expect(Object.prototype.hasOwnProperty.call(request, 'reasoning')).toBe(false);
   });
 
   test('regression: unsupported reasoning path no longer builds payload with reasoning key', () => {

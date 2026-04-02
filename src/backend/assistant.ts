@@ -12,6 +12,7 @@ import {
   buildFunctionCallOutputs,
   buildResponsesInput,
   getResponseFunctionCalls,
+  validateResponsesInput,
   type AssistantMessage,
 } from './responses';
 import { logEvent } from './log';
@@ -207,7 +208,9 @@ function buildNextToolInput(
   functionCalls: ReturnType<typeof getResponseFunctionCalls>,
   toolResults: Array<{ call_id: string; output: unknown }>,
 ): ResponseInputItem[] {
-  return buildFunctionCallOutputs(functionCalls, toolResults);
+  const nextInput = buildFunctionCallOutputs(functionCalls, toolResults);
+  validateResponsesInput(nextInput);
+  return nextInput;
 }
 
 export function buildResponsesRequest(

@@ -4,19 +4,18 @@ import type { ModelId, ModelRoutingDecision, ReasoningEffort } from './modelRout
 import type OpenAI from 'openai';
 import type {
   Response,
+  ResponseInputItem,
   ResponseStreamEvent,
 } from 'openai/resources/responses/responses';
 import type { Stream } from 'openai/streaming';
 import {
+  buildFunctionCallOutputs,
   buildResponsesInput,
   getResponseFunctionCalls,
   type AssistantMessage,
 } from './responses';
 import { logEvent } from './log';
 
-/**
- * Результат работы ассистента с tool calls.
- */
 interface AssistantResult {
   response: Response | null;
   completion: null;
@@ -196,6 +195,21 @@ function isResponseResult(
   return !!value && typeof value === 'object' && 'output' in value;
 }
 
+function debugLog(type: string, payload: Record<string, unknown>) {
+  if (process.env.NODE_ENV === 'production') {
+    return Promise.resolve();
+  }
+
+  return logEvent(type, payload);
+}
+
+function buildNextToolInput(
+  functionCalls: ReturnType<typeof getResponseFunctionCalls>,
+  toolResults: Array<{ call_id: string; output: unknown }>,
+): ResponseInputItem[] {
+  return buildFunctionCallOutputs(functionCalls, toolResults);
+}
+
 export function buildResponsesRequest(
   messages: AssistantMessage[],
   routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
@@ -225,16 +239,15 @@ export function buildResponsesRequest(
   return { request, reasoningDecision, runtimeCapabilities };
 }
 
-/**
- * Ассистент с поддержкой tools (GitHub + Vercel).
- */
 export async function runAssistant(
   rawMessages: AssistantMessage[],
   routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
 ): Promise<AssistantResult> {
   const maxToolLoops = 10;
 
-  let messages: AssistantMessage[] = rawMessages.slice();
+  const built = buildResponsesInput(rawMessages);
+  let currentInput: OpenAI.Responses.ResponseInput = built.input;
+  const instructions = built.instructions;
   const toolCallsLog: AssistantResult['toolCalls'] = [];
   let lastResponse: Response | null = null;
   let lastReasoningDecision: ReasoningDecision = {
@@ -246,19 +259,33 @@ export async function runAssistant(
   const openai = getOpenAIClient();
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const { request, reasoningDecision, runtimeCapabilities } = buildResponsesRequest(messages, routing);
+    const reasoningDecision = resolveReasoningDecision(routing, getResponsesRuntimeCapabilities());
     lastReasoningDecision = reasoningDecision;
 
+    const request: OpenAI.Responses.ResponseCreateParams = {
+      model: routing.model,
+      input: currentInput,
+      tools: toResponseTools(getToolsSchemas()),
+    };
+
+    if (instructions) {
+      request.instructions = instructions;
+    }
+
+    if (reasoningDecision.sentReasoningEffort) {
+      request.reasoning = { effort: reasoningDecision.sentReasoningEffort };
+    }
+
     await logEvent('openai-request', {
-      path: runtimeCapabilities.path,
-      methodWrapper: runtimeCapabilities.path,
+      path: 'openai.responses.create',
+      methodWrapper: 'openai.responses.create',
       model: request.model,
       requestedReasoningEffort: reasoningDecision.requestedReasoningEffort,
       sentReasoningEffort: reasoningDecision.sentReasoningEffort,
       reasoningSuppressedReason: reasoningDecision.reasoningSuppressedReason,
       payloadKeys: Object.keys(request).sort(),
-      sdkVersion: runtimeCapabilities.sdkVersion,
-      runtimeReasoningSupport: runtimeCapabilities.reasoning,
+      sdkVersion: getResponsesRuntimeCapabilities().sdkVersion,
+      runtimeReasoningSupport: getResponsesRuntimeCapabilities().reasoning,
     });
 
     const response = await openai.responses.create(request);
@@ -271,6 +298,19 @@ export async function runAssistant(
 
     const functionCalls = getResponseFunctionCalls(response.output);
 
+    await debugLog('responses-tool-loop', {
+      response_id: response.id ?? null,
+      toolLoopRound: i + 1,
+      toolCallCount: functionCalls.length,
+      functionCalls: functionCalls.map((call) => ({
+        id: call.id ?? null,
+        call_id: call.call_id,
+        name: call.name,
+        arguments: call.arguments,
+      })),
+      responseOutput: response.output,
+    });
+
     if (functionCalls.length === 0) {
       return {
         response,
@@ -280,7 +320,7 @@ export async function runAssistant(
       };
     }
 
-    const toolResultMessages: AssistantMessage[] = [];
+    const toolResults: Array<{ call_id: string; output: unknown }> = [];
 
     for (const call of functionCalls) {
       const name = call.name ?? '';
@@ -296,15 +336,8 @@ export async function runAssistant(
 
       try {
         const result = await handleToolCall(name, args as unknown);
-
         toolCallsLog.push({ tool_call_id, name, ok: true });
-
-        toolResultMessages.push({
-          role: 'tool',
-          tool_call_id,
-          name,
-          content: JSON.stringify(result),
-        });
+        toolResults.push({ call_id: tool_call_id, output: result });
       } catch (error) {
         const err = error as Error;
         const msg = err.message || String(error);
@@ -316,16 +349,26 @@ export async function runAssistant(
           error: msg,
         });
 
-        toolResultMessages.push({
-          role: 'tool',
-          tool_call_id,
-          name,
-          content: JSON.stringify({ error: msg }),
+        toolResults.push({
+          call_id: tool_call_id,
+          output: { error: msg },
         });
       }
     }
 
-    messages = [...messages, ...toolResultMessages];
+    const nextInput = buildNextToolInput(functionCalls, toolResults);
+
+    await debugLog('responses-tool-loop-next-input', {
+      response_id: response.id ?? null,
+      toolLoopRound: i + 1,
+      toolCallCount: functionCalls.length,
+      functionCallOutputCallIds: nextInput.map((item) =>
+        'call_id' in item ? item.call_id : null,
+      ),
+      nextInput,
+    });
+
+    currentInput = nextInput;
   }
 
   return {

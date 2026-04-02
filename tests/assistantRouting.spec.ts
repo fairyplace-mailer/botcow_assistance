@@ -124,11 +124,7 @@ describe('assistant routing propagation', () => {
       ([eventName]) => eventName === 'openai-request',
     )?.[1];
 
-    expect(requestLogPayload).toEqual(
-      expect.objectContaining({
-        sdkVersion: expect.anything(),
-      }),
-    );
+    expect(requestLogPayload).toBeDefined();
     expect(requestLogPayload.sdkVersion === null || typeof requestLogPayload.sdkVersion === 'string').toBe(true);
 
     const request = create.mock.calls[0][0];

@@ -18,18 +18,19 @@ import {
 } from '../src/backend/assistant';
 import { getOpenAIClient } from '../src/backend/openai';
 import { logEvent } from '../src/backend/log';
+import { OPENAI_SDK_VERSION } from '../src/backend/openaiRuntime';
 
 describe('assistant routing propagation', () => {
   const runtimeSupported: ResponsesRuntimeCapabilities = {
     path: 'openai.responses.create',
     reasoning: 'supported',
-    sdkVersion: '6.16.0',
+    sdkVersion: OPENAI_SDK_VERSION,
   };
 
   const runtimeUnsupported: ResponsesRuntimeCapabilities = {
     path: 'openai.responses.create',
     reasoning: 'unsupported',
-    sdkVersion: '6.16.0',
+    sdkVersion: OPENAI_SDK_VERSION,
   };
 
   beforeEach(() => {
@@ -114,7 +115,7 @@ describe('assistant routing propagation', () => {
         requestedReasoningEffort: 'high',
         sentReasoningEffort: 'high',
         reasoningSuppressedReason: null,
-        sdkVersion: '6.16.0',
+        sdkVersion: OPENAI_SDK_VERSION,
         runtimeReasoningSupport: 'supported',
         payloadKeys: expect.arrayContaining(['reasoning']),
       }),

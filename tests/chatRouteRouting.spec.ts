@@ -32,7 +32,7 @@ describe('chat route routing contract', () => {
     process.env.NODE_ENV = originalNodeEnv;
   });
 
-  test('passes full routing object to runAssistant and logs reasoningEffort', async () => {
+  test('passes full routing object to runAssistant and logs reasoning diagnostics', async () => {
     const routing = {
       model: 'gpt-5.4',
       reasoning: { effort: 'xhigh' },
@@ -42,17 +42,14 @@ describe('chat route routing contract', () => {
 
     (chooseModel as jest.Mock).mockReturnValue(routing);
     (runAssistant as jest.Mock).mockResolvedValue({
-      completion: {
-        choices: [
-          {
-            message: {
-              role: 'assistant',
-              content: 'done',
-            },
-          },
-        ],
-      },
+      response: { id: 'resp_1', model: 'gpt-5.4', output: [], output_text: 'done' },
+      completion: null,
       toolCalls: [],
+      reasoningDecision: {
+        requestedReasoningEffort: 'xhigh',
+        sentReasoningEffort: null,
+        reasoningSuppressedReason: 'sdk_contract_unknown',
+      },
     });
 
     const req = new Request('http://localhost/api/chat', {
@@ -74,6 +71,9 @@ describe('chat route routing contract', () => {
         model: 'gpt-5.4',
         modelReason: 'deep-code-debug-review',
         reasoningEffort: 'xhigh',
+        requestedReasoningEffort: 'xhigh',
+        sentReasoningEffort: null,
+        reasoningSuppressedReason: 'sdk_contract_unknown',
         routingDebug: { matchedRule: 'stack-trace' },
       }),
     );
@@ -90,17 +90,14 @@ describe('chat route routing contract', () => {
 
     (chooseModel as jest.Mock).mockReturnValue(routing);
     (runAssistant as jest.Mock).mockResolvedValue({
-      completion: {
-        choices: [
-          {
-            message: {
-              role: 'assistant',
-              content: 'done',
-            },
-          },
-        ],
-      },
+      response: { id: 'resp_2', model: 'gpt-5.4-mini', output: [], output_text: 'done' },
+      completion: null,
       toolCalls: [],
+      reasoningDecision: {
+        requestedReasoningEffort: null,
+        sentReasoningEffort: null,
+        reasoningSuppressedReason: null,
+      },
     });
 
     const req = new Request('http://localhost/api/chat', {
@@ -123,6 +120,9 @@ describe('chat route routing contract', () => {
     expect(payload.model).toBe('gpt-5.4-mini');
     expect(payload.modelReason).toBe('short-general-request');
     expect(payload.reasoningEffort).toBeNull();
+    expect(payload.requestedReasoningEffort).toBeNull();
+    expect(payload.sentReasoningEffort).toBeNull();
+    expect(payload.reasoningSuppressedReason).toBeNull();
     expect('routingDebug' in payload).toBe(false);
   });
 });

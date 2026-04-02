@@ -6,6 +6,7 @@ import {
   formatDevWixContext,
   retrieveDevWixContext,
 } from '../../../backend/devWixDocs/retrieve';
+import { extractResponseText } from '../../../backend/responses';
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -15,7 +16,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid messages' }, { status: 400 });
   }
 
-  // System-prompt: жестко описываем роль ассистента и сценарии
   const systemMessage = {
     role: 'system' as const,
     content: `
@@ -139,10 +139,8 @@ export async function POST(req: Request) {
 `,
   };
 
-  // RAG: use latest user message as query
   const lastUser = [...messages].reverse().find((m: any) => m?.role === 'user');
-  const userQuery =
-    typeof lastUser?.content === 'string' ? lastUser.content : null;
+  const userQuery = typeof lastUser?.content === 'string' ? lastUser.content : null;
 
   let ragMessage: { role: 'system'; content: string } | null = null;
   if (userQuery) {
@@ -162,7 +160,6 @@ export async function POST(req: Request) {
         };
       }
     } catch {
-      // RAG is best-effort. Never fail the chat if retrieval fails.
       ragMessage = null;
     }
   }
@@ -173,45 +170,51 @@ export async function POST(req: Request) {
 
   const routing = chooseModel(fullMessages);
   const routingDebug =
-    process.env.NODE_ENV !== 'production' && 'debug' in routing
-      ? routing.debug
-      : undefined;
+    process.env.NODE_ENV !== 'production' && 'debug' in routing ? routing.debug : undefined;
 
   try {
     const result = await runAssistant(fullMessages, routing);
     const ms = Date.now() - startedAt;
-
-    const completion = result.completion;
+    const response = result.response;
+    const responseText = extractResponseText(response);
 
     await logEvent('chat', {
       messages,
       toolCalls: result.toolCalls,
-      hasCompletion: !!completion,
+      hasCompletion: !!response,
       durationMs: ms,
       model: routing.model,
       modelReason: routing.reason,
       reasoningEffort: routing.reasoning?.effort ?? null,
+      requestedReasoningEffort: result.reasoningDecision.requestedReasoningEffort,
+      sentReasoningEffort: result.reasoningDecision.sentReasoningEffort,
+      reasoningSuppressedReason: result.reasoningDecision.reasoningSuppressedReason,
+      responseId: response?.id ?? null,
       ...(routingDebug !== undefined ? { routingDebug } : {}),
     });
 
-    if (!completion) {
+    if (!response || !responseText) {
       return NextResponse.json(
         { error: 'Assistant did not produce a final answer' },
         { status: 500 },
       );
     }
 
-    const firstChoice = completion.choices?.[0];
-    const finalMessage = firstChoice?.message ?? null;
-
-    if (!finalMessage) {
-      return NextResponse.json(
-        { error: 'Assistant produced completion without message' },
-        { status: 500 },
-      );
-    }
-
-    return NextResponse.json(completion);
+    return NextResponse.json({
+      id: response.id,
+      object: 'chat.completion',
+      model: response.model,
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: responseText,
+          },
+        },
+      ],
+    });
   } catch (error: any) {
     const ms = Date.now() - startedAt;
 
@@ -225,10 +228,7 @@ export async function POST(req: Request) {
       durationMs: ms,
     });
 
-    const message =
-      typeof error?.message === 'string'
-        ? error.message
-        : 'Chat request failed';
+    const message = typeof error?.message === 'string' ? error.message : 'Chat request failed';
 
     return NextResponse.json(
       {

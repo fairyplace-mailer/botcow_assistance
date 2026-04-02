@@ -1,36 +1,232 @@
 import { getOpenAIClient } from './openai';
 import { getToolsSchemas, handleToolCall } from './tools';
-import type { ModelRoutingDecision } from './modelRouter';
+import type { ModelId, ModelRoutingDecision, ReasoningEffort } from './modelRouter';
+import type OpenAI from 'openai';
 import type {
-  ChatCompletion,
-  ChatCompletionCreateParamsNonStreaming,
-  ChatCompletionMessage,
-  ChatCompletionMessageParam,
-  ChatCompletionMessageToolCall,
-  ChatCompletionTool,
-} from 'openai/resources/chat/completions';
-
-/**
- * Сообщение для ассистента (совместимо с ChatCompletionMessageParam).
- */
-type AssistantMessage = ChatCompletionMessageParam;
+  Response,
+  ResponseStreamEvent,
+} from 'openai/resources/responses/responses';
+import type { Stream } from 'openai/streaming';
+import {
+  buildResponsesInput,
+  getResponseFunctionCalls,
+  type AssistantMessage,
+} from './responses';
+import { logEvent } from './log';
 
 /**
  * Результат работы ассистента с tool calls.
  */
 interface AssistantResult {
-  completion: ChatCompletion | null;
+  response: Response | null;
+  completion: null;
   toolCalls: Array<{
     tool_call_id: string;
     name: string;
     ok: boolean;
     error?: string;
   }>;
+  reasoningDecision: ReasoningDecision;
+}
+
+export type ReasoningSuppressedReason =
+  | 'model_not_supported'
+  | 'runtime_not_supported'
+  | 'sdk_contract_unknown';
+
+export type ReasoningDecision = {
+  requestedReasoningEffort: ReasoningEffort | null;
+  sentReasoningEffort: ReasoningEffort | null;
+  reasoningSuppressedReason: ReasoningSuppressedReason | null;
+};
+
+export type ResponsesRuntimeCapabilities = {
+  path: 'openai.responses.create';
+  reasoning: 'supported' | 'unsupported' | 'unknown';
+  sdkVersion: string | null;
+};
+
+const RESPONSES_RUNTIME_CAPABILITIES: ResponsesRuntimeCapabilities = {
+  path: 'openai.responses.create',
+  reasoning: 'unknown',
+  sdkVersion: '6.16.0',
+};
+
+const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<ReasoningEffort>>> = {
+  'gpt-5.4': new Set(['low', 'medium', 'high', 'xhigh']),
+  'gpt-5.4-mini': new Set(),
+  'gpt-5.4-nano': new Set(),
+};
+
+export function getResponsesRuntimeCapabilities(): ResponsesRuntimeCapabilities {
+  return RESPONSES_RUNTIME_CAPABILITIES;
+}
+
+export function supportsReasoning(
+  model: ModelId,
+  runtimeCapabilities: ResponsesRuntimeCapabilities,
+): boolean {
+  if (runtimeCapabilities.path !== 'openai.responses.create') {
+    return false;
+  }
+
+  if (runtimeCapabilities.reasoning !== 'supported') {
+    return false;
+  }
+
+  return (REASONING_ALLOWED_EFFORTS[model]?.size ?? 0) > 0;
+}
+
+export function resolveReasoningDecision(
+  routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
+  runtimeCapabilities: ResponsesRuntimeCapabilities,
+): ReasoningDecision {
+  const requestedReasoningEffort = routing.reasoning?.effort ?? null;
+
+  if (!requestedReasoningEffort || requestedReasoningEffort === 'none') {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: null,
+    };
+  }
+
+  const allowedEfforts = REASONING_ALLOWED_EFFORTS[routing.model];
+
+  if (!allowedEfforts?.size) {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'model_not_supported',
+    };
+  }
+
+  if (!allowedEfforts.has(requestedReasoningEffort)) {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'sdk_contract_unknown',
+    };
+  }
+
+  if (runtimeCapabilities.reasoning === 'unsupported') {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'runtime_not_supported',
+    };
+  }
+
+  if (runtimeCapabilities.reasoning === 'unknown') {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'sdk_contract_unknown',
+    };
+  }
+
+  if (!supportsReasoning(routing.model, runtimeCapabilities)) {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'runtime_not_supported',
+    };
+  }
+
+  return {
+    requestedReasoningEffort,
+    sentReasoningEffort: requestedReasoningEffort,
+    reasoningSuppressedReason: null,
+  };
+}
+
+type LegacyToolSchema = {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+};
+
+function isLegacyToolSchema(tool: unknown): tool is LegacyToolSchema {
+  if (!tool || typeof tool !== 'object') {
+    return false;
+  }
+
+  const maybeTool = tool as Record<string, unknown>;
+  const maybeFunction = maybeTool.function;
+
+  return (
+    maybeTool.type === 'function' &&
+    !!maybeFunction &&
+    typeof maybeFunction === 'object' &&
+    typeof (maybeFunction as Record<string, unknown>).name === 'string'
+  );
+}
+
+function toResponseTools(tools: ReturnType<typeof getToolsSchemas> | undefined): OpenAI.Responses.Tool[] {
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return [];
+  }
+
+  return tools.map((tool) => {
+    if (isLegacyToolSchema(tool)) {
+      const normalized: OpenAI.Responses.FunctionTool = {
+        type: 'function',
+        name: tool.function.name,
+        parameters: tool.function.parameters ?? null,
+        strict: false,
+      };
+
+      if (tool.function.description !== undefined) {
+        normalized.description = tool.function.description;
+      }
+
+      return normalized;
+    }
+
+    return tool as OpenAI.Responses.Tool;
+  });
+}
+
+function isResponseResult(
+  value: Response | Stream<ResponseStreamEvent>,
+): value is Response {
+  return !!value && typeof value === 'object' && 'output' in value;
+}
+
+export function buildResponsesRequest(
+  messages: AssistantMessage[],
+  routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
+  runtimeCapabilities: ResponsesRuntimeCapabilities = getResponsesRuntimeCapabilities(),
+): {
+  request: OpenAI.Responses.ResponseCreateParams;
+  reasoningDecision: ReasoningDecision;
+  runtimeCapabilities: ResponsesRuntimeCapabilities;
+} {
+  const built = buildResponsesInput(messages);
+  const reasoningDecision = resolveReasoningDecision(routing, runtimeCapabilities);
+
+  const request: OpenAI.Responses.ResponseCreateParams = {
+    model: routing.model,
+    input: built.input,
+    tools: toResponseTools(getToolsSchemas()),
+  };
+
+  if (built.instructions) {
+    request.instructions = built.instructions;
+  }
+
+  if (reasoningDecision.sentReasoningEffort) {
+    request.reasoning = { effort: reasoningDecision.sentReasoningEffort };
+  }
+
+  return { request, reasoningDecision, runtimeCapabilities };
 }
 
 /**
  * Ассистент с поддержкой tools (GitHub + Vercel).
- * На вход: массив сообщений { role, content } (с system-сообщением уже включенным выше по стеку).
  */
 export async function runAssistant(
   rawMessages: AssistantMessage[],
@@ -40,70 +236,56 @@ export async function runAssistant(
 
   let messages: AssistantMessage[] = rawMessages.slice();
   const toolCallsLog: AssistantResult['toolCalls'] = [];
-  let lastCompletion: ChatCompletion | null = null;
+  let lastResponse: Response | null = null;
+  let lastReasoningDecision: ReasoningDecision = {
+    requestedReasoningEffort: routing.reasoning?.effort ?? null,
+    sentReasoningEffort: null,
+    reasoningSuppressedReason: null,
+  };
 
   const openai = getOpenAIClient();
 
   for (let i = 0; i < maxToolLoops; i += 1) {
-    const request: ChatCompletionCreateParamsNonStreaming = {
-      model: routing.model,
-      messages,
-      tools: getToolsSchemas() as ChatCompletionTool[],
-      tool_choice: 'auto',
-    };
+    const { request, reasoningDecision, runtimeCapabilities } = buildResponsesRequest(messages, routing);
+    lastReasoningDecision = reasoningDecision;
 
-    if (routing.reasoning) {
-      (request as ChatCompletionCreateParamsNonStreaming & {
-        reasoning?: ModelRoutingDecision['reasoning'];
-      }).reasoning = routing.reasoning;
+    await logEvent('openai-request', {
+      path: runtimeCapabilities.path,
+      methodWrapper: runtimeCapabilities.path,
+      model: request.model,
+      requestedReasoningEffort: reasoningDecision.requestedReasoningEffort,
+      sentReasoningEffort: reasoningDecision.sentReasoningEffort,
+      reasoningSuppressedReason: reasoningDecision.reasoningSuppressedReason,
+      payloadKeys: Object.keys(request).sort(),
+      sdkVersion: runtimeCapabilities.sdkVersion,
+      runtimeReasoningSupport: runtimeCapabilities.reasoning,
+    });
+
+    const response = await openai.responses.create(request);
+
+    if (!isResponseResult(response)) {
+      throw new Error('Streaming Responses API is not supported in assistant runtime');
     }
 
-    const completion: ChatCompletion = await openai.chat.completions.create(request);
+    lastResponse = response;
 
-    lastCompletion = completion;
+    const functionCalls = getResponseFunctionCalls(response.output);
 
-    const choice = completion.choices?.[0];
-    if (!choice) {
-      break;
+    if (functionCalls.length === 0) {
+      return {
+        response,
+        completion: null,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+      };
     }
 
-    const message = choice.message as ChatCompletionMessage;
-    const toolCalls =
-      (message.tool_calls as ChatCompletionMessageToolCall[] | null | undefined) ??
-      [];
-
-    if (toolCalls.length === 0) {
-      // Модель дала финальный ответ без tool_calls в этом шаге.
-      return { completion, toolCalls: toolCallsLog };
-    }
-
-    // Есть tool_calls → выполняем их и добавляем ответы как сообщения role=tool.
     const toolResultMessages: AssistantMessage[] = [];
 
-    for (const tc of toolCalls) {
-      // Обрабатываем только function-tool calls, custom пропускаем
-      if (tc.type !== 'function') {
-        toolCallsLog.push({
-          tool_call_id: tc.id,
-          name: tc.type,
-          ok: false,
-          error: 'Unsupported tool call type',
-        });
-
-        toolResultMessages.push({
-          role: 'tool',
-          tool_call_id: tc.id,
-          name: tc.type,
-          content: JSON.stringify({ error: 'Unsupported tool call type' }),
-        } as AssistantMessage);
-
-        continue;
-      }
-
-      const name = tc.function.name ?? '';
-      const tool_call_id = tc.id;
-
-      const rawArgs = tc.function.arguments ?? '{}';
+    for (const call of functionCalls) {
+      const name = call.name ?? '';
+      const tool_call_id = call.call_id;
+      const rawArgs = call.arguments ?? '{}';
 
       let args: unknown;
       try {
@@ -122,7 +304,7 @@ export async function runAssistant(
           tool_call_id,
           name,
           content: JSON.stringify(result),
-        } as AssistantMessage);
+        });
       } catch (error) {
         const err = error as Error;
         const msg = err.message || String(error);
@@ -139,22 +321,17 @@ export async function runAssistant(
           tool_call_id,
           name,
           content: JSON.stringify({ error: msg }),
-        } as AssistantMessage);
+        });
       }
     }
 
-    // Добавляем сообщение модели с tool_calls и ответы tools в историю
-    messages = [
-      ...messages,
-      message as unknown as AssistantMessage,
-      ...toolResultMessages,
-    ];
+    messages = [...messages, ...toolResultMessages];
   }
 
-  // Если вышли по лимиту итераций, но у нас есть последнее completion — возвращаем его.
-  if (lastCompletion) {
-    return { completion: lastCompletion, toolCalls: toolCallsLog };
-  }
-
-  return { completion: null, toolCalls: toolCallsLog };
+  return {
+    response: lastResponse,
+    completion: null,
+    toolCalls: toolCallsLog,
+    reasoningDecision: lastReasoningDecision,
+  };
 }

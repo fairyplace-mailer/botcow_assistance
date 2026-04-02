@@ -10,9 +10,8 @@ export const toolSchemas = toolsSchemas;
 export const toolHandlers = toolsHandlers;
 export type ToolName = keyof typeof toolsHandlers;
 
-export function getToolsSchemas(): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  // We keep schemas in our internal format but they are compatible with the OpenAI SDK type.
-  return toolsSchemas as unknown as OpenAI.Chat.Completions.ChatCompletionTool[];
+export function getToolsSchemas(): OpenAI.Responses.Tool[] {
+  return [...toolsSchemas] as unknown as OpenAI.Responses.Tool[];
 }
 
 export async function handleToolCall(name: string, args: any) {

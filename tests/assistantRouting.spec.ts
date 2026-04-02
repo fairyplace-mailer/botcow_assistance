@@ -115,11 +115,21 @@ describe('assistant routing propagation', () => {
         requestedReasoningEffort: 'high',
         sentReasoningEffort: 'high',
         reasoningSuppressedReason: null,
-        sdkVersion: expect.any(String),
         runtimeReasoningSupport: 'supported',
         payloadKeys: expect.arrayContaining(['reasoning']),
       }),
     );
+
+    const requestLogPayload = (logEvent as jest.Mock).mock.calls.find(
+      ([eventName]) => eventName === 'openai-request',
+    )?.[1];
+
+    expect(requestLogPayload).toEqual(
+      expect.objectContaining({
+        sdkVersion: expect.anything(),
+      }),
+    );
+    expect(['string', 'object']).toContain(typeof requestLogPayload.sdkVersion);
 
     const request = create.mock.calls[0][0];
     expect(request.model).toBe('gpt-5.4');

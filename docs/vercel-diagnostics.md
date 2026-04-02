@@ -4,49 +4,126 @@ This document describes how Botcow diagnoses Vercel deployments.
 
 ## Goal
 
-When a Vercel deployment fails, the bot should:
+When a Vercel deployment fails or behaves incorrectly at runtime, the bot should be able to inspect real preview runtime signals, not only code, CI, and build status.
 
-- find the relevant deployment for a given git commit SHA
-- return a clickable URL to inspect logs (inspector URL when available)
-- provide a short summary
+The assistant should be able to:
+
+- find the relevant deployment for a given repo / branch / git SHA
+- inspect runtime logs for that deployment
+- search runtime logs for real failures such as:
+  - `400 Unknown parameter: 'reasoning'`
+  - route handler errors
+  - serverless / function execution errors
+
+## Scope and safety
+
+Runtime log tools are:
+
+- read-only
+- limited to preview diagnostics
+- not allowed to deploy, redeploy, delete, or mutate Vercel state
+- not allowed to access secrets
 
 ## Strategy: find deployment
 
 1) **Primary**: match by git SHA
 
-We look at recent deployments for a project and try to match `meta.githubCommitSha` (or similar metadata) to the provided `git_sha`.
+We look at recent deployments for a project and try to match commit metadata to the provided `git_sha`.
 
-2) **Fallback (documented)**: match by **branch + time window**
+2) **Fallback**: match by branch
 
-If SHA matching is not available, we look for a deployment where:
+If SHA matching is not available, we search recent preview deployments by branch.
 
-- deployment meta contains the requested branch name
-- deployment `createdAt` is within a time window (default **180 minutes**)
+3) **Optional narrowing**: time window
 
-This is an explicit strategy and is considered acceptable for Hobby constraints.
+If several deployments match, the assistant should narrow the result by time range.
 
-3) **Last resort**: latest deployment
+## Runtime log tools
 
-If neither SHA nor fallback can match, the bot can return the latest deployment and label it as `matchedBy: latest`.
+### `vercel_list_deployments`
 
-## Tool: `vercel_diagnose_deployment`
+Purpose:
+- list recent preview deployments
+- filter by repo / branch / git SHA / time range
 
 Parameters:
+- `repo` — `owner/name`
+- `branch` — git branch filter
+- `gitSha` — commit SHA filter
+- `since` — ISO timestamp lower bound
+- `until` — ISO timestamp upper bound
+- `limit` — max number of results
 
-- `repo` (optional): `owner/name` - used to resolve Vercel `projectId/teamId` via `config/repos.yml`
-- `git_sha` (recommended): git commit SHA
-- `branch` (optional): branch name for fallback
-- `target` (optional): `preview` or `production` (default: `preview`)
-- `timeWindowMinutes` (optional): fallback time window (default: 180)
+Expected output fields:
+- `deploymentId`
+- `url`
+- `createdAt`
+- `state`
+- `readyState`
+- `branch` if available
+- `gitSha` if available
 
-Output:
+### `vercel_get_runtime_logs`
 
-- `summary`: short status summary
-- `matchedBy`: `sha | branch_time_window | latest | none`
-- `inspectorUrl/logsUrl`: clickable URL when available
-- `deploymentId`, `readyState`, `state`, `url`
+Purpose:
+- fetch runtime logs for a deployment
+- support time range and result limits
+
+Parameters:
+- `repo` — `owner/name`
+- `deploymentId` — Vercel deployment id
+- `since` — ISO timestamp lower bound
+- `until` — ISO timestamp upper bound
+- `limit` — max number of log records
+- pagination fields if supported by backend adapter
+
+Expected output fields per record:
+- `timestamp`
+- `level`
+- `message`
+- `route`
+- `functionName`
+- `deploymentId`
+- `branch` if available
+- `gitSha` if available
+
+### `vercel_search_runtime_logs`
+
+Purpose:
+- search runtime logs by text and filters
+
+Parameters:
+- `repo` — `owner/name`
+- `deploymentId` — Vercel deployment id
+- `query` — text or pattern to search
+- `level` — `info | warn | error`
+- `route` — route filter
+- `functionName` — function filter
+- `since` — ISO timestamp lower bound
+- `until` — ISO timestamp upper bound
+- `limit` — max number of matching records
+
+Expected output:
+- filtered log records with the same schema as `vercel_get_runtime_logs`
+- summary fields such as match count when available
+
+## How the assistant should use this
+
+Recommended runtime diagnostics flow:
+
+1. resolve the target deployment with `vercel_list_deployments`
+2. fetch recent runtime logs with `vercel_get_runtime_logs`
+3. if needed, search errors with `vercel_search_runtime_logs`
+4. confirm the real failing runtime path before claiming a fix
+
+This allows the assistant to validate:
+- real request failures
+- actual failing route or function
+- model / reasoning payload problems
+- payload keys and SDK-related runtime mismatches
 
 ## Notes
 
-- Vercel API does not always provide a dedicated `logsUrl`. We treat `inspectorUrl` as the primary link.
-- Project/team are resolved from `config/repos.yml` using env keys (`projectIdEnv/teamIdEnv`).
+- Runtime log availability and field shape depend on Vercel API/account capabilities.
+- If Vercel returns a different event schema, the backend adapter should normalize it into the fields documented above.
+- The assistant must report honestly when logs are unavailable or partially available.

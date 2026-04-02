@@ -11,6 +11,7 @@ import type { Stream } from 'openai/streaming';
 import {
   buildFunctionCallOutputs,
   buildResponsesInput,
+  extractResponseText,
   getResponseFunctionCalls,
   validateResponsesInput,
   type AssistantMessage,
@@ -281,11 +282,13 @@ export async function runAssistant(
     lastResponse = response;
 
     const functionCalls = getResponseFunctionCalls(response.output);
+    const responseText = extractResponseText(response);
 
     await debugLog('responses-tool-loop', {
       response_id: response.id ?? null,
       toolLoopRound: i + 1,
       toolCallCount: functionCalls.length,
+      hasFinalText: !!responseText,
       functionCalls: functionCalls.map((call) => ({
         id: call.id ?? null,
         call_id: call.call_id,
@@ -356,10 +359,14 @@ export async function runAssistant(
     currentInput = nextInput;
   }
 
-  return {
-    response: lastResponse,
-    completion: null,
-    toolCalls: toolCallsLog,
-    reasoningDecision: lastReasoningDecision,
-  };
+  if (lastResponse && extractResponseText(lastResponse)) {
+    return {
+      response: lastResponse,
+      completion: null,
+      toolCalls: toolCallsLog,
+      reasoningDecision: lastReasoningDecision,
+    };
+  }
+
+  throw new Error('Assistant did not produce a final answer within tool loop limit');
 }

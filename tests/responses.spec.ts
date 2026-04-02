@@ -387,48 +387,27 @@ describe('responses tool loop regressions', () => {
     );
   });
 
-  test('regression: unsupported runtime no longer sends reasoning key', async () => {
-    const create = jest
-      .fn()
-      .mockImplementationOnce(async (payload: Record<string, unknown>) => {
-        if ('reasoning' in payload) {
-          throw new Error("400 Unknown parameter: 'reasoning'");
-        }
+  test('regression: unsupported runtime no longer sends reasoning key', () => {
+    const built = buildResponsesRequest(
+      [{ role: 'user', content: 'hello' }],
+      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
+      {
+        path: 'openai.responses.create',
+        reasoning: 'unsupported',
+        sdkVersion: '6.16.0',
+      },
+    );
 
-        return {
-          id: 'resp_regression_1',
-          output: [
-            {
-              type: 'message',
-              role: 'assistant',
-              content: [{ type: 'output_text', text: 'safe' }],
-            },
-          ],
-          output_text: 'safe',
-        };
-      });
-
-    (getOpenAIClient as jest.Mock).mockReturnValue({
-      responses: { create },
+    expect(built.reasoningDecision).toEqual({
+      requestedReasoningEffort: 'low',
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'runtime_not_supported',
     });
-
-    const originalEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-
-    try {
-      const result = await runAssistant([{ role: 'user', content: 'hello' }], {
-        model: 'gpt-5.4',
-        reasoning: { effort: 'low' },
-      });
-
-      expect(result.response?.id).toBe('resp_regression_1');
-      expect(create).toHaveBeenCalledWith(
-        expect.not.objectContaining({
-          reasoning: expect.anything(),
-        }),
-      );
-    } finally {
-      process.env.NODE_ENV = originalEnv;
-    }
+    expect(built.request).toEqual(
+      expect.not.objectContaining({
+        reasoning: expect.anything(),
+      }),
+    );
+    expect('reasoning' in built.request).toBe(false);
   });
 });

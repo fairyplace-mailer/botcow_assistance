@@ -6,41 +6,7 @@ import {
   formatDevWixContext,
   retrieveDevWixContext,
 } from '../../../backend/devWixDocs/retrieve';
-
-function getOutputText(response: any): string {
-  if (typeof response?.output_text === 'string' && response.output_text.trim()) {
-    return response.output_text;
-  }
-
-  const output = Array.isArray(response?.output) ? response.output : [];
-
-  for (const item of output) {
-    if (item?.type !== 'message' || !Array.isArray(item?.content)) {
-      continue;
-    }
-
-    const text = item.content
-      .map((part: any) => {
-        if (typeof part?.text === 'string') {
-          return part.text;
-        }
-
-        if (typeof part?.output_text === 'string') {
-          return part.output_text;
-        }
-
-        return '';
-      })
-      .join('')
-      .trim();
-
-    if (text) {
-      return text;
-    }
-  }
-
-  return '';
-}
+import { extractResponseText } from '../../../backend/responses';
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -174,8 +140,7 @@ export async function POST(req: Request) {
   };
 
   const lastUser = [...messages].reverse().find((m: any) => m?.role === 'user');
-  const userQuery =
-    typeof lastUser?.content === 'string' ? lastUser.content : null;
+  const userQuery = typeof lastUser?.content === 'string' ? lastUser.content : null;
 
   let ragMessage: { role: 'system'; content: string } | null = null;
   if (userQuery) {
@@ -205,15 +170,13 @@ export async function POST(req: Request) {
 
   const routing = chooseModel(fullMessages);
   const routingDebug =
-    process.env.NODE_ENV !== 'production' && 'debug' in routing
-      ? routing.debug
-      : undefined;
+    process.env.NODE_ENV !== 'production' && 'debug' in routing ? routing.debug : undefined;
 
   try {
     const result = await runAssistant(fullMessages, routing);
     const ms = Date.now() - startedAt;
     const response = result.response;
-    const responseText = getOutputText(response);
+    const responseText = extractResponseText(response);
 
     await logEvent('chat', {
       messages,
@@ -223,6 +186,10 @@ export async function POST(req: Request) {
       model: routing.model,
       modelReason: routing.reason,
       reasoningEffort: routing.reasoning?.effort ?? null,
+      requestedReasoningEffort: result.reasoningDecision.requestedReasoningEffort,
+      sentReasoningEffort: result.reasoningDecision.sentReasoningEffort,
+      reasoningSuppressedReason: result.reasoningDecision.reasoningSuppressedReason,
+      responseId: response?.id ?? null,
       ...(routingDebug !== undefined ? { routingDebug } : {}),
     });
 
@@ -261,10 +228,7 @@ export async function POST(req: Request) {
       durationMs: ms,
     });
 
-    const message =
-      typeof error?.message === 'string'
-        ? error.message
-        : 'Chat request failed';
+    const message = typeof error?.message === 'string' ? error.message : 'Chat request failed';
 
     return NextResponse.json(
       {

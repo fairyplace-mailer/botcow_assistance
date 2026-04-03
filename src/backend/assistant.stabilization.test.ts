@@ -248,6 +248,36 @@ describe('runAssistant stabilization', () => {
     expect(fatalEvent?.payload.finalStatus).toBe('failed');
   });
 
+  test('aborts on no progress after repeated empty rounds', async () => {
+    mockedGetToolsSchemas.mockReturnValue([]);
+
+    const create = setupOpenAIResponses([
+      {
+        id: 'resp_1',
+        model: 'gpt-5.4-mini',
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+      {
+        id: 'resp_2',
+        model: 'gpt-5.4-mini',
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    ]);
+
+    const result = await runAssistant(params);
+
+    expect(result.error?.internalCode).toBe('no_progress_abort');
+    expect(create).toHaveBeenCalledTimes(2);
+    const fatalEvent = getRecentRunEvents().find((event) => event.event === 'assistant_no_progress_abort');
+    expect(fatalEvent?.payload.stopReason).toBe('no_progress_abort');
+    expect(fatalEvent?.payload.finalStatus).toBe('failed');
+    expect(fatalEvent?.payload.progressThisRound).toBe(false);
+    expect(fatalEvent?.payload.fingerprintChanged).toBe(false);
+    expect(fatalEvent?.payload.noProgressRounds).toBe(2);
+  });
+
   test('passes previous_response_id only inside same turn loop', async () => {
     mockedGetToolsSchemas.mockReturnValue([
       {

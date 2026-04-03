@@ -147,7 +147,7 @@ export async function POST(req: Request) {
 
 Дополнение про использование примеров из контекста при написании кода:
 — Если в CONTEXT/SOURCES есть релевантные фрагменты кода или примеры API, используй их как первичный источник истины (имена, сигнатуры, порядок вызовов).
-— Не задавай уточняющие вопросы, если ответ уже однозначно следует из контекста (например, обязательные параметры или правильный flow).
+— Не задавай уточняющие вопросы, если ответ уже однозначно следует из контекста (например, обязательные параметры or правильный flow).
 — Если контекст предлагает несколько вариантов, выбери наиболее типовой и явно укажи, что это выбор; уточняющий вопрос задавай только если выбор критичен.
 `,
   };
@@ -208,6 +208,9 @@ export async function POST(req: Request) {
     const ms = Date.now() - startedAt;
     const response = result.response;
     const responseText = extractResponseText(response);
+    const responsePhase = response?.output
+      ?.find((item: any) => item?.type === 'message' && item?.role === 'assistant')
+      ?.phase;
 
     await saveConversationState({
       sessionId,
@@ -237,9 +240,13 @@ export async function POST(req: Request) {
     if (result.error) {
       return NextResponse.json(
         {
+          ok: false,
           sessionId,
-          code: result.error.publicCode,
-          message: result.error.publicMessage,
+          response: null,
+          error: {
+            code: result.error.publicCode,
+            message: result.error.publicMessage,
+          },
         },
         { status: 500 },
       );
@@ -248,35 +255,28 @@ export async function POST(req: Request) {
     if (!response || !responseText) {
       return NextResponse.json(
         {
+          ok: false,
           sessionId,
-          code: 'assistant_run_failed',
-          message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+          response: null,
+          error: {
+            code: 'assistant_run_failed',
+            message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+          },
         },
         { status: 500 },
       );
     }
 
     return NextResponse.json({
+      ok: true,
       sessionId,
-      id: response.id,
-      /**
-       * Transitional adapter for legacy frontend consumers.
-       * Backend execution is already on Responses API, but route output still mimics
-       * chat.completion shape until the frontend is migrated to the normalized contract
-       * required by docs/merged_spec.md.
-       */
-      object: 'chat.completion',
-      model: response.model,
-      choices: [
-        {
-          index: 0,
-          finish_reason: 'stop',
-          message: {
-            role: 'assistant',
-            content: responseText,
-          },
-        },
-      ],
+      response: {
+        id: response.id,
+        model: response.model,
+        phase: responsePhase ?? 'final_answer',
+        outputText: responseText,
+      },
+      error: null,
     });
   } catch (error: any) {
     const ms = Date.now() - startedAt;
@@ -297,9 +297,13 @@ export async function POST(req: Request) {
 
     return NextResponse.json(
       {
+        ok: false,
         sessionId,
-        code: 'assistant_run_failed',
-        message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+        response: null,
+        error: {
+          code: 'assistant_run_failed',
+          message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+        },
       },
       { status: 500 },
     );

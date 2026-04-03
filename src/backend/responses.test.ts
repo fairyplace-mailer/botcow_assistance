@@ -1,4 +1,4 @@
-import { buildResponsesCreateParams } from './responses';
+import { buildResponsesCreateParams, extractConversationId } from './responses';
 
 describe('buildResponsesCreateParams', () => {
   test('builds previous_response state payload', () => {
@@ -116,5 +116,21 @@ describe('buildResponsesCreateParams', () => {
         state: { kind: 'previous_response', previousResponseId: '' },
       }),
     ).toThrow('Responses state validation failed: previousResponseId is required');
+  });
+});
+
+describe('extractConversationId', () => {
+  test('uses response conversation id when present', () => {
+    expect(
+      extractConversationId({ conversation: { id: 'conv_new' } } as any, 'conv_old'),
+    ).toBe('conv_new');
+  });
+
+  test('falls back to persisted conversation id when response omits conversation', () => {
+    expect(extractConversationId({} as any, 'conv_old')).toBe('conv_old');
+  });
+
+  test('returns null when neither response nor persisted state has conversation id', () => {
+    expect(extractConversationId({} as any, null)).toBeNull();
   });
 });

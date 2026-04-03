@@ -259,6 +259,12 @@ export async function POST(req: Request) {
     return NextResponse.json({
       sessionId,
       id: response.id,
+      /**
+       * Transitional adapter for legacy frontend consumers.
+       * Backend execution is already on Responses API, but route output still mimics
+       * chat.completion shape until the frontend is migrated to the normalized contract
+       * required by docs/merged_spec.md.
+       */
       object: 'chat.completion',
       model: response.model,
       choices: [

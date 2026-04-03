@@ -52,7 +52,7 @@ export function resolveReasoningDecision(
 ): ReasoningDecision {
   const requestedReasoningEffort = routing.reasoning?.effort ?? null;
 
-  if (!requestedReasoningEffort || requestedReasoningEffort === 'none') {
+  if (!requestedReasoningEffort) {
     return {
       requestedReasoningEffort,
       sentReasoningEffort: null,

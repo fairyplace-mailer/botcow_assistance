@@ -209,9 +209,7 @@ export async function POST(req: Request) {
     const ms = Date.now() - startedAt;
     const response = result.response;
     const responseText = extractResponseText(response);
-    const responsePhase = response?.output
-      ?.find((item: any) => item?.type === 'message' && item?.role === 'assistant')
-      ?.phase;
+    const responsePhase = 'final_answer';
 
     await saveConversationState({
       sessionId,
@@ -274,7 +272,7 @@ export async function POST(req: Request) {
       response: {
         id: response.id,
         model: response.model,
-        phase: responsePhase ?? 'final_answer',
+        phase: responsePhase,
         outputText: responseText,
       },
       error: null,

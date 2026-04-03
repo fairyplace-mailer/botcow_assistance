@@ -73,19 +73,22 @@ describe('assistant routing propagation', () => {
     expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
   });
 
-  test('responses.create omits reasoning when model is not confirmed as reasoning-capable', () => {
+  test.each([
+    ['gpt-5.4-mini', 'medium'],
+    ['gpt-5.4-nano', 'none'],
+  ] as const)('responses.create sends reasoning for %s when runtime is supported', (model, effort) => {
     const built = buildResponsesRequest(
       [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4-nano', reasoning: { effort: 'high' } },
+      { model, reasoning: { effort } },
       runtimeSupported,
     );
 
     expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: 'high',
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'model_not_supported',
+      requestedReasoningEffort: effort,
+      sentReasoningEffort: effort,
+      reasoningSuppressedReason: null,
     });
-    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
+    expect(built.request.reasoning).toEqual({ effort });
   });
 
   test('runAssistant logs model, requested effort, sent effort and suppression reason', async () => {

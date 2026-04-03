@@ -390,12 +390,12 @@ export function buildResponsesCreateParams(
   return {
     model: params.model,
     input: params.input,
-    ...(params.instructions ? { instructions: params.instructions } : {}),
+    ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
     ...(state.kind === 'previous_response'
       ? { previous_response_id: state.previousResponseId }
       : {}),
     ...(state.kind === 'conversation' ? { conversation: state.conversation } : {}),
-    ...(params.reasoning ? { reasoning: params.reasoning } : {}),
+    ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
     tools: buildStrictFunctionTools(params.tools),
     parallel_tool_calls: false,
   } as ResponseCreateParams;
@@ -418,14 +418,14 @@ export async function createModelResponse(params: {
   tools?: OpenAI.Responses.Tool[];
   reasoning?: ResponseCreateParams['reasoning'];
 }): Promise<Response> {
-  return params.client.responses.create(
-    buildResponsesCreateParams({
-      model: params.model,
-      instructions: params.instructions,
-      input: params.input,
-      state: params.state,
-      tools: params.tools,
-      reasoning: params.reasoning,
-    }),
-  ) as Promise<Response>;
+  const requestParams = {
+    model: params.model,
+    input: params.input,
+    ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
+    ...(params.state !== undefined ? { state: params.state } : {}),
+    ...(params.tools !== undefined ? { tools: params.tools } : {}),
+    ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
+  } satisfies ResponsesCreateRequestParams;
+
+  return params.client.responses.create(buildResponsesCreateParams(requestParams)) as Promise<Response>;
 }

@@ -13,20 +13,22 @@
 * typed response items,
 * корректным tool execution loop,
 * сохранением `model + reasoning.effort`,
-* durable state через `conversation_id`,
+* durable state через `conversation`,
 * рабочим route/backend/frontend contract.  
 
 ## 3. Главный state contract
 
 Нужно жёстко разделить два уровня состояния:
 
-* **Внутри одного user turn / внутри tool loop**: использовать `previous_response_id` для продолжения цепочки шагов Responses API. При каждом новом `responses.create(...)` заново передавать `instructions`.  
-* **Между user turns / для долговременного состояния чата**: использовать **Conversations API** и хранить `conversation_id` в persistence, привязанным к internal chat/session id. Нельзя держать это только в памяти процесса.  
+* **Внутри одного user turn / внутри tool loop**: `previous_response_id` допустим только как вспомогательный loop/compat path, если это реально нужно для продолжения цепочки шагов Responses API внутри одного turn. При каждом новом `responses.create(...)` заново передавать `instructions`.  
+* **Между user turns / для долговременного состояния чата**: использовать **conversation-based durable path** и хранить `conversationId` в persistence, привязанным к internal chat/session id. Нельзя держать это только в памяти процесса.  
 
 То есть:
-`previous_response_id` = **intra-turn orchestration**
-`conversation_id` = **cross-turn durable state**.
+`conversation` = **cross-turn durable state**
+`previous_response_id` = **intra-turn helper path only**.
 Это обязательное правило.
+
+`conversation` и `previous_response_id` нельзя смешивать в одном `responses.create(...)` request.
 
 ## 4. Единый контракт типов
 
@@ -69,8 +71,10 @@ type RunAssistantTurnParams = {
 * `instructions`,
 * `input`,
 * `tools`,
-* `conversation`/`conversation_id` для durable state,
-* `previous_response_id` для продолжения текущего tool loop, если это нужно в данном turn.  
+* `conversation` для durable state,
+* `previous_response_id` только для допустимого intra-turn helper path, если это нужно в данном turn.  
+
+Финальная стратегия между turn'ами — только `conversation-based durable path`.
 
 ## 6. Tool loop contract
 
@@ -117,7 +121,7 @@ phase: "commentary" | "final_answer"
 
 ## 8. Frontend / route contract
 
-Финальная цель — новый нормализованный backend response contract, а не старый raw completion shape. Transitional adapter допустим только как временный слой rollout, с явной пометкой и тестами. Вечный adapter запрещён.  
+Финальная цель — новый нормализованный backend response contract, а не старый raw completion shape.
 
 Канонический final normalized route response contract:
 
@@ -155,9 +159,7 @@ phase: "commentary" | "final_answer"
 
 * `conversationId` не является частью public contract, если фронту он специально не нужен;
 * `ok` обязателен для явного различения success/error path;
-* `phase` входит в normalized public response;
-* legacy `chat.completion` envelope допустим только как временный adapter-слой rollout, с явной пометкой и тестами;
-* adapter не должен маскировать незавершённую frontend migration.  
+* `phase` входит в normalized public response.  
 
 ## 9. Logging contract
 
@@ -210,9 +212,9 @@ Expanded debug — только если `process.env.NODE_ENV !== 'production'`
 3. `reasoning.effort` не теряется от router до request payload. 
 4. Tool loop корректно обрабатывает `function_call` и `function_call_output` по `call_id`. 
 5. Fail-fast guardrails работают на bad JSON / schema fail / unknown tool / timeout / repeated call / no progress. 
-6. Для каждой сессии есть связка `internal session/chat id ↔ conversation_id ↔ latest response id(optional)`.  
+6. Для каждой сессии есть связка `internal session/chat id ↔ conversationId ↔ latestResponseId(optional)`.  
 7. `assistant.phase` сохраняется там, где это нужно. 
-8. Route/frontend contract либо уже новый, либо transitional adapter документирован и покрыт тестом. 
+8. Route/frontend contract уже новый normalized shape. 
 9. Логи содержат routing, state и tool-loop поля. 
 10. Docs обновлены. 
 

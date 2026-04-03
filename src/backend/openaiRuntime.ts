@@ -13,16 +13,6 @@ export type ResponsesRuntimeCapabilities = {
   runtimeKind: 'openai' | 'custom';
 };
 
-function readPackageVersion(): string | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pkg = require('openai/package.json') as { version?: unknown };
-    return typeof pkg?.version === 'string' ? pkg.version : null;
-  } catch {
-    return null;
-  }
-}
-
 function normalizeBaseUrl(rawBaseUrl: string | undefined): string | null {
   const trimmed = rawBaseUrl?.trim();
   if (!trimmed) {
@@ -45,7 +35,7 @@ function inferRuntimeKind(apiBaseUrl: string | null): 'openai' | 'custom' {
   }
 }
 
-export const OPENAI_SDK_VERSION = readPackageVersion();
+export const OPENAI_SDK_VERSION: string | null = null;
 
 export const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<ReasoningEffort>>> = {
   'gpt-5.4': new Set(['none', 'low', 'medium', 'high', 'xhigh']),

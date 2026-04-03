@@ -368,4 +368,64 @@ describe('runAssistant stabilization', () => {
     expect(result.state.conversationId).toBe('conv_1');
     expect(result.state.latestResponseId).toBe('resp_9');
   });
+
+  test('updates durable conversation id from response conversation contract', async () => {
+    mockedGetToolsSchemas.mockReturnValue([]);
+
+    const create = setupOpenAIResponses([
+      {
+        id: 'resp_10',
+        model: 'gpt-5.4-mini',
+        conversation: { id: 'conv_new' },
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    ]);
+
+    const result = await runAssistant({
+      ...params,
+      state: { conversationId: 'conv_old' },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(create.mock.calls[0][0].conversation).toEqual({ id: 'conv_old' });
+    expect(result.state.conversationId).toBe('conv_new');
+    expect(result.state.latestResponseId).toBe('resp_10');
+  });
+
+  test('keeps persisted conversation id when response omits conversation', async () => {
+    mockedGetToolsSchemas.mockReturnValue([]);
+
+    setupOpenAIResponses([
+      {
+        id: 'resp_11',
+        model: 'gpt-5.4-mini',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    ]);
+
+    const result = await runAssistant({
+      ...params,
+      state: { conversationId: 'conv_old' },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.state.conversationId).toBe('conv_old');
+    expect(result.state.latestResponseId).toBe('resp_11');
+  });
 });

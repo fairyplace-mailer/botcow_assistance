@@ -346,12 +346,13 @@ export async function runAssistant(
       totalToolCalls,
     });
 
+    const requestPreviousResponseId = previousResponseId;
     const response = await createModelResponse({
       client: openai,
       model: routing.model,
       input: pendingInput,
       instructions: built.instructions,
-      previousResponseId,
+      previousResponseId: requestPreviousResponseId,
       tools,
       ...(reasoningDecision.sentReasoningEffort
         ? { reasoning: { effort: reasoningDecision.sentReasoningEffort } }
@@ -359,7 +360,6 @@ export async function runAssistant(
     });
 
     lastResponse = response;
-    const requestPreviousResponseId = previousResponseId;
     previousResponseId = response.id;
 
     let functionCalls;
@@ -392,8 +392,10 @@ export async function runAssistant(
       responseId: response.id ?? null,
       previousResponseId: requestPreviousResponseId ?? null,
       totalToolCalls,
-      toolCount: functionCalls.length,
+      toolName: functionCalls[0]?.name ?? null,
+      toolCallId: functionCalls[0]?.call_id ?? null,
       assistantPhase: finalMessage?.phase ?? null,
+      stopReason: null,
       usage: responseUsage(response),
     });
 
@@ -510,6 +512,8 @@ export async function runAssistant(
           previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
+          toolName: call.name,
+          toolCallId: call.call_id,
           resultClass: 'unknown_tool',
           stopReason: error.internalCode,
         });
@@ -538,6 +542,8 @@ export async function runAssistant(
           previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
+          toolName: call.name,
+          toolCallId: call.call_id,
           argsParseOk: false,
           resultClass: 'invalid_tool_args_json',
           stopReason: error.internalCode,
@@ -570,6 +576,8 @@ export async function runAssistant(
           previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
+          toolName: call.name,
+          toolCallId: call.call_id,
           argsParseOk: true,
           schemaValid: false,
           issues: schemaValidation.issues,
@@ -610,6 +618,8 @@ export async function runAssistant(
           previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
+          toolName: call.name,
+          toolCallId: call.call_id,
           resultClass: lastToolResultClass,
           stopReason: error.internalCode,
           fingerprint,
@@ -643,6 +653,8 @@ export async function runAssistant(
           previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
+          toolName: call.name,
+          toolCallId: call.call_id,
           toolLatencyMs,
           resultClass: result.code,
           stopReason: error.internalCode,
@@ -674,6 +686,8 @@ export async function runAssistant(
         previousResponseId: requestPreviousResponseId ?? null,
         tool: call.name,
         call_id: call.call_id,
+        toolName: call.name,
+        toolCallId: call.call_id,
         toolLatencyMs,
         resultClass: 'ok',
         usage: responseUsage(response),

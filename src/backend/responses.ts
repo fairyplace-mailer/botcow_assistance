@@ -364,10 +364,21 @@ export function buildStrictFunctionTools(tools: OpenAI.Responses.Tool[] | undefi
   });
 }
 
+function assertValidResponsesStateMode(state: ResponsesStateMode) {
+  if (state.kind === 'conversation' && !state.conversation?.id) {
+    throw new Error('Responses state validation failed: conversation.id is required');
+  }
+
+  if (state.kind === 'previous_response' && !state.previousResponseId) {
+    throw new Error('Responses state validation failed: previousResponseId is required');
+  }
+}
+
 export function buildResponsesCreateParams(
   params: ResponsesCreateRequestParams,
 ): ResponseCreateParams {
   const state = params.state ?? { kind: 'stateless' as const };
+  assertValidResponsesStateMode(state);
 
   return {
     model: params.model,

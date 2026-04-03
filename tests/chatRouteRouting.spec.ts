@@ -55,7 +55,7 @@ describe('chat route routing contract', () => {
     (runAssistant as jest.Mock).mockResolvedValue({
       response: {
         id: 'resp_1',
-        model: 'gpt-5.4',
+        model: routing.model,
         output: [
           {
             type: 'message',
@@ -98,7 +98,7 @@ describe('chat route routing contract', () => {
       sessionId: 'session_1',
       response: {
         id: 'resp_1',
-        model: 'gpt-5.4',
+        model: routing.model,
         phase: 'final_answer',
         outputText: 'done',
       },
@@ -122,7 +122,7 @@ describe('chat route routing contract', () => {
       'chat_request_completed',
       expect.objectContaining({
         sessionId: 'session_1',
-        model: 'gpt-5.4',
+        model: routing.model,
         modelReason: 'deep-code-debug-review',
         reasoningEffort: 'xhigh',
         requestedReasoningEffort: 'xhigh',
@@ -154,7 +154,7 @@ describe('chat route routing contract', () => {
     (runAssistant as jest.Mock).mockResolvedValue({
       response: {
         id: 'resp_2',
-        model: 'gpt-5.4-mini',
+        model: routing.model,
         output: [
           {
             type: 'message',
@@ -197,7 +197,7 @@ describe('chat route routing contract', () => {
       sessionId: 'session_2',
       response: {
         id: 'resp_2',
-        model: 'gpt-5.4-mini',
+        model: routing.model,
         phase: 'final_answer',
         outputText: 'done',
       },
@@ -221,7 +221,7 @@ describe('chat route routing contract', () => {
       (call) => call[0] === 'chat_request_completed',
     )?.[1];
 
-    expect(payload.model).toBe('gpt-5.4-mini');
+    expect(payload.model).toBe(routing.model);
     expect(payload.modelReason).toBe('short-general-request');
     expect(payload.reasoningEffort).toBeNull();
     expect(payload.requestedReasoningEffort).toBeNull();
@@ -241,7 +241,7 @@ describe('chat route routing contract', () => {
     (runAssistant as jest.Mock).mockResolvedValue({
       response: {
         id: 'resp_adapter',
-        model: 'gpt-5.4-mini',
+        model: routing.model,
         output: [
           {
             type: 'message',
@@ -281,7 +281,7 @@ describe('chat route routing contract', () => {
       sessionId: expect.stringMatching(/^s_/),
       response: {
         id: 'resp_adapter',
-        model: 'gpt-5.4-mini',
+        model: routing.model,
         phase: 'final_answer',
         outputText: 'adapter text',
       },
@@ -302,7 +302,7 @@ describe('chat route routing contract', () => {
     (runAssistant as jest.Mock).mockResolvedValue({
       response: {
         id: 'resp_3',
-        model: 'gpt-5.4-mini',
+        model: routing.model,
         output: [
           {
             type: 'message',
@@ -354,7 +354,7 @@ describe('chat route routing contract', () => {
     (runAssistant as jest.Mock).mockResolvedValue({
       response: {
         id: 'resp_err',
-        model: 'gpt-5.4-mini',
+        model: routing.model,
         output: [],
       },
       completion: null,

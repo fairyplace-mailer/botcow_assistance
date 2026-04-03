@@ -119,12 +119,45 @@ phase: "commentary" | "final_answer"
 
 Финальная цель — новый нормализованный backend response contract, а не старый raw completion shape. Transitional adapter допустим только как временный слой rollout, с явной пометкой и тестами. Вечный adapter запрещён.  
 
-Каноническое правило:
+Канонический final normalized route response contract:
 
-* backend внутри уже полностью на Responses API;
-* route либо сразу отдаёт новый normalized shape,
-* либо временно строит adapter-response для старого фронта;
-* наличие adapter должно быть задокументировано и покрыто тестами.  
+### Success
+
+```json
+{
+  "ok": true,
+  "sessionId": "string",
+  "response": {
+    "id": "string",
+    "model": "string",
+    "phase": "final_answer",
+    "outputText": "string"
+  },
+  "error": null
+}
+```
+
+### Error
+
+```json
+{
+  "ok": false,
+  "sessionId": "string",
+  "response": null,
+  "error": {
+    "code": "assistant_run_failed",
+    "message": "Не удалось завершить действие автоматически. Попробуйте ещё раз."
+  }
+}
+```
+
+Правила:
+
+* `conversationId` не является частью public contract, если фронту он специально не нужен;
+* `ok` обязателен для явного различения success/error path;
+* `phase` входит в normalized public response;
+* legacy `chat.completion` envelope допустим только как временный adapter-слой rollout, с явной пометкой и тестами;
+* adapter не должен маскировать незавершённую frontend migration.  
 
 ## 9. Logging contract
 

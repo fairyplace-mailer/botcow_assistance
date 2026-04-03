@@ -352,9 +352,17 @@ function payloadKeysForStateMode(stateMode: ResponsesStateMode): string[] {
 
 async function logFatalStop(event: string, payload: Record<string, unknown>) {
   await logWarn(event, {
+    toolResultClass: null,
     ...payload,
     finalStatus: 'failed',
   });
+}
+
+function buildFailureState(params: RunAssistantTurnParams, responseId?: string | null) {
+  return {
+    conversationId: params.state.conversationId ?? null,
+    latestResponseId: responseId ?? null,
+  };
 }
 
 export async function runAssistant(params: RunAssistantTurnParams): Promise<AssistantResult> {
@@ -449,10 +457,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: {
-          conversationId: params.state.conversationId ?? null,
-          latestResponseId: response.id ?? null,
-        },
+        state: buildFailureState(params, response.id),
         error,
       });
     }
@@ -566,10 +571,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: {
-          conversationId: params.state.conversationId ?? null,
-          latestResponseId: response.id ?? null,
-        },
+        state: buildFailureState(params, response.id),
         error,
       });
     }
@@ -604,10 +606,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
-          state: {
-            conversationId: params.state.conversationId ?? null,
-            latestResponseId: response.id ?? null,
-          },
+          state: buildFailureState(params, response.id),
           error,
         });
       }
@@ -642,10 +641,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
-          state: {
-            conversationId: params.state.conversationId ?? null,
-            latestResponseId: response.id ?? null,
-          },
+          state: buildFailureState(params, response.id),
           error,
         });
       }
@@ -686,10 +682,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
-          state: {
-            conversationId: params.state.conversationId ?? null,
-            latestResponseId: response.id ?? null,
-          },
+          state: buildFailureState(params, response.id),
           error,
         });
       }
@@ -723,7 +716,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           argsHash,
           argsParseOk: true,
           schemaValid: true,
-          toolResultClass: 'ok',
+          toolResultClass: null,
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           duration: Date.now() - startedAt,
@@ -734,10 +727,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
-          state: {
-            conversationId: params.state.conversationId ?? null,
-            latestResponseId: response.id ?? null,
-          },
+          state: buildFailureState(params, response.id),
           error,
         });
       }
@@ -780,10 +770,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
-          state: {
-            conversationId: params.state.conversationId ?? null,
-            latestResponseId: response.id ?? null,
-          },
+          state: buildFailureState(params, response.id),
           error,
         });
       }
@@ -854,10 +841,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: {
-          conversationId: params.state.conversationId ?? null,
-          latestResponseId: response.id ?? null,
-        },
+        state: buildFailureState(params, response.id),
         error,
       });
     }
@@ -881,10 +865,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: {
-          conversationId: params.state.conversationId ?? null,
-          latestResponseId: response.id ?? null,
-        },
+        state: buildFailureState(params, response.id),
         error,
       });
     }
@@ -920,10 +901,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     completion: null,
     toolCalls: toolCallsLog,
     reasoningDecision: lastReasoningDecision,
-    state: {
-      conversationId: params.state.conversationId ?? null,
-      latestResponseId: previousResponseId ?? null,
-    },
+    state: buildFailureState(params, previousResponseId),
     error,
   });
 }

@@ -74,13 +74,12 @@ describe('assistant stabilization', () => {
       },
     } as any);
 
-    const result = await runAssistant(
-      [
-        { role: 'system', content: 'sys' },
-        { role: 'user', content: 'hello' },
-      ],
-      { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
-    );
+    const result = await runAssistant({
+      instructions: 'sys',
+      userInput: 'hello',
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
 
     expect(result.error).toBeUndefined();
 
@@ -114,13 +113,12 @@ describe('assistant stabilization', () => {
       },
     } as any);
 
-    const result = await runAssistant(
-      [
-        { role: 'system', content: 'sys' },
-        { role: 'user', content: 'hello' },
-      ],
-      { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
-    );
+    const result = await runAssistant({
+      instructions: 'sys',
+      userInput: 'hello',
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
 
     expect(result.error?.internalCode).toBe('invalid_tool_args_json');
 
@@ -129,9 +127,42 @@ describe('assistant stabilization', () => {
 
     expect(warnEvent?.payload.finalStatus).toBe('failed');
     expect(warnEvent?.payload.argsParseOk).toBe(false);
+    expect(warnEvent?.payload.stopReason).toBe('invalid_tool_args_json');
   });
 
-  it('passes previous_response_id only on follow-up loop request', async () => {
+  it('uses conversation mode as priority and never mixes previous_response_id in same request', async () => {
+    const create = jest.fn().mockResolvedValue(
+      makeResponse({
+        id: 'resp-conversation',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+      }),
+    );
+
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: { create },
+    } as any);
+
+    const result = await runAssistant({
+      instructions: 'sys',
+      userInput: 'hello',
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: { conversationId: 'conv-1', previousResponseId: 'resp-old' },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].conversation).toEqual({ id: 'conv-1' });
+    expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
+  });
+
+  it('passes previous_response_id only on follow-up loop request when no conversation state exists', async () => {
     const create = jest
       .fn()
       .mockResolvedValueOnce(
@@ -166,17 +197,70 @@ describe('assistant stabilization', () => {
     } as any);
     mockedHandleToolCall.mockResolvedValue({ ok: true });
 
-    const result = await runAssistant(
-      [
-        { role: 'system', content: 'sys' },
-        { role: 'user', content: 'hello' },
-      ],
-      { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
-    );
+    const result = await runAssistant({
+      instructions: 'sys',
+      userInput: 'hello',
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
 
     expect(result.error).toBeUndefined();
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
+    expect(create.mock.calls[0][0].conversation).toBeUndefined();
     expect(create.mock.calls[1][0].previous_response_id).toBe('resp-1');
+    expect(create.mock.calls[1][0].conversation).toBeUndefined();
+  });
+
+  it('logs repeated tool call as fatal stop with dedicated reason', async () => {
+    const create = jest
+      .fn()
+      .mockResolvedValueOnce(
+        makeResponse({
+          id: 'resp-repeat-1',
+          output: [
+            {
+              type: 'function_call',
+              call_id: 'call-1',
+              name: 'demo_tool',
+              arguments: JSON.stringify({ value: 'x' }),
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          id: 'resp-repeat-2',
+          output: [
+            {
+              type: 'function_call',
+              call_id: 'call-2',
+              name: 'demo_tool',
+              arguments: JSON.stringify({ value: 'x' }),
+            },
+          ],
+        }),
+      );
+
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: { create },
+    } as any);
+    mockedHandleToolCall.mockResolvedValue({ ok: true });
+
+    const result = await runAssistant({
+      instructions: 'sys',
+      userInput: 'hello',
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
+
+    expect(result.error?.internalCode).toBe('repeated_tool_call');
+
+    const events = getRecentRunEvents();
+    const warnEvent = events.find((event) => event.event === 'assistant_repeated_tool_call');
+
+    expect(warnEvent?.payload.finalStatus).toBe('failed');
+    expect(warnEvent?.payload.stopReason).toBe('repeated_tool_call');
+    expect(warnEvent?.payload.toolResultClass).toBe('ok');
   });
 });

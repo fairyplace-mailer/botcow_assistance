@@ -386,6 +386,17 @@ export async function runAssistant(
 
     const finalMessage = extractFinalAssistantMessage(response);
 
+    await logInfo('assistant_round_response', {
+      traceId,
+      round,
+      responseId: response.id ?? null,
+      previousResponseId: requestPreviousResponseId ?? null,
+      totalToolCalls,
+      toolCount: functionCalls.length,
+      assistantPhase: finalMessage?.phase ?? null,
+      usage: responseUsage(response),
+    });
+
     await logEvent('openai-request', {
       traceId,
       path: runtimeCapabilities.path,

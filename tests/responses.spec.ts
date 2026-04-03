@@ -2,22 +2,26 @@ jest.mock('../src/backend/tools', () => ({
   getToolsSchemas: jest.fn(() => [
     {
       type: 'function',
-      name: 'tool_one',
-      description: 'tool one',
-      parameters: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
+      function: {
+        name: 'tool_one',
+        description: 'tool one',
+        parameters: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
       },
     },
     {
       type: 'function',
-      name: 'tool_two',
-      description: 'tool two',
-      parameters: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
+      function: {
+        name: 'tool_two',
+        description: 'tool two',
+        parameters: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
       },
     },
   ]),
@@ -87,9 +91,7 @@ describe('responses tool loop regressions', () => {
   });
 
   test('repeated tool call aborts fast', async () => {
-    (handleToolCall as jest.Mock)
-      .mockResolvedValueOnce({ first: true })
-      .mockResolvedValueOnce({ second: true });
+    (handleToolCall as jest.Mock).mockResolvedValueOnce({ first: true });
 
     const create = jest
       .fn()

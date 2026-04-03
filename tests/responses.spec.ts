@@ -103,6 +103,11 @@ describe('responses tool loop regressions', () => {
             name: 'tool_one',
             arguments: '{}',
           },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: 'resp_2',
+        output: [
           {
             type: 'function_call',
             id: 'fc_2',
@@ -122,14 +127,14 @@ describe('responses tool loop regressions', () => {
       reasoning: { effort: 'none' },
     });
 
-    expect(result.response?.id).toBe('resp_1');
+    expect(result.response?.id).toBe('resp_2');
     expect(result.error).toEqual(
       expect.objectContaining({
         publicCode: 'assistant_run_failed',
         internalCode: 'repeated_tool_call',
       }),
     );
-    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(2);
     expect(handleToolCall).toHaveBeenCalledTimes(1);
   });
 

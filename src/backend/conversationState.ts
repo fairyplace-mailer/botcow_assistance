@@ -17,7 +17,7 @@ function makeKey(sessionId: string): string {
 export async function getConversationState(
   sessionId: string,
 ): Promise<ConversationStateRecord | null> {
-  return kvGetJson<ConversationStateRecord>(makeKey(sessionId));
+  return (await kvGetJson<ConversationStateRecord>(makeKey(sessionId))) ?? null;
 }
 
 export async function saveConversationState(params: {

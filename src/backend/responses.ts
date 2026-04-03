@@ -417,7 +417,7 @@ export async function createModelResponse(params: {
   state?: ResponsesStateMode;
   tools?: OpenAI.Responses.Tool[];
   reasoning?: ResponseCreateParams['reasoning'];
-}) {
+}): Promise<Response> {
   return params.client.responses.create(
     buildResponsesCreateParams({
       model: params.model,
@@ -427,5 +427,5 @@ export async function createModelResponse(params: {
       tools: params.tools,
       reasoning: params.reasoning,
     }),
-  );
+  ) as Promise<Response>;
 }

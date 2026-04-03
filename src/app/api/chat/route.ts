@@ -195,15 +195,16 @@ export async function POST(req: Request) {
   }
 
   const persistedState = await getConversationState(sessionId);
+  const state = persistedState?.conversationId
+    ? { conversationId: persistedState.conversationId }
+    : {};
 
   try {
     const result = await runAssistant({
       instructions,
       userInput: userQuery,
       routing,
-      state: {
-        conversationId: persistedState?.conversationId ?? undefined,
-      },
+      state,
     });
     const ms = Date.now() - startedAt;
     const response = result.response;

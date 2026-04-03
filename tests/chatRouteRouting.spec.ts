@@ -278,7 +278,7 @@ describe('chat route routing contract', () => {
     expect(res.status).toBe(200);
     expect(body).toEqual({
       ok: true,
-      sessionId: expect.any(String),
+      sessionId: expect.stringMatching(/^s_/),
       response: {
         id: 'resp_adapter',
         model: 'gpt-5.4-mini',

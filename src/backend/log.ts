@@ -9,9 +9,37 @@ export type RunEvent = {
 export const MAX_RECENT_RUN_EVENTS = 20;
 const runBuffers = new Map<string, RunEvent[]>();
 
+const LOG_SCHEMA_DEFAULTS: LogPayload = {
+  traceId: null,
+  userTurnId: null,
+  conversationId: null,
+  responseId: null,
+  previousResponseId: null,
+  round: null,
+  totalToolCalls: null,
+  model: null,
+  modelReason: null,
+  reasoningEffort: null,
+  toolName: null,
+  toolCallId: null,
+  argsHash: null,
+  argsParseOk: null,
+  schemaValid: null,
+  toolLatencyMs: null,
+  toolResultClass: null,
+  assistantPhase: null,
+  stopReason: null,
+  finalStatus: null,
+  duration: null,
+  usage: null,
+};
+
 function normalizePayload(payload: LogPayload): LogPayload {
   return Object.fromEntries(
-    Object.entries(payload).map(([key, value]) => [key, value === undefined ? null : value]),
+    Object.entries({ ...LOG_SCHEMA_DEFAULTS, ...payload }).map(([key, value]) => [
+      key,
+      value === undefined ? null : value,
+    ]),
   );
 }
 

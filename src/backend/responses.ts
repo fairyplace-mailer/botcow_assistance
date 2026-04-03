@@ -1,6 +1,7 @@
 import type OpenAI from 'openai';
 import type {
   Response,
+  ResponseCreateParams,
   ResponseInput,
   ResponseInputItem,
   ResponseOutputItem,
@@ -51,6 +52,16 @@ export type ExtractedAssistantMessage = {
   role: 'assistant';
   phase?: AssistantPhase;
   text: string;
+};
+
+export type ResponsesCreateRequestParams = {
+  model: string;
+  instructions?: string;
+  input: ResponseInput;
+  previousResponseId?: string;
+  conversation?: { id: string };
+  tools?: OpenAI.Responses.Tool[];
+  reasoning?: ResponseCreateParams['reasoning'];
 };
 
 export function normalizeTextContent(content: unknown): string {
@@ -349,6 +360,21 @@ export function buildStrictFunctionTools(tools: OpenAI.Responses.Tool[] | undefi
   });
 }
 
+export function buildResponsesCreateParams(
+  params: ResponsesCreateRequestParams,
+): ResponseCreateParams {
+  return {
+    model: params.model,
+    input: params.input,
+    ...(params.instructions ? { instructions: params.instructions } : {}),
+    ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
+    ...(params.conversation ? { conversation: params.conversation } : {}),
+    ...(params.reasoning ? { reasoning: params.reasoning } : {}),
+    tools: buildStrictFunctionTools(params.tools),
+    parallel_tool_calls: false,
+  } as ResponseCreateParams;
+}
+
 export function responseUsage(response: Response | null | undefined) {
   return {
     inputTokens: response?.usage?.input_tokens ?? null,
@@ -365,16 +391,17 @@ export async function createModelResponse(params: {
   previousResponseId?: string;
   conversation?: { id: string };
   tools?: OpenAI.Responses.Tool[];
-  reasoning?: OpenAI.Responses.ResponseCreateParams['reasoning'];
+  reasoning?: ResponseCreateParams['reasoning'];
 }) {
-  return params.client.responses.create({
-    model: params.model,
-    input: params.input,
-    ...(params.instructions ? { instructions: params.instructions } : {}),
-    ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
-    ...(params.conversation ? { conversation: params.conversation } : {}),
-    ...(params.reasoning ? { reasoning: params.reasoning } : {}),
-    tools: buildStrictFunctionTools(params.tools),
-    parallel_tool_calls: false,
-  });
+  return params.client.responses.create(
+    buildResponsesCreateParams({
+      model: params.model,
+      instructions: params.instructions,
+      input: params.input,
+      previousResponseId: params.previousResponseId,
+      conversation: params.conversation,
+      tools: params.tools,
+      reasoning: params.reasoning,
+    }),
+  );
 }

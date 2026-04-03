@@ -90,8 +90,20 @@ describe('chat route routing contract', () => {
     });
 
     const res = await POST(req);
+    const body = await res.json();
 
     expect(res.status).toBe(200);
+    expect(body).toEqual({
+      ok: true,
+      sessionId: 'session_1',
+      response: {
+        id: 'resp_1',
+        model: 'gpt-5.4',
+        phase: 'final_answer',
+        outputText: 'done',
+      },
+      error: null,
+    });
     expect(runAssistant).toHaveBeenCalledTimes(1);
     expect(runAssistant).toHaveBeenCalledWith({
       instructions: expect.any(String),
@@ -177,8 +189,20 @@ describe('chat route routing contract', () => {
     });
 
     const res = await POST(req);
+    const body = await res.json();
 
     expect(res.status).toBe(200);
+    expect(body).toEqual({
+      ok: true,
+      sessionId: 'session_2',
+      response: {
+        id: 'resp_2',
+        model: 'gpt-5.4-mini',
+        phase: 'final_answer',
+        outputText: 'done',
+      },
+      error: null,
+    });
     expect(runAssistant).toHaveBeenCalledWith({
       instructions: expect.any(String),
       userInput: 'hello',
@@ -207,7 +231,7 @@ describe('chat route routing contract', () => {
     expect('routingDebug' in payload).toBe(true);
   });
 
-  test('returns transitional adapter shape for legacy frontend consumers', async () => {
+  test('returns normalized public success contract', async () => {
     const routing = {
       model: 'gpt-5.4-mini',
       reason: 'short-general-request',
@@ -253,20 +277,15 @@ describe('chat route routing contract', () => {
 
     expect(res.status).toBe(200);
     expect(body).toEqual({
+      ok: true,
       sessionId: expect.any(String),
-      id: 'resp_adapter',
-      object: 'chat.completion',
-      model: 'gpt-5.4-mini',
-      choices: [
-        {
-          index: 0,
-          finish_reason: 'stop',
-          message: {
-            role: 'assistant',
-            content: 'adapter text',
-          },
-        },
-      ],
+      response: {
+        id: 'resp_adapter',
+        model: 'gpt-5.4-mini',
+        phase: 'final_answer',
+        outputText: 'adapter text',
+      },
+      error: null,
     });
   });
 
@@ -372,9 +391,13 @@ describe('chat route routing contract', () => {
 
     expect(res.status).toBe(500);
     expect(body).toEqual({
+      ok: false,
       sessionId: 'session_err',
-      code: 'assistant_run_failed',
-      message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+      response: null,
+      error: {
+        code: 'assistant_run_failed',
+        message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+      },
     });
     expect(JSON.stringify(body)).not.toContain('tool_timeout');
   });

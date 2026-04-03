@@ -185,6 +185,10 @@ describe('runAssistant stabilization', () => {
     const result = await runAssistant(params);
 
     expect(result.error?.internalCode).toBe('tool_execution_failed');
+    const fatalEvent = getRecentRunEvents().find((event) => event.event === 'assistant_tool_failed');
+    expect(fatalEvent?.payload.stopReason).toBe('tool_execution_failed');
+    expect(fatalEvent?.payload.toolResultClass).toBe('tool_execution_failed');
+    expect(fatalEvent?.payload.finalStatus).toBe('failed');
   });
 
   test('aborts on repeated fingerprint', async () => {
@@ -238,6 +242,10 @@ describe('runAssistant stabilization', () => {
 
     expect(result.error?.internalCode).toBe('repeated_tool_call');
     expect(create).toHaveBeenCalledTimes(2);
+    const fatalEvent = getRecentRunEvents().find((event) => event.event === 'assistant_repeated_tool_call');
+    expect(fatalEvent?.payload.stopReason).toBe('repeated_tool_call');
+    expect(fatalEvent?.payload.toolResultClass).toBeNull();
+    expect(fatalEvent?.payload.finalStatus).toBe('failed');
   });
 
   test('passes previous_response_id only inside same turn loop', async () => {

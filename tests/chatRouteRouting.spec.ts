@@ -207,6 +207,69 @@ describe('chat route routing contract', () => {
     expect('routingDebug' in payload).toBe(true);
   });
 
+  test('returns transitional adapter shape for legacy frontend consumers', async () => {
+    const routing = {
+      model: 'gpt-5.4-mini',
+      reason: 'short-general-request',
+    };
+
+    (chooseModel as jest.Mock).mockReturnValue(routing);
+    (runAssistant as jest.Mock).mockResolvedValue({
+      response: {
+        id: 'resp_adapter',
+        model: 'gpt-5.4-mini',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'adapter text' }],
+          },
+        ],
+      },
+      completion: null,
+      toolCalls: [],
+      reasoningDecision: {
+        requestedReasoningEffort: null,
+        sentReasoningEffort: null,
+        reasoningSuppressedReason: null,
+      },
+      state: {
+        conversationId: 'conv_adapter',
+        latestResponseId: 'resp_adapter',
+      },
+    });
+
+    const req = new Request('http://localhost/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    const res = await POST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      sessionId: expect.any(String),
+      id: 'resp_adapter',
+      object: 'chat.completion',
+      model: 'gpt-5.4-mini',
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: 'adapter text',
+          },
+        },
+      ],
+    });
+  });
+
   test('does not include routingDebug in production', async () => {
     process.env.NODE_ENV = 'production';
 

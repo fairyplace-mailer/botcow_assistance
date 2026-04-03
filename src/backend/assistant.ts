@@ -412,7 +412,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     const requestConversationId =
       stateMode.kind === 'conversation' ? stateMode.conversation.id : currentConversationId;
 
-    await logInfo('assistant_round_start', {
+    await logInfo('assistant_round_started', {
       traceId,
       userTurnId,
       round,
@@ -447,7 +447,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       functionCalls = extractFunctionCalls(response.output);
     } catch {
       const error = abort('no_actionable_output', response.id);
-      await logFatalStop('assistant_invalid_function_call_cycle', {
+      await logFatalStop('assistant_run_failed', {
         traceId,
         userTurnId,
         round,
@@ -470,7 +470,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
     const finalMessage = extractFinalAssistantMessage(response);
 
-    await logInfo('assistant_round_response', {
+    await logInfo('assistant_round_completed', {
       traceId,
       userTurnId,
       round,
@@ -495,7 +495,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       usage: responseUsage(response),
     });
 
-    await logEvent('openai-request', {
+    await logEvent('openai_request_completed', {
       traceId,
       userTurnId,
       path: runtimeCapabilities.path,
@@ -560,7 +560,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
     if (totalToolCalls + functionCalls.length > MAX_TOTAL_TOOL_CALLS) {
       const error = abort('tool_budget_exceeded', response.id);
-      await logFatalStop('assistant_tool_budget_exceeded', {
+      await logFatalStop('assistant_run_failed', {
         traceId,
         userTurnId,
         round,
@@ -592,7 +592,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       if (!tool) {
         toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'unknown_tool' });
         const error = abort('unknown_tool', response.id);
-        await logFatalStop('assistant_unknown_tool', {
+        await logFatalStop('assistant_run_failed', {
           traceId,
           userTurnId,
           round,
@@ -626,7 +626,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           error: 'invalid_tool_args_json',
         });
         const error = abort('invalid_tool_args_json', response.id);
-        await logFatalStop('assistant_invalid_tool_args_json', {
+        await logFatalStop('assistant_run_failed', {
           traceId,
           userTurnId,
           round,
@@ -665,7 +665,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           error: 'invalid_tool_args_schema',
         });
         const error = abort('invalid_tool_args_schema', response.id);
-        await logFatalStop('assistant_invalid_tool_args_schema', {
+        await logFatalStop('assistant_run_failed', {
           traceId,
           userTurnId,
           round,
@@ -710,7 +710,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           error: 'repeated_tool_call',
         });
         const error = abort('repeated_tool_call', response.id);
-        await logFatalStop('assistant_repeated_tool_call', {
+        await logFatalStop('assistant_run_failed', {
           traceId,
           userTurnId,
           round,
@@ -752,7 +752,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           error: result.code,
         });
         const error = abort(result.code === 'tool_timeout' ? 'tool_timeout' : 'tool_execution_failed', response.id);
-        await logFatalStop('assistant_tool_failed', {
+        await logFatalStop('assistant_run_failed', {
           traceId,
           userTurnId,
           round,
@@ -792,7 +792,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         output: JSON.stringify(result.output),
       });
 
-      await logInfo('assistant_tool_ok', {
+      await logInfo('assistant_tool_succeeded', {
         traceId,
         userTurnId,
         round,
@@ -828,7 +828,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
     if (noProgressRounds >= MAX_NO_PROGRESS_ROUNDS) {
       const error = abort('no_progress_abort', response.id);
-      await logFatalStop('assistant_no_progress_abort', {
+      await logFatalStop('assistant_run_failed', {
         traceId,
         userTurnId,
         round,
@@ -857,7 +857,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
     if (functionCalls.length === 0 && !finalMessage?.text) {
       const error = abort('no_actionable_output', response.id);
-      await logFatalStop('assistant_no_actionable_output', {
+      await logFatalStop('assistant_run_failed', {
         traceId,
         userTurnId,
         round,
@@ -889,7 +889,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
   const finalPreviousResponseId =
     finalStateMode.kind === 'previous_response' ? finalStateMode.previousResponseId : previousResponseId;
   const error = abort('tool_loop_limit', previousResponseId);
-  await logFatalStop('assistant_tool_loop_limit', {
+  await logFatalStop('assistant_run_failed', {
     traceId,
     userTurnId,
     conversationId: currentConversationId,

@@ -833,6 +833,9 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         toolCallId: functionCalls[0]?.call_id ?? null,
         assistantPhase: finalMessage?.phase ?? null,
         stopReason: error.internalCode,
+        progressThisRound,
+        fingerprintChanged,
+        noProgressRounds,
         duration: Date.now() - startedAt,
         usage: responseUsage(response),
       });

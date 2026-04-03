@@ -190,12 +190,26 @@ export async function POST(req: Request) {
       sentReasoningEffort: result.reasoningDecision.sentReasoningEffort,
       reasoningSuppressedReason: result.reasoningDecision.reasoningSuppressedReason,
       responseId: response?.id ?? null,
+      internal_code: result.error?.internalCode ?? null,
       ...(routingDebug !== undefined ? { routingDebug } : {}),
     });
 
+    if (result.error) {
+      return NextResponse.json(
+        {
+          code: result.error.publicCode,
+          message: result.error.publicMessage,
+        },
+        { status: 500 },
+      );
+    }
+
     if (!response || !responseText) {
       return NextResponse.json(
-        { error: 'Assistant did not produce a final answer' },
+        {
+          code: 'assistant_run_failed',
+          message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+        },
         { status: 500 },
       );
     }
@@ -226,13 +240,13 @@ export async function POST(req: Request) {
         status: error?.status,
       },
       durationMs: ms,
+      internal_code: 'assistant_run_failed',
     });
-
-    const message = typeof error?.message === 'string' ? error.message : 'Chat request failed';
 
     return NextResponse.json(
       {
-        error: message,
+        code: 'assistant_run_failed',
+        message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
       },
       { status: 500 },
     );

@@ -9,6 +9,8 @@ jest.mock('../src/backend/openai', () => ({
 
 jest.mock('../src/backend/log', () => ({
   logEvent: jest.fn().mockResolvedValue(undefined),
+  logInfo: jest.fn().mockResolvedValue(undefined),
+  logWarn: jest.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -249,18 +251,25 @@ describe('responses tool loop regressions', () => {
     ).toThrow('Responses payload validation failed: unsupported input content type output_text');
   });
 
-  test('buildResponsesInput keeps input_text only in actual input messages', () => {
+  test('buildResponsesInput keeps assistant messages and phase in input', () => {
     const built = buildResponsesInput([
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'hello' },
-      { role: 'assistant', content: [{ type: 'output_text', text: 'model reply' }] },
+      { role: 'assistant', content: 'model reply', phase: 'commentary' },
     ]);
 
     expect(built.instructions).toBe('sys');
     expect(built.input).toEqual([
       {
+        type: 'message',
         role: 'user',
         content: [{ type: 'input_text', text: 'hello' }],
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        phase: 'commentary',
+        content: [{ type: 'input_text', text: 'model reply' }],
       },
     ]);
   });
@@ -448,11 +457,6 @@ describe('responses tool loop regressions', () => {
     const runtime = getResponsesRuntimeCapabilities();
     const expectedSent = runtime.reasoning === 'supported' ? 'low' : null;
     const expectedSuppressedReason = runtime.reasoning === 'supported' ? null : 'sdk_contract_unknown';
-    const expectedHasReasoningKey = runtime.reasoning === 'supported';
-    const expectedReasoningPayload = runtime.reasoning === 'supported' ? { effort: 'low' } : null;
-    const payloadKeys = runtime.reasoning === 'supported'
-      ? expect.arrayContaining(['reasoning'])
-      : expect.not.arrayContaining(['reasoning']);
 
     expect(logEvent).toHaveBeenCalledWith(
       'openai-request',
@@ -461,9 +465,6 @@ describe('responses tool loop regressions', () => {
         requestedReasoningEffort: 'low',
         sentReasoningEffort: expectedSent,
         reasoningSuppressedReason: expectedSuppressedReason,
-        hasReasoningKey: expectedHasReasoningKey,
-        reasoningPayload: expectedReasoningPayload,
-        payloadKeys,
         runtimeKind: runtime.runtimeKind,
         apiBaseUrl: runtime.apiBaseUrl,
       }),

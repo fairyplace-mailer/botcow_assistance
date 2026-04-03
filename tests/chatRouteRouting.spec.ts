@@ -228,7 +228,7 @@ describe('chat route routing contract', () => {
     expect(payload.sentReasoningEffort).toBeNull();
     expect(payload.reasoningSuppressedReason).toBeNull();
     expect(payload.auxiliaryLatestResponseId).toBe('resp_old');
-    expect('routingDebug' in payload).toBe(true);
+    expect(payload.routingDebug).toEqual({ matchedRule: 'short' });
   });
 
   test('returns normalized public success contract', async () => {

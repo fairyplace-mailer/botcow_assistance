@@ -186,6 +186,33 @@ describe('responses + assistant tool loop spec', () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
+  test('no progress aborts after two empty rounds in a row', async () => {
+    const create = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'resp_np_1',
+        output: [],
+      })
+      .mockResolvedValueOnce({
+        id: 'resp_np_2',
+        output: [],
+      });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({ responses: { create } });
+
+    const result = await runAssistant([{ role: 'user', content: 'run' }], {
+      model: 'gpt-5.4',
+      reasoning: { effort: 'none' },
+    });
+
+    expect(result.error).toEqual(
+      expect.objectContaining({
+        internalCode: 'no_progress_abort',
+      }),
+    );
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
   test('full tool round-trip keeps previous_response_id and returns final answer', async () => {
     (handleToolCall as jest.Mock).mockResolvedValue({ ok: true });
 

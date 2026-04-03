@@ -119,7 +119,7 @@ describe('chat route routing contract', () => {
       latestResponseId: 'resp_1',
     });
     expect(logEvent).toHaveBeenCalledWith(
-      'chat',
+      'chat_request_completed',
       expect.objectContaining({
         sessionId: 'session_1',
         model: 'gpt-5.4',
@@ -218,7 +218,7 @@ describe('chat route routing contract', () => {
     });
 
     const payload = (logEvent as jest.Mock).mock.calls.find(
-      (call) => call[0] === 'chat',
+      (call) => call[0] === 'chat_request_completed',
     )?.[1];
 
     expect(payload.model).toBe('gpt-5.4-mini');
@@ -338,7 +338,7 @@ describe('chat route routing contract', () => {
     expect(res.status).toBe(200);
 
     const payload = (logEvent as jest.Mock).mock.calls.find(
-      (call) => call[0] === 'chat',
+      (call) => call[0] === 'chat_request_completed',
     )?.[1];
 
     expect('routingDebug' in payload).toBe(false);

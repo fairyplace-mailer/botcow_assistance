@@ -205,6 +205,13 @@ export function extractResponseText(response: Response | null | undefined): stri
   return extractFinalAssistantMessage(response)?.text ?? '';
 }
 
+export function extractConversationId(
+  response: Pick<Response, 'conversation'> | null | undefined,
+  persistedConversationId?: string | null,
+): string | null {
+  return response?.conversation?.id ?? persistedConversationId ?? null;
+}
+
 export function makeFunctionCallOutputItem(callId: string, output: unknown): ResponseInputItem {
   return {
     type: 'function_call_output',

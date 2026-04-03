@@ -9,6 +9,8 @@ jest.mock('../src/backend/tools', () => ({
 
 jest.mock('../src/backend/log', () => ({
   logEvent: jest.fn().mockResolvedValue(undefined),
+  logInfo: jest.fn().mockResolvedValue(undefined),
+  logWarn: jest.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -148,7 +150,12 @@ describe('assistant routing propagation', () => {
       runtimeUnsupported,
     );
 
-    expect(Object.keys(built.request).sort()).toEqual(['input', 'model', 'tools']);
+    expect(Object.keys(built.request).sort()).toEqual([
+      'input',
+      'model',
+      'parallel_tool_calls',
+      'tools',
+    ]);
     expect(built.reasoningDecision.reasoningSuppressedReason).toBe('runtime_not_supported');
   });
 });

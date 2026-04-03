@@ -351,7 +351,7 @@ function payloadKeysForStateMode(stateMode: ResponsesStateMode): string[] {
   return [];
 }
 
-async function logFatalStop(event: string, payload: Record<string, unknown>) {
+async function logFatalStop(event: string, payload: Parameters<typeof logWarn>[1]) {
   await logWarn(event, {
     ...payload,
     finalStatus: 'failed',

@@ -16,12 +16,22 @@ const mockedGetOpenAIClient = getOpenAIClient as jest.Mock;
 const mockedGetToolsSchemas = getToolsSchemas as jest.Mock;
 const mockedHandleToolCall = handleToolCall as jest.Mock;
 
+let warnSpy: jest.SpiedFunction<typeof console.warn>;
+let infoSpy: jest.SpiedFunction<typeof console.info>;
+
 describe('runAssistant stabilization', () => {
   beforeEach(() => {
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
     clearRecentRunEvents();
     mockedGetToolsSchemas.mockReset();
     mockedHandleToolCall.mockReset();
     mockedGetOpenAIClient.mockClear();
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
   });
 
   function setupOpenAIResponses(responses: any[]) {

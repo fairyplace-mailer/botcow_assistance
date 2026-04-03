@@ -47,10 +47,10 @@ function inferRuntimeKind(apiBaseUrl: string | null): 'openai' | 'custom' {
 
 export const OPENAI_SDK_VERSION = readPackageVersion();
 
-export const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<Exclude<ReasoningEffort, 'none'>>>> = {
-  'gpt-5.4': new Set(['low', 'medium', 'high', 'xhigh']),
-  'gpt-5.4-mini': new Set(),
-  'gpt-5.4-nano': new Set(),
+export const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<ReasoningEffort>>> = {
+  'gpt-5.4': new Set(['none', 'low', 'medium', 'high', 'xhigh']),
+  'gpt-5.4-mini': new Set(['none', 'low', 'medium', 'high']),
+  'gpt-5.4-nano': new Set(['none', 'low']),
 };
 
 export function getResponsesRuntimeCapabilities(): ResponsesRuntimeCapabilities {

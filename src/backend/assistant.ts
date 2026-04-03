@@ -255,13 +255,15 @@ async function runToolWithTimeout(
   | { ok: true; output: unknown }
   | { ok: false; code: 'tool_timeout' | 'tool_execution_failed'; error?: string }
 > {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
   try {
     const result = await Promise.race([
       handleToolCall(name, args),
       new Promise<never>((_, reject) => {
         const error = new Error(`Tool timed out after ${timeoutMs}ms`);
         error.name = 'TimeoutError';
-        setTimeout(() => reject(error), timeoutMs);
+        timeoutId = setTimeout(() => reject(error), timeoutMs);
       }),
     ]);
 
@@ -276,6 +278,10 @@ async function runToolWithTimeout(
       code: 'tool_execution_failed',
       error: error?.message ? String(error.message) : String(error),
     };
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -325,7 +331,7 @@ export async function runAssistant(
   let lastToolResultClass: ToolResultClass | null = null;
 
   const openai = getOpenAIClient();
-  const tools = getToolsSchemas() ?? [];
+  const tools = buildStrictFunctionTools(getToolsSchemas() ?? []);
   const traceId = `assistant_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
   for (let round = 1; round <= MAX_TOOL_LOOPS; round += 1) {
@@ -356,7 +362,28 @@ export async function runAssistant(
     const requestPreviousResponseId = previousResponseId;
     previousResponseId = response.id;
 
-    const functionCalls = extractFunctionCalls(response.output);
+    let functionCalls;
+    try {
+      functionCalls = extractFunctionCalls(response.output);
+    } catch {
+      const error = abort('no_actionable_output', response.id);
+      await logWarn('assistant_invalid_function_call_cycle', {
+        traceId,
+        round,
+        responseId: response.id ?? null,
+        previousResponseId: requestPreviousResponseId ?? null,
+        stopReason: error.internalCode,
+        usage: responseUsage(response),
+      });
+      return {
+        response,
+        completion: null,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+        error,
+      };
+    }
+
     const finalMessage = extractFinalAssistantMessage(response);
 
     await logEvent('openai-request', {
@@ -398,6 +425,26 @@ export async function runAssistant(
     }
 
     if (functionCalls.length === 0) {
+      noProgressRounds += 1;
+      if (noProgressRounds >= MAX_NO_PROGRESS_ROUNDS) {
+        const error = abort('no_progress_abort', response.id);
+        await logWarn('assistant_no_progress_abort', {
+          traceId,
+          round,
+          responseId: response.id ?? null,
+          previousResponseId: requestPreviousResponseId ?? null,
+          stopReason: error.internalCode,
+          usage: responseUsage(response),
+        });
+        return {
+          response,
+          completion: null,
+          toolCalls: toolCallsLog,
+          reasoningDecision,
+          error,
+        };
+      }
+
       const error = abort('no_actionable_output', response.id);
       await logWarn('assistant_no_actionable_output', {
         traceId,
@@ -438,6 +485,7 @@ export async function runAssistant(
 
     let progressThisRound = false;
     const nextInput: OpenAI.Responses.ResponseInputItem[] = [];
+    let roundFingerprintChanged = false;
 
     for (const call of functionCalls) {
       const tool = getToolDefinition(call.name, tools);
@@ -527,6 +575,8 @@ export async function runAssistant(
       }
 
       const fingerprint = makeToolFingerprint(call.name, parsed.value, lastToolResultClass);
+      roundFingerprintChanged = roundFingerprintChanged || fingerprint !== lastFingerprint;
+
       if (fingerprint === lastFingerprint) {
         sameFingerprintInRow += 1;
       } else {
@@ -619,7 +669,7 @@ export async function runAssistant(
       });
     }
 
-    if (!progressThisRound && !finalMessage?.text && sameFingerprintInRow > 0) {
+    if (!progressThisRound && !finalMessage?.text && !roundFingerprintChanged) {
       noProgressRounds += 1;
     } else {
       noProgressRounds = 0;

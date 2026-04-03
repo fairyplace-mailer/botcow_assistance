@@ -1,13 +1,15 @@
 jest.mock('./kv', () => {
-  const store = new Map<string, unknown>();
+  const sharedState = {
+    store: new Map<string, unknown>(),
+  };
 
   return {
-    kvGetJson: jest.fn(async (key: string) => (store.has(key) ? store.get(key) : null)),
+    kvGetJson: jest.fn(async (key: string) => (sharedState.store.has(key) ? sharedState.store.get(key) : null)),
     kvSetJson: jest.fn(async (key: string, value: unknown) => {
-      store.set(key, value);
+      sharedState.store.set(key, value);
     }),
-    __resetStore: () => store.clear(),
-    __dumpStore: () => Array.from(store.entries()),
+    __resetStore: () => sharedState.store.clear(),
+    __dumpStore: () => Array.from(sharedState.store.entries()),
   };
 });
 
@@ -67,7 +69,7 @@ describe('conversationState', () => {
 
     const loaded = await getConversationState('chat-1');
     expect(kvGetJson).toHaveBeenLastCalledWith('conversation-state:chat-1');
-    expect(kvGetJson.mock.results.at(-1)?.value).resolves.toEqual(
+    await expect(kvGetJson.mock.results.at(-1)?.value).resolves.toEqual(
       expect.objectContaining({
         sessionId: 'chat-1',
         conversationId: 'conv_1',
@@ -110,7 +112,7 @@ describe('conversationState', () => {
     });
 
     expect(kvGetJson).toHaveBeenCalledWith('conversation-state:chat-2');
-    expect(kvGetJson.mock.results.at(-1)?.value).resolves.toEqual(
+    await expect(kvGetJson.mock.results.at(-1)?.value).resolves.toEqual(
       expect.objectContaining({
         sessionId: 'chat-2',
         conversationId: 'conv_2',

@@ -218,7 +218,7 @@ export async function POST(req: Request) {
       latestResponseId: result.state.latestResponseId,
     });
 
-    await logEvent('chat', {
+    await logEvent('chat_request_completed', {
       sessionId,
       messages,
       toolCalls: result.toolCalls,
@@ -281,7 +281,7 @@ export async function POST(req: Request) {
   } catch (error: any) {
     const ms = Date.now() - startedAt;
 
-    await logEvent('chat-error', {
+    await logEvent('chat_request_failed', {
       sessionId,
       messages,
       conversationId: persistedState?.conversationId ?? null,

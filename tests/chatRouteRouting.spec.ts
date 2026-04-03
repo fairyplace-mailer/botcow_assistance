@@ -125,4 +125,47 @@ describe('chat route routing contract', () => {
     expect(payload.reasoningSuppressedReason).toBeNull();
     expect('routingDebug' in payload).toBe(false);
   });
+
+  test('external error is normalized without internal text', async () => {
+    const routing = {
+      model: 'gpt-5.4-mini',
+      reason: 'short-general-request',
+    };
+
+    (chooseModel as jest.Mock).mockReturnValue(routing);
+    (runAssistant as jest.Mock).mockResolvedValue({
+      response: { id: 'resp_err', model: 'gpt-5.4-mini', output: [], output_text: '' },
+      completion: null,
+      toolCalls: [],
+      reasoningDecision: {
+        requestedReasoningEffort: null,
+        sentReasoningEffort: null,
+        reasoningSuppressedReason: null,
+      },
+      error: {
+        publicCode: 'assistant_run_failed',
+        publicMessage: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+        internalCode: 'tool_timeout',
+      },
+    });
+
+    const req = new Request('http://localhost/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    const res = await POST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toEqual({
+      code: 'assistant_run_failed',
+      message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+    });
+    expect(JSON.stringify(body)).not.toContain('tool_timeout');
+    expect(JSON.stringify(body)).not.toContain('Assistant did not produce a final answer within tool loop limit');
+  });
 });

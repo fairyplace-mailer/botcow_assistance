@@ -6,12 +6,19 @@ jest.mock('./kv', () => {
     kvSetJson: jest.fn(async (key: string, value: unknown) => {
       store.set(key, value);
     }),
+    __resetStore: () => store.clear(),
   };
 });
 
 import { getConversationState, saveConversationState } from './conversationState';
 
+const { __resetStore } = jest.requireMock('./kv') as { __resetStore: () => void };
+
 describe('conversationState', () => {
+  beforeEach(() => {
+    __resetStore();
+  });
+
   it('returns null for unknown session', async () => {
     await expect(getConversationState('chat-1')).resolves.toBeNull();
   });

@@ -6,13 +6,11 @@ import type { ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import type OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
 import {
-  buildResponsesInput,
   buildStrictFunctionTools,
   createModelResponse,
   extractFinalAssistantMessage,
   extractFunctionCalls,
   responseUsage,
-  type AssistantMessage,
 } from './responses';
 import { logEvent, logInfo, logWarn } from './log';
 import {
@@ -49,6 +47,25 @@ type AssistantInternalCode =
   | 'no_actionable_output'
   | 'tool_loop_limit';
 
+export type AssistantRunOptions = {
+  model: ModelRoutingDecision['model'];
+  reasoning?: { effort: ReasoningEffort };
+  reason?: string;
+};
+
+export type ConversationStateRef = {
+  conversationId?: string;
+  previousResponseId?: string;
+};
+
+export type RunAssistantTurnParams = {
+  instructions: string;
+  userInput: string;
+  tools?: OpenAI.Responses.Tool[];
+  routing: AssistantRunOptions;
+  state: ConversationStateRef;
+};
+
 interface AssistantResult {
   response: Response | null;
   completion: null;
@@ -59,6 +76,10 @@ interface AssistantResult {
     error?: string;
   }>;
   reasoningDecision: ReasoningDecision;
+  state: {
+    conversationId: string | null;
+    latestResponseId: string | null;
+  };
   error?: {
     publicCode: 'assistant_run_failed';
     publicMessage: string;
@@ -301,46 +322,24 @@ function finalizeFailure(
   return params;
 }
 
-export function buildResponsesRequest(
-  rawMessages: AssistantMessage[],
-  routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
-  runtimeCapabilities: ResponsesRuntimeCapabilities,
-) {
-  const built = buildResponsesInput(rawMessages);
-  const reasoningDecision = resolveReasoningDecision(routing, runtimeCapabilities);
-  const tools = buildStrictFunctionTools(getToolsSchemas() ?? []);
-
-  return {
-    request: {
-      model: routing.model,
-      input: built.input,
-      ...(built.instructions ? { instructions: built.instructions } : {}),
-      ...(reasoningDecision.sentReasoningEffort
-        ? { reasoning: { effort: reasoningDecision.sentReasoningEffort } }
-        : {}),
-      tools,
-      parallel_tool_calls: false,
-    },
-    reasoningDecision,
-  };
-}
-
-export async function runAssistant(
-  rawMessages: AssistantMessage[],
-  routing: Pick<ModelRoutingDecision, 'model' | 'reasoning' | 'reason'>,
-): Promise<AssistantResult> {
+export async function runAssistant(params: RunAssistantTurnParams): Promise<AssistantResult> {
   const startedAt = Date.now();
-  const built = buildResponsesInput(rawMessages);
   const toolCallsLog: AssistantResult['toolCalls'] = [];
   let lastResponse: Response | null = null;
   let lastReasoningDecision: ReasoningDecision = {
-    requestedReasoningEffort: routing.reasoning?.effort ?? null,
+    requestedReasoningEffort: params.routing.reasoning?.effort ?? null,
     sentReasoningEffort: null,
     reasoningSuppressedReason: null,
   };
 
-  let pendingInput = built.input;
-  let previousResponseId: string | undefined;
+  let pendingInput: OpenAI.Responses.ResponseInputItem[] = [
+    {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: params.userInput }],
+    },
+  ];
+  let previousResponseId: string | undefined = params.state.previousResponseId;
   let totalToolCalls = 0;
   let noProgressRounds = 0;
   let lastFingerprint: string | null = null;
@@ -348,23 +347,24 @@ export async function runAssistant(
   let lastToolResultClass: ToolResultClass | null = null;
 
   const openai = getOpenAIClient();
-  const tools = buildStrictFunctionTools(getToolsSchemas() ?? []);
+  const tools = buildStrictFunctionTools(params.tools ?? getToolsSchemas() ?? []);
   const traceId = `assistant_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const userTurnId = traceId;
 
   for (let round = 1; round <= MAX_TOOL_LOOPS; round += 1) {
     const runtimeCapabilities = getResponsesRuntimeCapabilities();
-    const reasoningDecision = resolveReasoningDecision(routing, runtimeCapabilities);
+    const reasoningDecision = resolveReasoningDecision(params.routing, runtimeCapabilities);
     lastReasoningDecision = reasoningDecision;
 
     await logInfo('assistant_round_start', {
       traceId,
       userTurnId,
       round,
+      conversationId: params.state.conversationId ?? null,
       previousResponseId: previousResponseId ?? null,
       totalToolCalls,
-      model: routing.model,
-      modelReason: routing.reason,
+      model: params.routing.model,
+      modelReason: params.routing.reason,
       reasoningEffort: reasoningDecision.sentReasoningEffort,
       finalStatus: 'in_progress',
       duration: Date.now() - startedAt,
@@ -373,10 +373,13 @@ export async function runAssistant(
     const requestPreviousResponseId = previousResponseId;
     const response = await createModelResponse({
       client: openai,
-      model: routing.model,
+      model: params.routing.model,
       input: pendingInput,
-      instructions: built.instructions,
+      instructions: params.instructions,
       previousResponseId: requestPreviousResponseId,
+      conversation: params.state.conversationId
+        ? { id: params.state.conversationId }
+        : undefined,
       tools,
       ...(reasoningDecision.sentReasoningEffort
         ? { reasoning: { effort: reasoningDecision.sentReasoningEffort } }
@@ -395,6 +398,7 @@ export async function runAssistant(
         traceId,
         userTurnId,
         round,
+        conversationId: params.state.conversationId ?? null,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         stopReason: error.internalCode,
@@ -407,6 +411,10 @@ export async function runAssistant(
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
+        state: {
+          conversationId: params.state.conversationId ?? null,
+          latestResponseId: response.id ?? null,
+        },
         error,
       });
     }
@@ -417,11 +425,12 @@ export async function runAssistant(
       traceId,
       userTurnId,
       round,
+      conversationId: params.state.conversationId ?? null,
       responseId: response.id ?? null,
       previousResponseId: requestPreviousResponseId ?? null,
       totalToolCalls,
-      model: routing.model,
-      modelReason: routing.reason,
+      model: params.routing.model,
+      modelReason: params.routing.reason,
       reasoningEffort: reasoningDecision.sentReasoningEffort,
       toolName: functionCalls[0]?.name ?? null,
       toolCallId: functionCalls[0]?.call_id ?? null,
@@ -442,8 +451,8 @@ export async function runAssistant(
       userTurnId,
       path: runtimeCapabilities.path,
       methodWrapper: 'openai.responses.create',
-      model: routing.model,
-      modelReason: routing.reason,
+      model: params.routing.model,
+      modelReason: params.routing.reason,
       reasoningEffort: reasoningDecision.sentReasoningEffort,
       requestedReasoningEffort: reasoningDecision.requestedReasoningEffort,
       sentReasoningEffort: reasoningDecision.sentReasoningEffort,
@@ -452,6 +461,7 @@ export async function runAssistant(
       runtimeReasoningSupport: runtimeCapabilities.reasoning,
       runtimeKind: runtimeCapabilities.runtimeKind,
       apiBaseUrl: runtimeCapabilities.apiBaseUrl,
+      conversationId: params.state.conversationId ?? null,
       previousResponseId: requestPreviousResponseId ?? null,
       responseId: response.id ?? null,
       round,
@@ -463,10 +473,11 @@ export async function runAssistant(
       payloadKeys: [
         'model',
         'input',
-        ...(built.instructions ? ['instructions'] : []),
+        'instructions',
         ...(reasoningDecision.sentReasoningEffort ? ['reasoning'] : []),
         'tools',
         'parallel_tool_calls',
+        ...(params.state.conversationId ? ['conversation'] : []),
         ...(requestPreviousResponseId ? ['previous_response_id'] : []),
       ],
     });
@@ -475,11 +486,12 @@ export async function runAssistant(
       await logInfo('assistant_run_completed', {
         traceId,
         userTurnId,
+        conversationId: params.state.conversationId ?? null,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         totalToolCalls,
-        model: routing.model,
-        modelReason: routing.reason,
+        model: params.routing.model,
+        modelReason: params.routing.reason,
         reasoningEffort: reasoningDecision.sentReasoningEffort,
         assistantPhase: finalMessage.phase ?? null,
         finalStatus: 'completed',
@@ -491,6 +503,10 @@ export async function runAssistant(
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
+        state: {
+          conversationId: params.state.conversationId ?? null,
+          latestResponseId: response.id ?? null,
+        },
       });
     }
 
@@ -500,6 +516,7 @@ export async function runAssistant(
         traceId,
         userTurnId,
         round,
+        conversationId: params.state.conversationId ?? null,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         stopReason: error.internalCode,
@@ -513,6 +530,10 @@ export async function runAssistant(
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
+        state: {
+          conversationId: params.state.conversationId ?? null,
+          latestResponseId: response.id ?? null,
+        },
         error,
       });
     }
@@ -531,6 +552,7 @@ export async function runAssistant(
           traceId,
           userTurnId,
           round,
+          conversationId: params.state.conversationId ?? null,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -547,6 +569,10 @@ export async function runAssistant(
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
+          state: {
+            conversationId: params.state.conversationId ?? null,
+            latestResponseId: response.id ?? null,
+          },
           error,
         });
       }
@@ -564,6 +590,7 @@ export async function runAssistant(
           traceId,
           userTurnId,
           round,
+          conversationId: params.state.conversationId ?? null,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -581,6 +608,10 @@ export async function runAssistant(
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
+          state: {
+            conversationId: params.state.conversationId ?? null,
+            latestResponseId: response.id ?? null,
+          },
           error,
         });
       }
@@ -602,6 +633,7 @@ export async function runAssistant(
           traceId,
           userTurnId,
           round,
+          conversationId: params.state.conversationId ?? null,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -621,6 +653,10 @@ export async function runAssistant(
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
+          state: {
+            conversationId: params.state.conversationId ?? null,
+            latestResponseId: response.id ?? null,
+          },
           error,
         });
       }
@@ -646,6 +682,7 @@ export async function runAssistant(
           traceId,
           userTurnId,
           round,
+          conversationId: params.state.conversationId ?? null,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -665,6 +702,10 @@ export async function runAssistant(
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
+          state: {
+            conversationId: params.state.conversationId ?? null,
+            latestResponseId: response.id ?? null,
+          },
           error,
         });
       }
@@ -687,6 +728,7 @@ export async function runAssistant(
           traceId,
           userTurnId,
           round,
+          conversationId: params.state.conversationId ?? null,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -707,6 +749,10 @@ export async function runAssistant(
           completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
+          state: {
+            conversationId: params.state.conversationId ?? null,
+            latestResponseId: response.id ?? null,
+          },
           error,
         });
       }
@@ -726,11 +772,12 @@ export async function runAssistant(
         traceId,
         userTurnId,
         round,
+        conversationId: params.state.conversationId ?? null,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         totalToolCalls,
-        model: routing.model,
-        modelReason: routing.reason,
+        model: params.routing.model,
+        modelReason: params.routing.reason,
         reasoningEffort: reasoningDecision.sentReasoningEffort,
         toolName: call.name,
         toolCallId: call.call_id,
@@ -761,6 +808,7 @@ export async function runAssistant(
         traceId,
         userTurnId,
         round,
+        conversationId: params.state.conversationId ?? null,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         toolName: functionCalls[0]?.name ?? null,
@@ -776,6 +824,10 @@ export async function runAssistant(
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
+        state: {
+          conversationId: params.state.conversationId ?? null,
+          latestResponseId: response.id ?? null,
+        },
         error,
       });
     }
@@ -786,6 +838,7 @@ export async function runAssistant(
         traceId,
         userTurnId,
         round,
+        conversationId: params.state.conversationId ?? null,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         assistantPhase: finalMessage?.phase ?? null,
@@ -799,6 +852,10 @@ export async function runAssistant(
         completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
+        state: {
+          conversationId: params.state.conversationId ?? null,
+          latestResponseId: response.id ?? null,
+        },
         error,
       });
     }
@@ -810,11 +867,12 @@ export async function runAssistant(
   await logWarn('assistant_tool_loop_limit', {
     traceId,
     userTurnId,
+    conversationId: params.state.conversationId ?? null,
     responseId: previousResponseId ?? null,
     previousResponseId: previousResponseId ?? null,
     totalToolCalls,
-    model: routing.model,
-    modelReason: routing.reason,
+    model: params.routing.model,
+    modelReason: params.routing.reason,
     reasoningEffort: lastReasoningDecision.sentReasoningEffort,
     stopReason: error.internalCode,
     finalStatus: 'failed',
@@ -826,6 +884,10 @@ export async function runAssistant(
     completion: null,
     toolCalls: toolCallsLog,
     reasoningDecision: lastReasoningDecision,
+    state: {
+      conversationId: params.state.conversationId ?? null,
+      latestResponseId: previousResponseId ?? null,
+    },
     error,
   });
 }

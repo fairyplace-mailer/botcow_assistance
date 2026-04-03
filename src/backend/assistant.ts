@@ -398,6 +398,11 @@ export async function runAssistant(
       totalToolCalls,
       toolName: functionCalls[0]?.name ?? null,
       toolCallId: functionCalls[0]?.call_id ?? null,
+      argsHash: null,
+      argsParseOk: null,
+      schemaValid: null,
+      toolLatencyMs: null,
+      toolResultClass: null,
       assistantPhase: finalMessage?.phase ?? null,
       stopReason: null,
       usage: responseUsage(response),
@@ -463,7 +468,8 @@ export async function runAssistant(
 
     let progressThisRound = false;
     const nextInput: OpenAI.Responses.ResponseInputItem[] = [];
-    let roundFingerprint: string | null = null;
+    const roundFingerprints: string[] = [];
+    const previousFingerprintBeforeRound = lastFingerprint;
 
     for (const call of functionCalls) {
       const tool = getToolDefinition(call.name, tools);
@@ -475,15 +481,14 @@ export async function runAssistant(
           round,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
-          tool: call.name,
-          call_id: call.call_id,
           toolName: call.name,
           toolCallId: call.call_id,
           argsHash: null,
           argsParseOk: null,
           schemaValid: null,
           toolLatencyMs: null,
-          resultClass: 'unknown_tool',
+          toolResultClass: 'unknown_tool',
+          assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           usage: responseUsage(response),
         });
@@ -510,15 +515,14 @@ export async function runAssistant(
           round,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
-          tool: call.name,
-          call_id: call.call_id,
           toolName: call.name,
           toolCallId: call.call_id,
           argsHash: null,
           argsParseOk: false,
           schemaValid: null,
           toolLatencyMs: null,
-          resultClass: 'invalid_tool_args_json',
+          toolResultClass: 'invalid_tool_args_json',
+          assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           usage: responseUsage(response),
         });
@@ -549,16 +553,14 @@ export async function runAssistant(
           round,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
-          tool: call.name,
-          call_id: call.call_id,
           toolName: call.name,
           toolCallId: call.call_id,
           argsHash,
           argsParseOk: true,
           schemaValid: false,
           toolLatencyMs: null,
-          issues: schemaValidation.issues,
-          resultClass: 'invalid_tool_args_schema',
+          toolResultClass: 'invalid_tool_args_schema',
+          assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           usage: responseUsage(response),
         });
@@ -572,7 +574,7 @@ export async function runAssistant(
       }
 
       const fingerprint = makeToolFingerprint(call.name, parsed.value, lastToolResultClass);
-      roundFingerprint = fingerprint;
+      roundFingerprints.push(fingerprint);
 
       if (fingerprint === lastFingerprint) {
         sameFingerprintInRow += 1;
@@ -593,18 +595,16 @@ export async function runAssistant(
           round,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
-          tool: call.name,
-          call_id: call.call_id,
           toolName: call.name,
           toolCallId: call.call_id,
           argsHash,
           argsParseOk: true,
           schemaValid: true,
           toolLatencyMs: null,
-          resultClass: lastToolResultClass,
+          toolResultClass: lastToolResultClass,
+          assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           usage: responseUsage(response),
-          fingerprint,
         });
         return {
           response,
@@ -634,15 +634,14 @@ export async function runAssistant(
           round,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
-          tool: call.name,
-          call_id: call.call_id,
           toolName: call.name,
           toolCallId: call.call_id,
           argsHash,
           argsParseOk: true,
           schemaValid: true,
           toolLatencyMs,
-          resultClass: result.code,
+          toolResultClass: result.code,
+          assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           usage: responseUsage(response),
         });
@@ -671,21 +670,21 @@ export async function runAssistant(
         round,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
-        tool: call.name,
-        call_id: call.call_id,
         toolName: call.name,
         toolCallId: call.call_id,
         argsHash,
         argsParseOk: true,
         schemaValid: true,
         toolLatencyMs,
-        resultClass: 'ok',
+        toolResultClass: 'ok',
+        assistantPhase: finalMessage?.phase ?? null,
         stopReason: null,
         usage: responseUsage(response),
       });
     }
 
-    const fingerprintChanged = roundFingerprint !== null && roundFingerprint !== lastFingerprint;
+    const roundFingerprint = roundFingerprints.length ? roundFingerprints.join('|') : null;
+    const fingerprintChanged = roundFingerprint !== previousFingerprintBeforeRound;
 
     if (!progressThisRound && !finalMessage?.text && !fingerprintChanged) {
       noProgressRounds += 1;
@@ -700,6 +699,14 @@ export async function runAssistant(
         round,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
+        toolName: functionCalls[0]?.name ?? null,
+        toolCallId: functionCalls[0]?.call_id ?? null,
+        argsHash: null,
+        argsParseOk: null,
+        schemaValid: null,
+        toolLatencyMs: null,
+        toolResultClass: null,
+        assistantPhase: finalMessage?.phase ?? null,
         stopReason: error.internalCode,
         usage: responseUsage(response),
       });
@@ -713,31 +720,20 @@ export async function runAssistant(
     }
 
     if (functionCalls.length === 0 && !finalMessage?.text) {
-      if (noProgressRounds >= MAX_NO_PROGRESS_ROUNDS) {
-        const error = abort('no_progress_abort', response.id);
-        await logWarn('assistant_no_progress_abort', {
-          traceId,
-          round,
-          responseId: response.id ?? null,
-          previousResponseId: requestPreviousResponseId ?? null,
-          stopReason: error.internalCode,
-          usage: responseUsage(response),
-        });
-        return {
-          response,
-          completion: null,
-          toolCalls: toolCallsLog,
-          reasoningDecision,
-          error,
-        };
-      }
-
       const error = abort('no_actionable_output', response.id);
       await logWarn('assistant_no_actionable_output', {
         traceId,
         round,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
+        toolName: null,
+        toolCallId: null,
+        argsHash: null,
+        argsParseOk: null,
+        schemaValid: null,
+        toolLatencyMs: null,
+        toolResultClass: null,
+        assistantPhase: finalMessage?.phase ?? null,
         stopReason: error.internalCode,
         usage: responseUsage(response),
       });
@@ -758,6 +754,14 @@ export async function runAssistant(
     traceId,
     responseId: previousResponseId ?? null,
     previousResponseId: previousResponseId ?? null,
+    toolName: null,
+    toolCallId: null,
+    argsHash: null,
+    argsParseOk: null,
+    schemaValid: null,
+    toolLatencyMs: null,
+    toolResultClass: null,
+    assistantPhase: null,
     stopReason: error.internalCode,
     totalToolCalls,
   });

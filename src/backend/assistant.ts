@@ -7,6 +7,7 @@ import type OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
 import {
   buildResponsesInput,
+  buildStrictFunctionTools,
   createModelResponse,
   extractFinalAssistantMessage,
   extractFunctionCalls,
@@ -185,7 +186,11 @@ function abort(code: AssistantInternalCode, responseId?: string) {
   };
 }
 
-function getToolDefinition(name: string, tools: OpenAI.Responses.Tool[]) {
+function getToolDefinition(name: string, tools: OpenAI.Responses.Tool[] | undefined) {
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return undefined;
+  }
+
   return tools.find((tool: any) => tool?.type === 'function' && tool?.name === name) as
     | OpenAI.Responses.FunctionTool
     | undefined;
@@ -274,6 +279,30 @@ async function runToolWithTimeout(
   }
 }
 
+export function buildResponsesRequest(
+  rawMessages: AssistantMessage[],
+  routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
+  runtimeCapabilities: ResponsesRuntimeCapabilities,
+) {
+  const built = buildResponsesInput(rawMessages);
+  const reasoningDecision = resolveReasoningDecision(routing, runtimeCapabilities);
+  const tools = buildStrictFunctionTools(getToolsSchemas() ?? []);
+
+  return {
+    request: {
+      model: routing.model,
+      input: built.input,
+      ...(built.instructions ? { instructions: built.instructions } : {}),
+      ...(reasoningDecision.sentReasoningEffort
+        ? { reasoning: { effort: reasoningDecision.sentReasoningEffort } }
+        : {}),
+      tools,
+      parallel_tool_calls: false,
+    },
+    reasoningDecision,
+  };
+}
+
 export async function runAssistant(
   rawMessages: AssistantMessage[],
   routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
@@ -296,7 +325,7 @@ export async function runAssistant(
   let lastToolResultClass: ToolResultClass | null = null;
 
   const openai = getOpenAIClient();
-  const tools = getToolsSchemas();
+  const tools = getToolsSchemas() ?? [];
   const traceId = `assistant_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
   for (let round = 1; round <= MAX_TOOL_LOOPS; round += 1) {
@@ -324,6 +353,7 @@ export async function runAssistant(
     });
 
     lastResponse = response;
+    const requestPreviousResponseId = previousResponseId;
     previousResponseId = response.id;
 
     const functionCalls = extractFunctionCalls(response.output);
@@ -341,12 +371,21 @@ export async function runAssistant(
       runtimeReasoningSupport: runtimeCapabilities.reasoning,
       runtimeKind: runtimeCapabilities.runtimeKind,
       apiBaseUrl: runtimeCapabilities.apiBaseUrl,
-      previousResponseId,
+      previousResponseId: requestPreviousResponseId ?? null,
       responseId: response.id ?? null,
       round,
       usage: responseUsage(response),
       toolCount: functionCalls.length,
       assistantPhase: finalMessage?.phase ?? null,
+      payloadKeys: [
+        'model',
+        'input',
+        ...(built.instructions ? ['instructions'] : []),
+        ...(reasoningDecision.sentReasoningEffort ? ['reasoning'] : []),
+        'tools',
+        'parallel_tool_calls',
+        ...(requestPreviousResponseId ? ['previous_response_id'] : []),
+      ],
     });
 
     if (finalMessage?.text && functionCalls.length === 0) {
@@ -364,7 +403,7 @@ export async function runAssistant(
         traceId,
         round,
         responseId: response.id ?? null,
-        previousResponseId: previousResponseId ?? null,
+        previousResponseId: requestPreviousResponseId ?? null,
         stopReason: error.internalCode,
         usage: responseUsage(response),
       });
@@ -383,7 +422,7 @@ export async function runAssistant(
         traceId,
         round,
         responseId: response.id ?? null,
-        previousResponseId: previousResponseId ?? null,
+        previousResponseId: requestPreviousResponseId ?? null,
         stopReason: error.internalCode,
         totalToolCalls,
         requestedCalls: functionCalls.length,
@@ -409,7 +448,7 @@ export async function runAssistant(
           traceId,
           round,
           responseId: response.id ?? null,
-          previousResponseId: previousResponseId ?? null,
+          previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
           resultClass: 'unknown_tool',
@@ -437,7 +476,7 @@ export async function runAssistant(
           traceId,
           round,
           responseId: response.id ?? null,
-          previousResponseId: previousResponseId ?? null,
+          previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
           argsParseOk: false,
@@ -469,7 +508,7 @@ export async function runAssistant(
           traceId,
           round,
           responseId: response.id ?? null,
-          previousResponseId: previousResponseId ?? null,
+          previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
           argsParseOk: true,
@@ -507,7 +546,7 @@ export async function runAssistant(
           traceId,
           round,
           responseId: response.id ?? null,
-          previousResponseId: previousResponseId ?? null,
+          previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
           resultClass: lastToolResultClass,
@@ -540,7 +579,7 @@ export async function runAssistant(
           traceId,
           round,
           responseId: response.id ?? null,
-          previousResponseId: previousResponseId ?? null,
+          previousResponseId: requestPreviousResponseId ?? null,
           tool: call.name,
           call_id: call.call_id,
           toolLatencyMs,
@@ -571,7 +610,7 @@ export async function runAssistant(
         traceId,
         round,
         responseId: response.id ?? null,
-        previousResponseId: previousResponseId ?? null,
+        previousResponseId: requestPreviousResponseId ?? null,
         tool: call.name,
         call_id: call.call_id,
         toolLatencyMs,
@@ -592,7 +631,7 @@ export async function runAssistant(
         traceId,
         round,
         responseId: response.id ?? null,
-        previousResponseId: previousResponseId ?? null,
+        previousResponseId: requestPreviousResponseId ?? null,
         stopReason: error.internalCode,
         usage: responseUsage(response),
       });

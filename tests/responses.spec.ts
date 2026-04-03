@@ -37,6 +37,7 @@ jest.mock('../src/backend/log', () => ({
 import {
   buildFunctionCallOutputs,
   buildResponsesInput,
+  extractFinalAssistantMessage,
   extractFunctionCalls,
   validateResponsesInput,
 } from '../src/backend/responses';
@@ -85,7 +86,7 @@ describe('responses tool loop regressions', () => {
     ]);
   });
 
-  test('multiple function calls in one response are all processed', async () => {
+  test('repeated tool call aborts fast', async () => {
     (handleToolCall as jest.Mock)
       .mockResolvedValueOnce({ first: true })
       .mockResolvedValueOnce({ second: true });
@@ -106,21 +107,10 @@ describe('responses tool loop regressions', () => {
             type: 'function_call',
             id: 'fc_2',
             call_id: 'call_2',
-            name: 'tool_two',
+            name: 'tool_one',
             arguments: '{}',
           },
         ],
-      })
-      .mockResolvedValueOnce({
-        id: 'resp_2',
-        output: [
-          {
-            type: 'message',
-            role: 'assistant',
-            content: [{ type: 'output_text', text: 'done' }],
-          },
-        ],
-        output_text: 'done',
       });
 
     (getOpenAIClient as jest.Mock).mockReturnValue({
@@ -132,16 +122,18 @@ describe('responses tool loop regressions', () => {
       reasoning: { effort: 'none' },
     });
 
-    expect(result.response?.id).toBe('resp_2');
-    expect(create).toHaveBeenCalledTimes(2);
-    expect(create.mock.calls[1][0].previous_response_id).toBe('resp_1');
-    expect(create.mock.calls[1][0].input).toEqual([
-      { type: 'function_call_output', call_id: 'call_1', output: '{"first":true}' },
-      { type: 'function_call_output', call_id: 'call_2', output: '{"second":true}' },
-    ]);
+    expect(result.response?.id).toBe('resp_1');
+    expect(result.error).toEqual(
+      expect.objectContaining({
+        publicCode: 'assistant_run_failed',
+        internalCode: 'repeated_tool_call',
+      }),
+    );
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(handleToolCall).toHaveBeenCalledTimes(1);
   });
 
-  test('follow-up tool request keeps previous_response_id chain', async () => {
+  test('full tool round-trip returns final response', async () => {
     (handleToolCall as jest.Mock).mockResolvedValueOnce({ ok: true });
 
     const create = jest
@@ -164,6 +156,7 @@ describe('responses tool loop regressions', () => {
           {
             type: 'message',
             role: 'assistant',
+            phase: 'final_answer',
             content: [{ type: 'output_text', text: 'done' }],
           },
         ],
@@ -174,17 +167,66 @@ describe('responses tool loop regressions', () => {
       responses: { create },
     });
 
-    await runAssistant([{ role: 'user', content: 'run tool' }], {
+    const result = await runAssistant([{ role: 'user', content: 'run tool' }], {
       model: 'gpt-5.4',
       reasoning: { effort: 'none' },
     });
 
+    expect(result.error).toBeUndefined();
+    expect(result.response?.id).toBe('resp_chain_2');
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
     expect(create.mock.calls[1][0].previous_response_id).toBe('resp_chain_1');
     expect(create.mock.calls[1][0].input).toEqual([
       { type: 'function_call_output', call_id: 'call_chain_1', output: '{"ok":true}' },
     ]);
+  });
+
+  test('follow-up keeps previous_response_id and resends instructions', async () => {
+    (handleToolCall as jest.Mock).mockResolvedValueOnce({ ok: true });
+
+    const create = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'resp_follow_1',
+        output: [
+          {
+            type: 'function_call',
+            id: 'fc_follow_1',
+            call_id: 'call_follow_1',
+            name: 'tool_one',
+            arguments: '{}',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: 'resp_follow_2',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+        output_text: 'done',
+      });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({
+      responses: { create },
+    });
+
+    await runAssistant([
+      { role: 'system', content: 'DEV_INSTR' },
+      { role: 'user', content: 'run tool' },
+    ], {
+      model: 'gpt-5.4',
+      reasoning: { effort: 'none' },
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0][0].instructions).toBe('DEV_INSTR');
+    expect(create.mock.calls[1][0].previous_response_id).toBe('resp_follow_1');
+    expect(create.mock.calls[1][0].instructions).toBe('DEV_INSTR');
   });
 
   test('stale call_id is blocked before request', () => {
@@ -294,6 +336,32 @@ describe('responses tool loop regressions', () => {
         content: [{ type: 'input_text', text: 'model reply' }],
       },
     ]);
+  });
+
+  test('extractFinalAssistantMessage prefers final_answer phase', () => {
+    expect(
+      extractFinalAssistantMessage({
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'commentary',
+            content: [{ type: 'output_text', text: 'thinking' }],
+          },
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+      } as any),
+    ).toEqual({
+      id: undefined,
+      role: 'assistant',
+      phase: 'final_answer',
+      text: 'done',
+    });
   });
 
   test('supportsReasoning returns true for the whole gpt-5.4 family on supported runtime path', () => {

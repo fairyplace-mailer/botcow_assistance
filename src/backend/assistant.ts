@@ -1,22 +1,19 @@
+import { createHash } from 'crypto';
+
 import { getOpenAIClient } from './openai';
 import { getToolsSchemas, handleToolCall } from './tools';
 import type { ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import type OpenAI from 'openai';
-import type {
-  Response,
-  ResponseInputItem,
-  ResponseStreamEvent,
-} from 'openai/resources/responses/responses';
-import type { Stream } from 'openai/streaming';
+import type { Response } from 'openai/resources/responses/responses';
 import {
-  buildFunctionCallOutputs,
   buildResponsesInput,
-  extractResponseText,
-  getResponseFunctionCalls,
-  validateResponsesInput,
+  createModelResponse,
+  extractFinalAssistantMessage,
+  extractFunctionCalls,
+  responseUsage,
   type AssistantMessage,
 } from './responses';
-import { logEvent } from './log';
+import { logEvent, logInfo, logWarn } from './log';
 import {
   getResponsesRuntimeCapabilities,
   supportsReasoning,
@@ -24,6 +21,32 @@ import {
   type ReasoningSuppressedReason,
   type ResponsesRuntimeCapabilities,
 } from './openaiRuntime';
+
+const MAX_TOOL_LOOPS = 12;
+const MAX_TOTAL_TOOL_CALLS = 24;
+const MAX_SAME_FINGERPRINT_IN_ROW = 2;
+const MAX_NO_PROGRESS_ROUNDS = 2;
+const TOOL_TIMEOUT_MS = 20_000;
+
+type ToolResultClass =
+  | 'ok'
+  | 'invalid_tool_args_json'
+  | 'invalid_tool_args_schema'
+  | 'unknown_tool'
+  | 'tool_timeout'
+  | 'tool_execution_failed';
+
+type AssistantInternalCode =
+  | 'invalid_tool_args_json'
+  | 'invalid_tool_args_schema'
+  | 'unknown_tool'
+  | 'tool_timeout'
+  | 'tool_execution_failed'
+  | 'repeated_tool_call'
+  | 'no_progress_abort'
+  | 'tool_budget_exceeded'
+  | 'no_actionable_output'
+  | 'tool_loop_limit';
 
 interface AssistantResult {
   response: Response | null;
@@ -35,6 +58,12 @@ interface AssistantResult {
     error?: string;
   }>;
   reasoningDecision: ReasoningDecision;
+  error?: {
+    publicCode: 'assistant_run_failed';
+    publicMessage: string;
+    internalCode: AssistantInternalCode;
+    responseId?: string;
+  };
 }
 
 export type ReasoningDecision = {
@@ -109,117 +138,147 @@ export function resolveReasoningDecision(
   };
 }
 
-type LegacyToolSchema = {
-  type: 'function';
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
-};
-
-function isLegacyToolSchema(tool: unknown): tool is LegacyToolSchema {
-  if (!tool || typeof tool !== 'object') {
-    return false;
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
   }
 
-  const maybeTool = tool as Record<string, unknown>;
-  const maybeFunction = maybeTool.function;
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
 
-  return (
-    maybeTool.type === 'function' &&
-    !!maybeFunction &&
-    typeof maybeFunction === 'object' &&
-    typeof (maybeFunction as Record<string, unknown>).name === 'string'
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+    a.localeCompare(b),
   );
+
+  return `{${entries
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+    .join(',')}}`;
 }
 
-function toResponseTools(tools: ReturnType<typeof getToolsSchemas> | undefined): OpenAI.Responses.Tool[] {
-  if (!Array.isArray(tools) || tools.length === 0) {
-    return [];
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function makeToolFingerprint(
+  toolName: string,
+  args: unknown,
+  prevResultClass: ToolResultClass | null,
+): string {
+  return sha256(`${toolName}\n${stableStringify(args)}\n${prevResultClass ?? 'none'}`);
+}
+
+function safeParseToolArgs(raw: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function abort(code: AssistantInternalCode, responseId?: string) {
+  return {
+    publicCode: 'assistant_run_failed' as const,
+    publicMessage: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+    internalCode: code,
+    ...(responseId ? { responseId } : {}),
+  };
+}
+
+function getToolDefinition(name: string, tools: OpenAI.Responses.Tool[]) {
+  return tools.find((tool: any) => tool?.type === 'function' && tool?.name === name) as
+    | OpenAI.Responses.FunctionTool
+    | undefined;
+}
+
+function validateToolArgsAgainstSchema(
+  schema: Record<string, unknown> | null | undefined,
+  value: unknown,
+): { ok: true } | { ok: false; issues: string[] } {
+  if (!schema || typeof schema !== 'object') {
+    return { ok: true };
   }
 
-  return tools.map((tool) => {
-    if (isLegacyToolSchema(tool)) {
-      const normalized: OpenAI.Responses.FunctionTool = {
-        type: 'function',
-        name: tool.function.name,
-        parameters: tool.function.parameters ?? null,
-        strict: false,
-      };
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, issues: ['arguments must be an object'] };
+  }
 
-      if (tool.function.description !== undefined) {
-        normalized.description = tool.function.description;
+  const objectValue = value as Record<string, unknown>;
+  const properties =
+    schema.properties && typeof schema.properties === 'object'
+      ? (schema.properties as Record<string, Record<string, unknown>>)
+      : {};
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((item): item is string => typeof item === 'string')
+    : [];
+  const additionalProperties = schema.additionalProperties;
+  const issues: string[] = [];
+
+  for (const key of required) {
+    if (!(key in objectValue)) {
+      issues.push(`missing required field: ${key}`);
+    }
+  }
+
+  for (const [key, item] of Object.entries(objectValue)) {
+    const propSchema = properties[key];
+
+    if (!propSchema) {
+      if (additionalProperties === false) {
+        issues.push(`unexpected field: ${key}`);
       }
-
-      return normalized;
+      continue;
     }
 
-    return tool as OpenAI.Responses.Tool;
-  });
-}
-
-function isResponseResult(
-  value: Response | Stream<ResponseStreamEvent>,
-): value is Response {
-  return !!value && typeof value === 'object' && 'output' in value;
-}
-
-function debugLog(type: string, payload: Record<string, unknown>) {
-  if (process.env.NODE_ENV === 'production') {
-    return Promise.resolve();
+    const expectedType = propSchema.type;
+    if (typeof expectedType === 'string') {
+      const actualType = Array.isArray(item) ? 'array' : item === null ? 'null' : typeof item;
+      if (expectedType !== actualType) {
+        issues.push(`field ${key} must be ${expectedType}`);
+      }
+    }
   }
 
-  return logEvent(type, payload);
+  return issues.length ? { ok: false, issues } : { ok: true };
 }
 
-function buildNextToolInput(
-  functionCalls: ReturnType<typeof getResponseFunctionCalls>,
-  toolResults: Array<{ call_id: string; output: unknown }>,
-): ResponseInputItem[] {
-  const nextInput = buildFunctionCallOutputs(functionCalls, toolResults);
-  validateResponsesInput(nextInput);
-  return nextInput;
-}
+async function runToolWithTimeout(
+  name: string,
+  args: unknown,
+  timeoutMs: number,
+): Promise<
+  | { ok: true; output: unknown }
+  | { ok: false; code: 'tool_timeout' | 'tool_execution_failed'; error?: string }
+> {
+  try {
+    const result = await Promise.race([
+      handleToolCall(name, args),
+      new Promise<never>((_, reject) => {
+        const error = new Error(`Tool timed out after ${timeoutMs}ms`);
+        error.name = 'TimeoutError';
+        setTimeout(() => reject(error), timeoutMs);
+      }),
+    ]);
 
-export function buildResponsesRequest(
-  messages: AssistantMessage[],
-  routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
-  runtimeCapabilities: ResponsesRuntimeCapabilities = getResponsesRuntimeCapabilities(),
-): {
-  request: OpenAI.Responses.ResponseCreateParams;
-  reasoningDecision: ReasoningDecision;
-  runtimeCapabilities: ResponsesRuntimeCapabilities;
-} {
-  const built = buildResponsesInput(messages);
-  const reasoningDecision = resolveReasoningDecision(routing, runtimeCapabilities);
+    return { ok: true, output: result };
+  } catch (error: any) {
+    if (error?.name === 'TimeoutError') {
+      return { ok: false, code: 'tool_timeout', error: error.message };
+    }
 
-  const request: OpenAI.Responses.ResponseCreateParams = {
-    model: routing.model,
-    input: built.input,
-    tools: toResponseTools(getToolsSchemas()),
-  };
-
-  if (built.instructions) {
-    request.instructions = built.instructions;
+    return {
+      ok: false,
+      code: 'tool_execution_failed',
+      error: error?.message ? String(error.message) : String(error),
+    };
   }
-
-  if (reasoningDecision.sentReasoningEffort) {
-    request.reasoning = { effort: reasoningDecision.sentReasoningEffort };
-  }
-
-  return { request, reasoningDecision, runtimeCapabilities };
 }
 
 export async function runAssistant(
   rawMessages: AssistantMessage[],
   routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
 ): Promise<AssistantResult> {
-  const maxToolLoops = 10;
-
   const built = buildResponsesInput(rawMessages);
-  let currentInput: OpenAI.Responses.ResponseInput = built.input;
-  const instructions = built.instructions;
   const toolCallsLog: AssistantResult['toolCalls'] = [];
   let lastResponse: Response | null = null;
   let lastReasoningDecision: ReasoningDecision = {
@@ -228,79 +287,69 @@ export async function runAssistant(
     reasoningSuppressedReason: null,
   };
 
-  const openai = getOpenAIClient();
+  let pendingInput = built.input;
+  let previousResponseId: string | undefined;
+  let totalToolCalls = 0;
+  let noProgressRounds = 0;
+  let lastFingerprint: string | null = null;
+  let sameFingerprintInRow = 0;
+  let lastToolResultClass: ToolResultClass | null = null;
 
-  for (let i = 0; i < maxToolLoops; i += 1) {
+  const openai = getOpenAIClient();
+  const tools = getToolsSchemas();
+  const traceId = `assistant_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+  for (let round = 1; round <= MAX_TOOL_LOOPS; round += 1) {
     const runtimeCapabilities = getResponsesRuntimeCapabilities();
     const reasoningDecision = resolveReasoningDecision(routing, runtimeCapabilities);
     lastReasoningDecision = reasoningDecision;
 
-    const request: OpenAI.Responses.ResponseCreateParams = {
+    await logInfo('assistant_round_start', {
+      traceId,
+      round,
+      previousResponseId: previousResponseId ?? null,
+      totalToolCalls,
+    });
+
+    const response = await createModelResponse({
+      client: openai,
       model: routing.model,
-      input: currentInput,
-      tools: toResponseTools(getToolsSchemas()),
-    };
+      input: pendingInput,
+      instructions: built.instructions,
+      previousResponseId,
+      tools,
+      ...(reasoningDecision.sentReasoningEffort
+        ? { reasoning: { effort: reasoningDecision.sentReasoningEffort } }
+        : {}),
+    });
 
-    if (instructions) {
-      request.instructions = instructions;
-    }
+    lastResponse = response;
+    previousResponseId = response.id;
 
-    if (lastResponse?.id) {
-      request.previous_response_id = lastResponse.id;
-    }
-
-    if (reasoningDecision.sentReasoningEffort) {
-      request.reasoning = { effort: reasoningDecision.sentReasoningEffort };
-    }
+    const functionCalls = extractFunctionCalls(response.output);
+    const finalMessage = extractFinalAssistantMessage(response);
 
     await logEvent('openai-request', {
+      traceId,
       path: runtimeCapabilities.path,
       methodWrapper: 'openai.responses.create',
-      model: request.model,
+      model: routing.model,
       requestedReasoningEffort: reasoningDecision.requestedReasoningEffort,
       sentReasoningEffort: reasoningDecision.sentReasoningEffort,
       reasoningSuppressedReason: reasoningDecision.reasoningSuppressedReason,
-      payloadKeys: Object.keys(request).sort(),
       sdkVersion: runtimeCapabilities.sdkVersion,
       runtimeReasoningSupport: runtimeCapabilities.reasoning,
       runtimeKind: runtimeCapabilities.runtimeKind,
       apiBaseUrl: runtimeCapabilities.apiBaseUrl,
-      previous_response_id: request.previous_response_id ?? null,
-      hasReasoningKey: Object.prototype.hasOwnProperty.call(request, 'reasoning'),
-      reasoningPayload: Object.prototype.hasOwnProperty.call(request, 'reasoning')
-        ? request.reasoning
-        : null,
-      toolCount: Array.isArray(request.tools) ? request.tools.length : 0,
-      inputItemCount: Array.isArray(request.input) ? request.input.length : null,
-      hasInstructions: typeof request.instructions === 'string' && request.instructions.length > 0,
+      previousResponseId,
+      responseId: response.id ?? null,
+      round,
+      usage: responseUsage(response),
+      toolCount: functionCalls.length,
+      assistantPhase: finalMessage?.phase ?? null,
     });
 
-    const response = await openai.responses.create(request);
-
-    if (!isResponseResult(response)) {
-      throw new Error('Streaming Responses API is not supported in assistant runtime');
-    }
-
-    lastResponse = response;
-
-    const functionCalls = getResponseFunctionCalls(response.output);
-    const responseText = extractResponseText(response);
-
-    await debugLog('responses-tool-loop', {
-      response_id: response.id ?? null,
-      toolLoopRound: i + 1,
-      toolCallCount: functionCalls.length,
-      hasFinalText: !!responseText,
-      functionCalls: functionCalls.map((call) => ({
-        id: call.id ?? null,
-        call_id: call.call_id,
-        name: call.name,
-        arguments: call.arguments,
-      })),
-      responseOutput: response.output,
-    });
-
-    if (functionCalls.length === 0) {
+    if (finalMessage?.text && functionCalls.length === 0) {
       return {
         response,
         completion: null,
@@ -309,66 +358,270 @@ export async function runAssistant(
       };
     }
 
-    const toolResults: Array<{ call_id: string; output: unknown }> = [];
-
-    for (const call of functionCalls) {
-      const name = call.name ?? '';
-      const tool_call_id = call.call_id;
-      const rawArgs = call.arguments ?? '{}';
-
-      let args: unknown;
-      try {
-        args = JSON.parse(rawArgs);
-      } catch {
-        args = {};
-      }
-
-      try {
-        const result = await handleToolCall(name, args as unknown);
-        toolCallsLog.push({ tool_call_id, name, ok: true });
-        toolResults.push({ call_id: tool_call_id, output: result });
-      } catch (error) {
-        const err = error as Error;
-        const msg = err.message || String(error);
-
-        toolCallsLog.push({
-          tool_call_id,
-          name,
-          ok: false,
-          error: msg,
-        });
-
-        toolResults.push({
-          call_id: tool_call_id,
-          output: { error: msg },
-        });
-      }
+    if (functionCalls.length === 0) {
+      const error = abort('no_actionable_output', response.id);
+      await logWarn('assistant_no_actionable_output', {
+        traceId,
+        round,
+        responseId: response.id ?? null,
+        previousResponseId: previousResponseId ?? null,
+        stopReason: error.internalCode,
+        usage: responseUsage(response),
+      });
+      return {
+        response,
+        completion: null,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+        error,
+      };
     }
 
-    const nextInput = buildNextToolInput(functionCalls, toolResults);
+    if (totalToolCalls + functionCalls.length > MAX_TOTAL_TOOL_CALLS) {
+      const error = abort('tool_budget_exceeded', response.id);
+      await logWarn('assistant_tool_budget_exceeded', {
+        traceId,
+        round,
+        responseId: response.id ?? null,
+        previousResponseId: previousResponseId ?? null,
+        stopReason: error.internalCode,
+        totalToolCalls,
+        requestedCalls: functionCalls.length,
+      });
+      return {
+        response,
+        completion: null,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+        error,
+      };
+    }
 
-    await debugLog('responses-tool-loop-next-input', {
-      response_id: response.id ?? null,
-      toolLoopRound: i + 1,
-      toolCallCount: functionCalls.length,
-      functionCallOutputCallIds: nextInput.map((item) =>
-        'call_id' in item ? item.call_id : null,
-      ),
-      nextInput,
-      previous_response_id: response.id ?? null,
-    });
+    let progressThisRound = false;
+    const nextInput: OpenAI.Responses.ResponseInputItem[] = [];
 
-    currentInput = nextInput;
+    for (const call of functionCalls) {
+      const tool = getToolDefinition(call.name, tools);
+      if (!tool) {
+        toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'unknown_tool' });
+        const error = abort('unknown_tool', response.id);
+        await logWarn('assistant_unknown_tool', {
+          traceId,
+          round,
+          responseId: response.id ?? null,
+          previousResponseId: previousResponseId ?? null,
+          tool: call.name,
+          call_id: call.call_id,
+          resultClass: 'unknown_tool',
+          stopReason: error.internalCode,
+        });
+        return {
+          response,
+          completion: null,
+          toolCalls: toolCallsLog,
+          reasoningDecision,
+          error,
+        };
+      }
+
+      const parsed = safeParseToolArgs(call.arguments);
+      if (!parsed.ok) {
+        toolCallsLog.push({
+          tool_call_id: call.call_id,
+          name: call.name,
+          ok: false,
+          error: 'invalid_tool_args_json',
+        });
+        const error = abort('invalid_tool_args_json', response.id);
+        await logWarn('assistant_invalid_tool_args_json', {
+          traceId,
+          round,
+          responseId: response.id ?? null,
+          previousResponseId: previousResponseId ?? null,
+          tool: call.name,
+          call_id: call.call_id,
+          argsParseOk: false,
+          resultClass: 'invalid_tool_args_json',
+          stopReason: error.internalCode,
+        });
+        return {
+          response,
+          completion: null,
+          toolCalls: toolCallsLog,
+          reasoningDecision,
+          error,
+        };
+      }
+
+      const schemaValidation = validateToolArgsAgainstSchema(
+        (tool.parameters as Record<string, unknown> | null | undefined) ?? null,
+        parsed.value,
+      );
+      if (!schemaValidation.ok) {
+        toolCallsLog.push({
+          tool_call_id: call.call_id,
+          name: call.name,
+          ok: false,
+          error: 'invalid_tool_args_schema',
+        });
+        const error = abort('invalid_tool_args_schema', response.id);
+        await logWarn('assistant_invalid_tool_args_schema', {
+          traceId,
+          round,
+          responseId: response.id ?? null,
+          previousResponseId: previousResponseId ?? null,
+          tool: call.name,
+          call_id: call.call_id,
+          argsParseOk: true,
+          schemaValid: false,
+          issues: schemaValidation.issues,
+          resultClass: 'invalid_tool_args_schema',
+          stopReason: error.internalCode,
+        });
+        return {
+          response,
+          completion: null,
+          toolCalls: toolCallsLog,
+          reasoningDecision,
+          error,
+        };
+      }
+
+      const fingerprint = makeToolFingerprint(call.name, parsed.value, lastToolResultClass);
+      if (fingerprint === lastFingerprint) {
+        sameFingerprintInRow += 1;
+      } else {
+        sameFingerprintInRow = 1;
+      }
+      lastFingerprint = fingerprint;
+
+      if (sameFingerprintInRow >= MAX_SAME_FINGERPRINT_IN_ROW) {
+        toolCallsLog.push({
+          tool_call_id: call.call_id,
+          name: call.name,
+          ok: false,
+          error: 'repeated_tool_call',
+        });
+        const error = abort('repeated_tool_call', response.id);
+        await logWarn('assistant_repeated_tool_call', {
+          traceId,
+          round,
+          responseId: response.id ?? null,
+          previousResponseId: previousResponseId ?? null,
+          tool: call.name,
+          call_id: call.call_id,
+          resultClass: lastToolResultClass,
+          stopReason: error.internalCode,
+          fingerprint,
+        });
+        return {
+          response,
+          completion: null,
+          toolCalls: toolCallsLog,
+          reasoningDecision,
+          error,
+        };
+      }
+
+      const startedAt = Date.now();
+      const result = await runToolWithTimeout(call.name, parsed.value, TOOL_TIMEOUT_MS);
+      const toolLatencyMs = Date.now() - startedAt;
+
+      if (!result.ok) {
+        lastToolResultClass = result.code;
+        toolCallsLog.push({
+          tool_call_id: call.call_id,
+          name: call.name,
+          ok: false,
+          error: result.code,
+        });
+        const error = abort(result.code === 'tool_timeout' ? 'tool_timeout' : 'tool_execution_failed', response.id);
+        await logWarn('assistant_tool_failed', {
+          traceId,
+          round,
+          responseId: response.id ?? null,
+          previousResponseId: previousResponseId ?? null,
+          tool: call.name,
+          call_id: call.call_id,
+          toolLatencyMs,
+          resultClass: result.code,
+          stopReason: error.internalCode,
+          usage: responseUsage(response),
+        });
+        return {
+          response,
+          completion: null,
+          toolCalls: toolCallsLog,
+          reasoningDecision,
+          error,
+        };
+      }
+
+      lastToolResultClass = 'ok';
+      totalToolCalls += 1;
+      progressThisRound = true;
+      toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: true });
+      nextInput.push({
+        type: 'function_call_output',
+        call_id: call.call_id,
+        output: JSON.stringify(result.output),
+      });
+
+      await logInfo('assistant_tool_ok', {
+        traceId,
+        round,
+        responseId: response.id ?? null,
+        previousResponseId: previousResponseId ?? null,
+        tool: call.name,
+        call_id: call.call_id,
+        toolLatencyMs,
+        resultClass: 'ok',
+        usage: responseUsage(response),
+      });
+    }
+
+    if (!progressThisRound && !finalMessage?.text && sameFingerprintInRow > 0) {
+      noProgressRounds += 1;
+    } else {
+      noProgressRounds = 0;
+    }
+
+    if (noProgressRounds >= MAX_NO_PROGRESS_ROUNDS) {
+      const error = abort('no_progress_abort', response.id);
+      await logWarn('assistant_no_progress_abort', {
+        traceId,
+        round,
+        responseId: response.id ?? null,
+        previousResponseId: previousResponseId ?? null,
+        stopReason: error.internalCode,
+        usage: responseUsage(response),
+      });
+      return {
+        response,
+        completion: null,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+        error,
+      };
+    }
+
+    pendingInput = nextInput;
   }
 
-  if (lastResponse && extractResponseText(lastResponse)) {
-    return {
-      response: lastResponse,
-      completion: null,
-      toolCalls: toolCallsLog,
-      reasoningDecision: lastReasoningDecision,
-    };
-  }
+  const error = abort('tool_loop_limit', previousResponseId);
+  await logWarn('assistant_tool_loop_limit', {
+    traceId,
+    responseId: previousResponseId ?? null,
+    previousResponseId: previousResponseId ?? null,
+    stopReason: error.internalCode,
+    totalToolCalls,
+  });
 
-  throw new Error('Assistant did not produce a final answer within tool loop limit');
+  return {
+    response: lastResponse,
+    completion: null,
+    toolCalls: toolCallsLog,
+    reasoningDecision: lastReasoningDecision,
+    error,
+  };
 }

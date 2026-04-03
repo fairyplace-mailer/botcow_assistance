@@ -130,7 +130,7 @@ describe('chat route routing contract', () => {
         reasoningSuppressedReason: 'sdk_contract_unknown',
         routingDebug: { matchedRule: 'stack-trace' },
         conversationId: 'conv_1',
-        previousResponseId: null,
+        auxiliaryLatestResponseId: null,
         responseId: 'resp_1',
       }),
     );
@@ -227,7 +227,7 @@ describe('chat route routing contract', () => {
     expect(payload.requestedReasoningEffort).toBeNull();
     expect(payload.sentReasoningEffort).toBeNull();
     expect(payload.reasoningSuppressedReason).toBeNull();
-    expect(payload.previousResponseId).toBe('resp_old');
+    expect(payload.auxiliaryLatestResponseId).toBe('resp_old');
     expect('routingDebug' in payload).toBe(true);
   });
 

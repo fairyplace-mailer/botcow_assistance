@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 import { NextResponse } from 'next/server';
 import { runAssistant } from '../../../backend/assistant';
 import { logEvent } from '../../../backend/log';
@@ -7,6 +9,15 @@ import {
   retrieveDevWixContext,
 } from '../../../backend/devWixDocs/retrieve';
 import { extractResponseText } from '../../../backend/responses';
+import {
+  getConversationState,
+  saveConversationState,
+} from '../../../backend/conversationState';
+
+function getSessionId(req: Request): string {
+  const headerValue = req.headers.get('x-botcow-session-id')?.trim();
+  return headerValue || randomUUID();
+}
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -15,6 +26,8 @@ export async function POST(req: Request) {
   if (!messages || !Array.isArray(messages)) {
     return NextResponse.json({ error: 'Invalid messages' }, { status: 400 });
   }
+
+  const sessionId = getSessionId(req);
 
   const systemMessage = {
     role: 'system' as const,
@@ -171,14 +184,39 @@ export async function POST(req: Request) {
   const routing = chooseModel(fullMessages);
   const routingDebug =
     process.env.NODE_ENV !== 'production' && 'debug' in routing ? routing.debug : undefined;
+  const instructions = fullMessages
+    .filter((message) => message.role === 'system' && typeof message.content === 'string')
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join('\n\n');
+
+  if (!userQuery) {
+    return NextResponse.json({ error: 'Invalid messages' }, { status: 400 });
+  }
+
+  const persistedState = await getConversationState(sessionId);
 
   try {
-    const result = await runAssistant(fullMessages, routing);
+    const result = await runAssistant({
+      instructions,
+      userInput: userQuery,
+      routing,
+      state: {
+        conversationId: persistedState?.conversationId ?? undefined,
+      },
+    });
     const ms = Date.now() - startedAt;
     const response = result.response;
     const responseText = extractResponseText(response);
 
+    await saveConversationState({
+      sessionId,
+      conversationId: result.state.conversationId,
+      latestResponseId: result.state.latestResponseId,
+    });
+
     await logEvent('chat', {
+      sessionId,
       messages,
       toolCalls: result.toolCalls,
       hasCompletion: !!response,
@@ -189,6 +227,8 @@ export async function POST(req: Request) {
       requestedReasoningEffort: result.reasoningDecision.requestedReasoningEffort,
       sentReasoningEffort: result.reasoningDecision.sentReasoningEffort,
       reasoningSuppressedReason: result.reasoningDecision.reasoningSuppressedReason,
+      conversationId: result.state.conversationId,
+      previousResponseId: persistedState?.latestResponseId ?? null,
       responseId: response?.id ?? null,
       internal_code: result.error?.internalCode ?? null,
       ...(routingDebug !== undefined ? { routingDebug } : {}),
@@ -197,6 +237,7 @@ export async function POST(req: Request) {
     if (result.error) {
       return NextResponse.json(
         {
+          sessionId,
           code: result.error.publicCode,
           message: result.error.publicMessage,
         },
@@ -207,6 +248,7 @@ export async function POST(req: Request) {
     if (!response || !responseText) {
       return NextResponse.json(
         {
+          sessionId,
           code: 'assistant_run_failed',
           message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
         },
@@ -215,6 +257,7 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({
+      sessionId,
       id: response.id,
       object: 'chat.completion',
       model: response.model,
@@ -233,7 +276,10 @@ export async function POST(req: Request) {
     const ms = Date.now() - startedAt;
 
     await logEvent('chat-error', {
+      sessionId,
       messages,
+      conversationId: persistedState?.conversationId ?? null,
+      previousResponseId: persistedState?.latestResponseId ?? null,
       error: {
         message: error?.message,
         name: error?.name,
@@ -245,6 +291,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json(
       {
+        sessionId,
         code: 'assistant_run_failed',
         message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
       },

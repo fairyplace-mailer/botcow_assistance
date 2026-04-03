@@ -70,20 +70,20 @@ describe('conversationState', () => {
   });
 
   it('updates latestResponseId without dropping saved conversationId', async () => {
-    mockedKvGetJson
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        sessionId: 'chat-2',
-        conversationId: 'conv_2',
-        latestResponseId: 'resp_2',
-        createdAt: '2025-01-01T00:00:00.000Z',
-        updatedAt: '2025-01-01T00:00:00.000Z',
-      });
+    mockedKvGetJson.mockResolvedValueOnce(null);
 
     const first = await saveConversationState({
       sessionId: 'chat-2',
       conversationId: 'conv_2',
       latestResponseId: 'resp_2',
+    });
+
+    mockedKvGetJson.mockResolvedValueOnce({
+      sessionId: 'chat-2',
+      conversationId: 'conv_2',
+      latestResponseId: 'resp_2',
+      createdAt: first.createdAt,
+      updatedAt: first.updatedAt,
     });
 
     expect(mockedKvSetJson).toHaveBeenNthCalledWith(

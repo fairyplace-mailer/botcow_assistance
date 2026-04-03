@@ -188,12 +188,8 @@ function hashArgs(args: unknown): string {
   return sha256(stableStringify(args));
 }
 
-function makeToolFingerprint(
-  toolName: string,
-  args: unknown,
-  prevResultClass: ToolResultClass | null,
-): string {
-  return sha256(`${toolName}\n${stableStringify(args)}\n${prevResultClass ?? 'none'}`);
+function makeToolFingerprint(toolName: string, args: unknown): string {
+  return sha256(`${toolName}\n${stableStringify(args)}`);
 }
 
 function safeParseToolArgs(raw: string): { ok: true; value: unknown } | { ok: false } {
@@ -714,7 +710,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         });
       }
 
-      const fingerprint = makeToolFingerprint(call.name, parsed.value, lastToolResultClass);
+      const fingerprint = makeToolFingerprint(call.name, parsed.value);
       roundFingerprints.push(fingerprint);
 
       if (fingerprint === lastFingerprint) {
@@ -845,33 +841,6 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       noProgressRounds += 1;
     } else {
       noProgressRounds = 0;
-    }
-
-    if (!progressThisRound && !finalMessage?.text && !fingerprintChanged && previousResponseId) {
-      const error = abort('repeated_tool_call', response.id ?? previousResponseId);
-      await logFatalStop('assistant_run_failed', {
-        traceId,
-        userTurnId,
-        round,
-        conversationId: currentConversationId,
-        responseId: response.id ?? null,
-        previousResponseId: requestPreviousResponseId ?? null,
-        assistantPhase: finalMessage?.phase ?? null,
-        stopReason: error.internalCode,
-        progressThisRound,
-        fingerprintChanged,
-        noProgressRounds,
-        duration: Date.now() - startedAt,
-        usage: responseUsage(response),
-      });
-      return finalizeFailure({
-        response,
-        completion: null,
-        toolCalls: toolCallsLog,
-        reasoningDecision,
-        state: buildFailureState(currentConversationId, response.id),
-        error,
-      });
     }
 
     if (noProgressRounds >= MAX_NO_PROGRESS_ROUNDS) {

@@ -54,12 +54,16 @@ export type ExtractedAssistantMessage = {
   text: string;
 };
 
+export type ResponsesStateMode =
+  | { kind: 'conversation'; conversation: { id: string } }
+  | { kind: 'previous_response'; previousResponseId: string }
+  | { kind: 'stateless' };
+
 export type ResponsesCreateRequestParams = {
   model: string;
   instructions?: string;
   input: ResponseInput;
-  previousResponseId?: string;
-  conversation?: { id: string };
+  state?: ResponsesStateMode;
   tools?: OpenAI.Responses.Tool[];
   reasoning?: ResponseCreateParams['reasoning'];
 };
@@ -363,12 +367,16 @@ export function buildStrictFunctionTools(tools: OpenAI.Responses.Tool[] | undefi
 export function buildResponsesCreateParams(
   params: ResponsesCreateRequestParams,
 ): ResponseCreateParams {
+  const state = params.state ?? { kind: 'stateless' as const };
+
   return {
     model: params.model,
     input: params.input,
     ...(params.instructions ? { instructions: params.instructions } : {}),
-    ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
-    ...(params.conversation ? { conversation: params.conversation } : {}),
+    ...(state.kind === 'previous_response'
+      ? { previous_response_id: state.previousResponseId }
+      : {}),
+    ...(state.kind === 'conversation' ? { conversation: state.conversation } : {}),
     ...(params.reasoning ? { reasoning: params.reasoning } : {}),
     tools: buildStrictFunctionTools(params.tools),
     parallel_tool_calls: false,
@@ -388,8 +396,7 @@ export async function createModelResponse(params: {
   model: string;
   instructions?: string;
   input: ResponseInput;
-  previousResponseId?: string;
-  conversation?: { id: string };
+  state?: ResponsesStateMode;
   tools?: OpenAI.Responses.Tool[];
   reasoning?: ResponseCreateParams['reasoning'];
 }) {
@@ -398,8 +405,7 @@ export async function createModelResponse(params: {
       model: params.model,
       instructions: params.instructions,
       input: params.input,
-      previousResponseId: params.previousResponseId,
-      conversation: params.conversation,
+      state: params.state,
       tools: params.tools,
       reasoning: params.reasoning,
     }),

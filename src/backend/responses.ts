@@ -1,3 +1,4 @@
+import type OpenAI from 'openai';
 import type {
   Response,
   ResponseInput,
@@ -5,11 +6,14 @@ import type {
   ResponseOutputItem,
 } from 'openai/resources/responses/responses';
 
+export type AssistantPhase = 'commentary' | 'final_answer';
+
 export type AssistantMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content?: unknown;
   tool_call_id?: string;
   name?: string;
+  phase?: AssistantPhase;
 };
 
 type ResponseOutputTextPart = {
@@ -29,8 +33,10 @@ type InputTextPart = {
 type InputMessageRole = 'user' | 'assistant' | 'system' | 'developer';
 
 type InputMessageItem = {
+  type?: 'message';
   role: InputMessageRole;
   content: InputTextPart[];
+  phase?: AssistantPhase;
 };
 
 export type ExtractedFunctionCall = {
@@ -40,18 +46,12 @@ export type ExtractedFunctionCall = {
   arguments: string;
 };
 
-function hasOutputText(part: unknown): part is ResponseOutputTextPart {
-  return (
-    !!part &&
-    typeof part === 'object' &&
-    (part as { type?: unknown }).type === 'output_text' &&
-    typeof (part as { text?: unknown }).text === 'string'
-  );
-}
-
-function hasRefusal(part: unknown): part is ResponseRefusalPart {
-  return !!part && typeof part === 'object' && (part as { type?: unknown }).type === 'refusal';
-}
+export type ExtractedAssistantMessage = {
+  id?: string;
+  role: 'assistant';
+  phase?: AssistantPhase;
+  text: string;
+};
 
 export function normalizeTextContent(content: unknown): string {
   if (typeof content === 'string') {
@@ -82,6 +82,19 @@ export function normalizeTextContent(content: unknown): string {
   }
 
   return '';
+}
+
+function hasOutputText(part: unknown): part is ResponseOutputTextPart {
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'output_text' &&
+    typeof (part as { text?: unknown }).text === 'string'
+  );
+}
+
+function hasRefusal(part: unknown): part is ResponseRefusalPart {
+  return !!part && typeof part === 'object' && (part as { type?: unknown }).type === 'refusal';
 }
 
 function isMessageInputItem(item: ResponseInputItem): item is InputMessageItem {
@@ -128,6 +141,63 @@ export function extractFunctionCalls(output: ResponseOutputItem[] | undefined): 
   });
 }
 
+export function extractAssistantMessages(response: Response | null | undefined): ExtractedAssistantMessage[] {
+  if (!response || !Array.isArray(response.output)) {
+    return [];
+  }
+
+  return response.output
+    .filter((item: any) => item?.type === 'message' && item?.role === 'assistant')
+    .map((item: any) => ({
+      id: item.id,
+      role: 'assistant' as const,
+      phase: item.phase,
+      text: Array.isArray(item.content)
+        ? item.content
+            .filter((part: any) => part?.type === 'output_text')
+            .map((part: any) => part.text)
+            .join('')
+        : '',
+    }))
+    .filter((item) => item.text.length > 0);
+}
+
+export function extractFinalAssistantMessage(
+  response: Response | null | undefined,
+): ExtractedAssistantMessage | null {
+  const items = extractAssistantMessages(response);
+  if (!items.length) {
+    return null;
+  }
+
+  const explicitFinal = items.find((item) => item.phase === 'final_answer');
+  if (explicitFinal) {
+    return explicitFinal;
+  }
+
+  return items[items.length - 1] ?? null;
+}
+
+export function extractResponseText(response: Response | null | undefined): string {
+  if (!response) {
+    return '';
+  }
+
+  if (typeof response.output_text === 'string' && response.output_text.trim()) {
+    return response.output_text;
+  }
+
+  return extractFinalAssistantMessage(response)?.text ?? '';
+}
+
+export function makeFunctionCallOutputItem(callId: string, output: unknown): ResponseInputItem {
+  return {
+    type: 'function_call_output',
+    call_id: callId,
+    output: typeof output === 'string' ? output : JSON.stringify(output),
+  } as ResponseInputItem;
+}
+
 export function buildFunctionCallOutputs(
   functionCalls: ExtractedFunctionCall[],
   toolResults: Array<{ call_id: string; output: unknown }>,
@@ -150,17 +220,7 @@ export function buildFunctionCallOutputs(
 
     seenCallIds.add(result.call_id);
 
-    const output = typeof result.output === 'string' ? result.output : JSON.stringify(result.output);
-
-    if (typeof output !== 'string') {
-      throw new Error(`function_call_output for ${result.call_id} could not be normalized to string`);
-    }
-
-    return {
-      type: 'function_call_output',
-      call_id: result.call_id,
-      output,
-    } as ResponseInputItem;
+    return makeFunctionCallOutputItem(result.call_id, result.output);
   });
 }
 
@@ -221,86 +281,98 @@ export function buildResponsesInput(messages: AssistantMessage[]): {
 
     if (message.role === 'tool') {
       return [
-        {
-          type: 'function_call_output',
-          call_id: message.tool_call_id ?? '',
-          output: normalizeTextContent(message.content),
-        } as ResponseInputItem,
+        makeFunctionCallOutputItem(
+          message.tool_call_id ?? '',
+          normalizeTextContent(message.content),
+        ),
       ];
     }
 
-    if (message.role === 'assistant') {
-      return [];
+    const item: InputMessageItem = {
+      type: 'message',
+      role: message.role,
+      content: [
+        {
+          type: 'input_text',
+          text: normalizeTextContent(message.content),
+        },
+      ],
+    };
+
+    if (message.role === 'assistant' && message.phase) {
+      item.phase = message.phase;
     }
 
-    return [
-      {
-        role: message.role,
-        content: [
-          {
-            type: 'input_text',
-            text: normalizeTextContent(message.content),
-          },
-        ],
-      } as ResponseInputItem,
-    ];
+    return [item as ResponseInputItem];
   });
 
   validateResponsesInput(input);
 
-  const built: {
-    instructions?: string;
-    input: ResponseInput;
-  } = {
+  return {
+    ...(systemInstructions ? { instructions: systemInstructions } : {}),
     input,
   };
-
-  if (systemInstructions) {
-    built.instructions = systemInstructions;
-  }
-
-  return built;
 }
 
 export function getResponseFunctionCalls(output: ResponseOutputItem[] | undefined) {
   return extractFunctionCalls(output);
 }
 
-export function extractResponseText(response: Response | null | undefined): string {
-  if (!response) {
-    return '';
+export function buildStrictFunctionTools(tools: OpenAI.Responses.Tool[] | undefined): OpenAI.Responses.Tool[] {
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return [];
   }
 
-  if (typeof response.output_text === 'string' && response.output_text.trim()) {
-    return response.output_text;
-  }
-
-  const output = Array.isArray(response.output) ? response.output : [];
-
-  for (const item of output) {
-    if (item?.type !== 'message' || !Array.isArray(item?.content)) {
-      continue;
+  return tools.map((tool: any) => {
+    if (tool?.type === 'function' && tool?.function && typeof tool.function.name === 'string') {
+      return {
+        type: 'function',
+        name: tool.function.name,
+        description: tool.function.description,
+        parameters: tool.function.parameters ?? {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+        strict: true,
+      } as OpenAI.Responses.FunctionTool;
     }
 
-    const text = item.content
-      .map((part) => {
-        if (hasOutputText(part)) {
-          return part.text;
-        }
-
-        if (hasRefusal(part)) {
-          return '';
-        }
-
-        return '';
-      })
-      .join('')
-      .trim();
-
-    if (text) {
-      return text;
+    if (tool?.type === 'function' && typeof tool?.name === 'string') {
+      return {
+        ...tool,
+        strict: true,
+      } as OpenAI.Responses.FunctionTool;
     }
-  }
 
-  return '';
+    return tool;
+  });
+}
+
+export function responseUsage(response: Response | null | undefined) {
+  return {
+    inputTokens: response?.usage?.input_tokens ?? null,
+    outputTokens: response?.usage?.output_tokens ?? null,
+    totalTokens: response?.usage?.total_tokens ?? null,
+  };
+}
+
+export async function createModelResponse(params: {
+  client: OpenAI;
+  model: string;
+  instructions?: string;
+  input: ResponseInput;
+  previousResponseId?: string;
+  tools?: OpenAI.Responses.Tool[];
+  reasoning?: OpenAI.Responses.ResponseCreateParams['reasoning'];
+}) {
+  return params.client.responses.create({
+    model: params.model,
+    input: params.input,
+    ...(params.instructions ? { instructions: params.instructions } : {}),
+    ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
+    ...(params.reasoning ? { reasoning: params.reasoning } : {}),
+    tools: buildStrictFunctionTools(params.tools),
+    parallel_tool_calls: false,
+  });
 }

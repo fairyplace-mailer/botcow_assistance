@@ -265,7 +265,7 @@ describe('responses tool loop regressions', () => {
     ]);
   });
 
-  test('supportsReasoning returns true only for supported model and runtime path', () => {
+  test('supportsReasoning returns true for the whole gpt-5.4 family on supported runtime path', () => {
     const supportedRuntime: ResponsesRuntimeCapabilities = {
       path: 'openai.responses.create',
       reasoning: 'supported',
@@ -277,8 +277,8 @@ describe('responses tool loop regressions', () => {
     const currentRuntime = getResponsesRuntimeCapabilities();
 
     expect(supportsReasoning('gpt-5.4', supportedRuntime)).toBe(true);
-    expect(supportsReasoning('gpt-5.4-mini', supportedRuntime)).toBe(false);
-    expect(supportsReasoning('gpt-5.4-nano', supportedRuntime)).toBe(false);
+    expect(supportsReasoning('gpt-5.4-mini', supportedRuntime)).toBe(true);
+    expect(supportsReasoning('gpt-5.4-nano', supportedRuntime)).toBe(true);
     expect(supportsReasoning('gpt-5.4', currentRuntime)).toBe(currentRuntime.reasoning === 'supported');
   });
 
@@ -320,10 +320,13 @@ describe('responses tool loop regressions', () => {
     expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(true);
   });
 
-  test('responses.create is called without reasoning when model is not supported', () => {
+  test.each([
+    ['gpt-5.4-mini', 'medium'],
+    ['gpt-5.4-nano', 'none'],
+  ] as const)('responses.create keeps reasoning for %s when runtime is supported', (model, effort) => {
     const built = buildResponsesRequest(
       [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4-mini', reasoning: { effort: 'low' } },
+      { model, reasoning: { effort } },
       {
         path: 'openai.responses.create',
         reasoning: 'supported',
@@ -334,11 +337,11 @@ describe('responses tool loop regressions', () => {
     );
 
     expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: 'low',
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'model_not_supported',
+      requestedReasoningEffort: effort,
+      sentReasoningEffort: effort,
+      reasoningSuppressedReason: null,
     });
-    expect('reasoning' in built.request).toBe(false);
+    expect(built.request.reasoning).toEqual({ effort });
   });
 
   test('responses.create is called without reasoning when runtime is not confirmed', () => {

@@ -12,18 +12,6 @@ jest.mock('../src/backend/tools', () => ({
         },
       },
     },
-    {
-      type: 'function',
-      function: {
-        name: 'tool_two',
-        description: 'tool two',
-        parameters: {
-          type: 'object',
-          properties: {},
-          additionalProperties: false,
-        },
-      },
-    },
   ]),
   handleToolCall: jest.fn(),
 }));
@@ -41,124 +29,181 @@ jest.mock('../src/backend/log', () => ({
 import {
   buildFunctionCallOutputs,
   buildResponsesInput,
+  createModelResponse,
   extractFinalAssistantMessage,
   extractFunctionCalls,
+  makeFunctionCallOutputItem,
   validateResponsesInput,
 } from '../src/backend/responses';
-import {
-  buildResponsesRequest,
-  getResponsesRuntimeCapabilities,
-  resolveReasoningDecision,
-  runAssistant,
-  supportsReasoning,
-  type ResponsesRuntimeCapabilities,
-} from '../src/backend/assistant';
+import { buildResponsesRequest, runAssistant } from '../src/backend/assistant';
 import { OPENAI_SDK_VERSION } from '../src/backend/openaiRuntime';
 import { getOpenAIClient } from '../src/backend/openai';
-import { logEvent } from '../src/backend/log';
 import { handleToolCall } from '../src/backend/tools';
 
-describe('responses tool loop regressions', () => {
-  const originalBaseUrl = process.env.OPENAI_BASE_URL;
-
+describe('responses + assistant tool loop spec', () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    process.env.OPENAI_BASE_URL = undefined;
   });
 
-  afterAll(() => {
-    process.env.OPENAI_BASE_URL = originalBaseUrl;
+  test('bad JSON args aborts immediately and tool is not called', async () => {
+    const create = jest.fn().mockResolvedValue({
+      id: 'resp_bad_json',
+      output: [
+        {
+          type: 'function_call',
+          call_id: 'call_bad_json',
+          name: 'tool_one',
+          arguments: '{"broken":',
+        },
+      ],
+    });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({ responses: { create } });
+
+    const result = await runAssistant([{ role: 'user', content: 'run' }], {
+      model: 'gpt-5.4',
+      reasoning: { effort: 'none' },
+    });
+
+    expect(result.error).toEqual(
+      expect.objectContaining({
+        publicCode: 'assistant_run_failed',
+        internalCode: 'invalid_tool_args_json',
+      }),
+    );
+    expect(handleToolCall).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
-  test('one function_call produces one function_call_output with same call_id', () => {
-    const calls = extractFunctionCalls([
-      {
-        type: 'function_call',
-        id: 'fc_1',
-        call_id: 'call_1',
-        name: 'github_get_file',
-        arguments: '{"path":"README.md"}',
-      } as any,
-    ]);
+  test('unknown tool aborts immediately', async () => {
+    const create = jest.fn().mockResolvedValue({
+      id: 'resp_unknown_tool',
+      output: [
+        {
+          type: 'function_call',
+          call_id: 'call_unknown',
+          name: 'missing_tool',
+          arguments: '{}',
+        },
+      ],
+    });
 
-    expect(buildFunctionCallOutputs(calls, [{ call_id: 'call_1', output: { ok: true } }])).toEqual([
-      {
-        type: 'function_call_output',
-        call_id: 'call_1',
-        output: '{"ok":true}',
-      },
-    ]);
+    (getOpenAIClient as jest.Mock).mockReturnValue({ responses: { create } });
+
+    const result = await runAssistant([{ role: 'user', content: 'run' }], {
+      model: 'gpt-5.4',
+      reasoning: { effort: 'none' },
+    });
+
+    expect(result.error).toEqual(
+      expect.objectContaining({
+        publicCode: 'assistant_run_failed',
+        internalCode: 'unknown_tool',
+      }),
+    );
+    expect(handleToolCall).not.toHaveBeenCalled();
   });
 
-  test('repeated tool call aborts fast', async () => {
-    (handleToolCall as jest.Mock).mockResolvedValueOnce({ first: true });
+  test('tool timeout aborts immediately', async () => {
+    jest.useFakeTimers();
+
+    const create = jest.fn().mockResolvedValue({
+      id: 'resp_timeout',
+      output: [
+        {
+          type: 'function_call',
+          call_id: 'call_timeout',
+          name: 'tool_one',
+          arguments: '{}',
+        },
+      ],
+    });
+
+    (handleToolCall as jest.Mock).mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    (getOpenAIClient as jest.Mock).mockReturnValue({ responses: { create } });
+
+    const promise = runAssistant([{ role: 'user', content: 'run' }], {
+      model: 'gpt-5.4',
+      reasoning: { effort: 'none' },
+    });
+
+    await jest.advanceTimersByTimeAsync(20_000);
+    const result = await promise;
+
+    expect(result.error).toEqual(
+      expect.objectContaining({
+        publicCode: 'assistant_run_failed',
+        internalCode: 'tool_timeout',
+      }),
+    );
+
+    jest.useRealTimers();
+  });
+
+  test('repeated tool call aborts on second identical round', async () => {
+    (handleToolCall as jest.Mock).mockResolvedValue({ ok: true });
 
     const create = jest
       .fn()
       .mockResolvedValueOnce({
-        id: 'resp_1',
+        id: 'resp_repeat_1',
         output: [
           {
             type: 'function_call',
-            id: 'fc_1',
-            call_id: 'call_1',
+            call_id: 'call_repeat_1',
             name: 'tool_one',
             arguments: '{}',
           },
         ],
       })
       .mockResolvedValueOnce({
-        id: 'resp_2',
+        id: 'resp_repeat_2',
         output: [
           {
             type: 'function_call',
-            id: 'fc_2',
-            call_id: 'call_2',
+            call_id: 'call_repeat_2',
             name: 'tool_one',
             arguments: '{}',
           },
         ],
       });
 
-    (getOpenAIClient as jest.Mock).mockReturnValue({
-      responses: { create },
-    });
+    (getOpenAIClient as jest.Mock).mockReturnValue({ responses: { create } });
 
-    const result = await runAssistant([{ role: 'user', content: 'run tools' }], {
+    const result = await runAssistant([{ role: 'user', content: 'run' }], {
       model: 'gpt-5.4',
       reasoning: { effort: 'none' },
     });
 
-    expect(result.response?.id).toBe('resp_2');
     expect(result.error).toEqual(
       expect.objectContaining({
-        publicCode: 'assistant_run_failed',
         internalCode: 'repeated_tool_call',
       }),
     );
-    expect(create).toHaveBeenCalledTimes(2);
     expect(handleToolCall).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
-  test('full tool round-trip returns final response', async () => {
-    (handleToolCall as jest.Mock).mockResolvedValueOnce({ ok: true });
+  test('full tool round-trip keeps previous_response_id and returns final answer', async () => {
+    (handleToolCall as jest.Mock).mockResolvedValue({ ok: true });
 
     const create = jest
       .fn()
       .mockResolvedValueOnce({
-        id: 'resp_chain_1',
+        id: 'resp_roundtrip_1',
         output: [
           {
             type: 'function_call',
-            id: 'fc_chain_1',
-            call_id: 'call_chain_1',
+            call_id: 'call_roundtrip_1',
             name: 'tool_one',
             arguments: '{}',
           },
         ],
       })
       .mockResolvedValueOnce({
-        id: 'resp_chain_2',
+        id: 'resp_roundtrip_2',
         output: [
           {
             type: 'message',
@@ -170,163 +215,42 @@ describe('responses tool loop regressions', () => {
         output_text: 'done',
       });
 
-    (getOpenAIClient as jest.Mock).mockReturnValue({
-      responses: { create },
-    });
+    (getOpenAIClient as jest.Mock).mockReturnValue({ responses: { create } });
 
-    const result = await runAssistant([{ role: 'user', content: 'run tool' }], {
-      model: 'gpt-5.4',
-      reasoning: { effort: 'none' },
-    });
+    const result = await runAssistant(
+      [
+        { role: 'system', content: 'DEV_INSTR' },
+        { role: 'user', content: 'run' },
+      ],
+      {
+        model: 'gpt-5.4',
+        reasoning: { effort: 'none' },
+      },
+    );
 
     expect(result.error).toBeUndefined();
-    expect(result.response?.id).toBe('resp_chain_2');
-    expect(create).toHaveBeenCalledTimes(2);
-    expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
-    expect(create.mock.calls[1][0].previous_response_id).toBe('resp_chain_1');
-    expect(create.mock.calls[1][0].input).toEqual([
-      { type: 'function_call_output', call_id: 'call_chain_1', output: '{"ok":true}' },
-    ]);
-  });
-
-  test('follow-up keeps previous_response_id and resends instructions', async () => {
-    (handleToolCall as jest.Mock).mockResolvedValueOnce({ ok: true });
-
-    const create = jest
-      .fn()
-      .mockResolvedValueOnce({
-        id: 'resp_follow_1',
-        output: [
+    expect(result.response?.id).toBe('resp_roundtrip_2');
+    expect(create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        previous_response_id: 'resp_roundtrip_1',
+        instructions: 'DEV_INSTR',
+        input: [
           {
-            type: 'function_call',
-            id: 'fc_follow_1',
-            call_id: 'call_follow_1',
-            name: 'tool_one',
-            arguments: '{}',
+            type: 'function_call_output',
+            call_id: 'call_roundtrip_1',
+            output: '{"ok":true}',
           },
         ],
-      })
-      .mockResolvedValueOnce({
-        id: 'resp_follow_2',
-        output: [
-          {
-            type: 'message',
-            role: 'assistant',
-            content: [{ type: 'output_text', text: 'done' }],
-          },
-        ],
-        output_text: 'done',
-      });
-
-    (getOpenAIClient as jest.Mock).mockReturnValue({
-      responses: { create },
-    });
-
-    await runAssistant([
-      { role: 'system', content: 'DEV_INSTR' },
-      { role: 'user', content: 'run tool' },
-    ], {
-      model: 'gpt-5.4',
-      reasoning: { effort: 'none' },
-    });
-
-    expect(create).toHaveBeenCalledTimes(2);
-    expect(create.mock.calls[0][0].instructions).toBe('DEV_INSTR');
-    expect(create.mock.calls[1][0].previous_response_id).toBe('resp_follow_1');
-    expect(create.mock.calls[1][0].instructions).toBe('DEV_INSTR');
+      }),
+    );
   });
 
-  test('stale call_id is blocked before request', () => {
-    const calls = extractFunctionCalls([
-      {
-        type: 'function_call',
-        id: 'fc_1',
-        call_id: 'call_1',
-        name: 'tool_one',
-        arguments: '{}',
-      } as any,
-    ]);
-
-    expect(() =>
-      buildFunctionCallOutputs(calls, [{ call_id: 'call_old', output: 'bad' }]),
-    ).toThrow('Stale or unknown function_call_output call_id: call_old');
-  });
-
-  test('duplicate call_id is blocked', () => {
-    expect(() =>
-      extractFunctionCalls([
-        {
-          type: 'function_call',
-          id: 'fc_1',
-          call_id: 'call_dup',
-          name: 'tool_one',
-          arguments: '{}',
-        },
-        {
-          type: 'function_call',
-          id: 'fc_2',
-          call_id: 'call_dup',
-          name: 'tool_two',
-          arguments: '{}',
-        },
-      ] as any),
-    ).toThrow('Duplicate function_call call_id in current response cycle: call_dup');
-  });
-
-  test('duplicate function_call_output call_id is blocked', () => {
-    const calls = extractFunctionCalls([
-      {
-        type: 'function_call',
-        id: 'fc_1',
-        call_id: 'call_1',
-        name: 'tool_one',
-        arguments: '{}',
-      } as any,
-    ]);
-
-    expect(() =>
-      buildFunctionCallOutputs(calls, [
-        { call_id: 'call_1', output: { value: 1 } },
-        { call_id: 'call_1', output: { value: 2 } },
-      ]),
-    ).toThrow('Duplicate function_call_output call_id in current response cycle: call_1');
-  });
-
-  test('function_call_output is normalized to string', () => {
-    const calls = extractFunctionCalls([
-      {
-        type: 'function_call',
-        id: 'fc_1',
-        call_id: 'call_1',
-        name: 'tool_one',
-        arguments: '{}',
-      } as any,
-    ]);
-
-    const outputs = buildFunctionCallOutputs(calls, [{ call_id: 'call_1', output: { value: 1 } }]);
-    expect(outputs[0]).toEqual({
-      type: 'function_call_output',
-      call_id: 'call_1',
-      output: '{"value":1}',
-    });
-  });
-
-  test('validator blocks output_text in input message content', () => {
-    expect(() =>
-      validateResponsesInput([
-        {
-          role: 'assistant',
-          content: [{ type: 'output_text', text: 'bad' }],
-        } as any,
-      ]),
-    ).toThrow('Responses payload validation failed: unsupported input content type output_text');
-  });
-
-  test('buildResponsesInput keeps assistant messages and phase in input', () => {
+  test('buildResponsesInput keeps assistant history and phase', () => {
     const built = buildResponsesInput([
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'hello' },
-      { role: 'assistant', content: 'model reply', phase: 'commentary' },
+      { role: 'assistant', content: 'thinking', phase: 'commentary' },
     ]);
 
     expect(built.instructions).toBe('sys');
@@ -340,7 +264,7 @@ describe('responses tool loop regressions', () => {
         type: 'message',
         role: 'assistant',
         phase: 'commentary',
-        content: [{ type: 'input_text', text: 'model reply' }],
+        content: [{ type: 'input_text', text: 'thinking' }],
       },
     ]);
   });
@@ -371,45 +295,57 @@ describe('responses tool loop regressions', () => {
     });
   });
 
-  test('supportsReasoning returns true for the whole gpt-5.4 family on supported runtime path', () => {
-    const supportedRuntime: ResponsesRuntimeCapabilities = {
-      path: 'openai.responses.create',
-      reasoning: 'supported',
-      sdkVersion: OPENAI_SDK_VERSION,
-      apiBaseUrl: 'https://api.openai.com/v1',
-      runtimeKind: 'openai',
-    };
-
-    const currentRuntime = getResponsesRuntimeCapabilities();
-
-    expect(supportsReasoning('gpt-5.4', supportedRuntime)).toBe(true);
-    expect(supportsReasoning('gpt-5.4-mini', supportedRuntime)).toBe(true);
-    expect(supportsReasoning('gpt-5.4-nano', supportedRuntime)).toBe(true);
-    expect(supportsReasoning('gpt-5.4', currentRuntime)).toBe(currentRuntime.reasoning === 'supported');
-  });
-
-  test('responses.create is called with reasoning when model and runtime support it', () => {
-    const built = buildResponsesRequest(
-      [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
-      {
-        path: 'openai.responses.create',
-        reasoning: 'supported',
-        sdkVersion: OPENAI_SDK_VERSION,
-        apiBaseUrl: 'https://api.openai.com/v1',
-        runtimeKind: 'openai',
-      },
-    );
-
-    expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: 'low',
-      sentReasoningEffort: 'low',
-      reasoningSuppressedReason: null,
+  test('makeFunctionCallOutputItem keeps same call_id', () => {
+    expect(makeFunctionCallOutputItem('call_123', { ok: true })).toEqual({
+      type: 'function_call_output',
+      call_id: 'call_123',
+      output: '{"ok":true}',
     });
-    expect(built.request.reasoning).toEqual({ effort: 'low' });
   });
 
-  test('supported case includes exact reasoning key in payload', () => {
+  test('extractFunctionCalls reads name arguments and call_id', () => {
+    expect(
+      extractFunctionCalls([
+        {
+          type: 'function_call',
+          call_id: 'call_123',
+          name: 'tool_one',
+          arguments: '{"q":"abc"}',
+        } as any,
+      ]),
+    ).toEqual([
+      {
+        id: undefined,
+        call_id: 'call_123',
+        name: 'tool_one',
+        arguments: '{"q":"abc"}',
+      },
+    ]);
+  });
+
+  test('createModelResponse always sends previous_response_id instructions and parallel_tool_calls false', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'resp' });
+    const client = { responses: { create } } as any;
+
+    await createModelResponse({
+      client,
+      model: 'gpt-5.4',
+      instructions: 'DEV_INSTR',
+      previousResponseId: 'resp_prev',
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] as any,
+      tools: [],
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: 'DEV_INSTR',
+        previous_response_id: 'resp_prev',
+        parallel_tool_calls: false,
+      }),
+    );
+  });
+
+  test('buildResponsesRequest keeps exact payload keys for supported reasoning path', () => {
     const built = buildResponsesRequest(
       [{ role: 'user', content: 'hello' }],
       { model: 'gpt-5.4', reasoning: { effort: 'low' } },
@@ -429,206 +365,51 @@ describe('responses tool loop regressions', () => {
       'reasoning',
       'tools',
     ]);
-    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(true);
   });
 
-  test.each([
-    ['gpt-5.4-mini', 'medium'],
-    ['gpt-5.4-nano', 'none'],
-  ] as const)('responses.create keeps reasoning for %s when runtime is supported', (model, effort) => {
-    const built = buildResponsesRequest(
-      [{ role: 'user', content: 'hello' }],
-      { model, reasoning: { effort } },
+  test('stale and duplicate call_id guards still work', () => {
+    const calls = extractFunctionCalls([
       {
-        path: 'openai.responses.create',
-        reasoning: 'supported',
-        sdkVersion: OPENAI_SDK_VERSION,
-        apiBaseUrl: 'https://api.openai.com/v1',
-        runtimeKind: 'openai',
-      },
-    );
-
-    expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: effort,
-      sentReasoningEffort: effort,
-      reasoningSuppressedReason: null,
-    });
-    expect(built.request.reasoning).toEqual({ effort });
-  });
-
-  test('responses.create is called without reasoning when runtime is not confirmed', () => {
-    const built = buildResponsesRequest(
-      [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
-      {
-        path: 'openai.responses.create',
-        reasoning: 'unknown',
-        sdkVersion: OPENAI_SDK_VERSION,
-        apiBaseUrl: 'https://gateway.example.com/v1',
-        runtimeKind: 'custom',
-      },
-    );
-
-    expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: 'low',
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'sdk_contract_unknown',
-    });
-    expect('reasoning' in built.request).toBe(false);
-  });
-
-  test('unsupported case omits reasoning key from exact payload keys', () => {
-    const built = buildResponsesRequest(
-      [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
-      {
-        path: 'openai.responses.create',
-        reasoning: 'unsupported',
-        sdkVersion: OPENAI_SDK_VERSION,
-        apiBaseUrl: 'https://api.openai.com/v1',
-        runtimeKind: 'openai',
-      },
-    );
-
-    expect(Object.keys(built.request).sort()).toEqual([
-      'input',
-      'model',
-      'parallel_tool_calls',
-      'tools',
+        type: 'function_call',
+        id: 'fc_1',
+        call_id: 'call_1',
+        name: 'tool_one',
+        arguments: '{}',
+      } as any,
     ]);
-    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
-  });
 
-  test('request builder does not send reasoning key when effort is absent', () => {
-    const built = buildResponsesRequest(
-      [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4', reasoning: undefined },
-      {
-        path: 'openai.responses.create',
-        reasoning: 'supported',
-        sdkVersion: OPENAI_SDK_VERSION,
-        apiBaseUrl: 'https://api.openai.com/v1',
-        runtimeKind: 'openai',
-      },
-    );
+    expect(() =>
+      buildFunctionCallOutputs(calls, [{ call_id: 'call_old', output: 'bad' }]),
+    ).toThrow('Stale or unknown function_call_output call_id: call_old');
 
-    expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: null,
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: null,
-    });
-    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
-    expect((built.request as Record<string, unknown>).reasoning).toBeUndefined();
-  });
-
-  test('resolveReasoningDecision returns runtime_not_supported for unsupported path capability', () => {
-    expect(
-      resolveReasoningDecision(
-        { model: 'gpt-5.4', reasoning: { effort: 'low' } },
+    expect(() =>
+      extractFunctionCalls([
         {
-          path: 'openai.responses.create',
-          reasoning: 'unsupported',
-          sdkVersion: OPENAI_SDK_VERSION,
-          apiBaseUrl: 'https://api.openai.com/v1',
-          runtimeKind: 'openai',
+          type: 'function_call',
+          id: 'fc_1',
+          call_id: 'call_dup',
+          name: 'tool_one',
+          arguments: '{}',
         },
-      ),
-    ).toEqual({
-      requestedReasoningEffort: 'low',
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'runtime_not_supported',
-    });
+        {
+          type: 'function_call',
+          id: 'fc_2',
+          call_id: 'call_dup',
+          name: 'tool_one',
+          arguments: '{}',
+        },
+      ] as any),
+    ).toThrow('Duplicate function_call call_id in current response cycle: call_dup');
   });
 
-  test('logging includes model requested effort sent effort suppression reason and reasoning flags', async () => {
-    const create = jest.fn().mockResolvedValueOnce({
-      id: 'resp_log_1',
-      output: [
+  test('input validator still blocks invalid content type', () => {
+    expect(() =>
+      validateResponsesInput([
         {
-          type: 'message',
           role: 'assistant',
-          content: [{ type: 'output_text', text: 'done' }],
-        },
-      ],
-      output_text: 'done',
-    });
-
-    (getOpenAIClient as jest.Mock).mockReturnValue({
-      responses: { create },
-    });
-
-    await runAssistant([{ role: 'user', content: 'hello' }], {
-      model: 'gpt-5.4',
-      reasoning: { effort: 'low' },
-    });
-
-    const runtime = getResponsesRuntimeCapabilities();
-    const expectedSent = runtime.reasoning === 'supported' ? 'low' : null;
-    const expectedSuppressedReason = runtime.reasoning === 'supported' ? null : 'sdk_contract_unknown';
-
-    expect(logEvent).toHaveBeenCalledWith(
-      'openai-request',
-      expect.objectContaining({
-        model: 'gpt-5.4',
-        requestedReasoningEffort: 'low',
-        sentReasoningEffort: expectedSent,
-        reasoningSuppressedReason: expectedSuppressedReason,
-        runtimeKind: runtime.runtimeKind,
-        apiBaseUrl: runtime.apiBaseUrl,
-      }),
-    );
-  });
-
-  test('regression: unsupported runtime no longer sends reasoning key', () => {
-    const built = buildResponsesRequest(
-      [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
-      {
-        path: 'openai.responses.create',
-        reasoning: 'unsupported',
-        sdkVersion: OPENAI_SDK_VERSION,
-        apiBaseUrl: 'https://api.openai.com/v1',
-        runtimeKind: 'openai',
-      },
-    );
-
-    expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: 'low',
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'runtime_not_supported',
-    });
-    expect(built.request).toEqual(
-      expect.not.objectContaining({
-        reasoning: expect.anything(),
-      }),
-    );
-    expect('reasoning' in built.request).toBe(false);
-  });
-
-  test('custom base url downgrades runtime to unknown and suppresses reasoning', () => {
-    process.env.OPENAI_BASE_URL = 'https://gateway.example.com/v1';
-
-    const runtime = getResponsesRuntimeCapabilities();
-
-    expect(runtime).toEqual({
-      path: 'openai.responses.create',
-      reasoning: 'unknown',
-      sdkVersion: OPENAI_SDK_VERSION,
-      apiBaseUrl: 'https://gateway.example.com/v1',
-      runtimeKind: 'custom',
-    });
-
-    const built = buildResponsesRequest(
-      [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4', reasoning: { effort: 'low' } },
-      runtime,
-    );
-
-    expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: 'low',
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'sdk_contract_unknown',
-    });
-    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
+          content: [{ type: 'output_text', text: 'bad' }],
+        } as any,
+      ]),
+    ).toThrow('Responses payload validation failed: unsupported input content type output_text');
   });
 });

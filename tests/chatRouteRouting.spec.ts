@@ -341,6 +341,7 @@ describe('chat route routing contract', () => {
       (call) => call[0] === 'chat_request_completed',
     )?.[1];
 
+    expect(payload.model).toBe(routing.model);
     expect('routingDebug' in payload).toBe(false);
   });
 

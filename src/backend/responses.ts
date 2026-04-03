@@ -363,6 +363,7 @@ export async function createModelResponse(params: {
   instructions?: string;
   input: ResponseInput;
   previousResponseId?: string;
+  conversation?: { id: string };
   tools?: OpenAI.Responses.Tool[];
   reasoning?: OpenAI.Responses.ResponseCreateParams['reasoning'];
 }) {
@@ -371,6 +372,7 @@ export async function createModelResponse(params: {
     input: params.input,
     ...(params.instructions ? { instructions: params.instructions } : {}),
     ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
+    ...(params.conversation ? { conversation: params.conversation } : {}),
     ...(params.reasoning ? { reasoning: params.reasoning } : {}),
     tools: buildStrictFunctionTools(params.tools),
     parallel_tool_calls: false,

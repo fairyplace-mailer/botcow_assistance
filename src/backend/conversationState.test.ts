@@ -12,15 +12,24 @@ jest.mock('./kv', () => {
 
 import { getConversationState, saveConversationState } from './conversationState';
 
-const { __resetStore } = jest.requireMock('./kv') as { __resetStore: () => void };
+const kvMock = jest.requireMock('./kv') as {
+  kvGetJson: jest.Mock;
+  kvSetJson: jest.Mock;
+  __resetStore: () => void;
+};
+
+const { __resetStore, kvGetJson, kvSetJson } = kvMock;
 
 describe('conversationState', () => {
   beforeEach(() => {
     __resetStore();
+    kvGetJson.mockClear();
+    kvSetJson.mockClear();
   });
 
   it('returns null for unknown session', async () => {
     await expect(getConversationState('chat-1')).resolves.toBeNull();
+    expect(kvGetJson).toHaveBeenCalledWith('conversation-state:chat-1');
   });
 
   it('persists session to conversation/latest response linkage', async () => {
@@ -35,8 +44,17 @@ describe('conversationState', () => {
     expect(first.latestResponseId).toBe('resp_1');
     expect(first.createdAt).toBeTruthy();
     expect(first.updatedAt).toBeTruthy();
+    expect(kvSetJson).toHaveBeenCalledWith(
+      'conversation-state:chat-1',
+      expect.objectContaining({
+        sessionId: 'chat-1',
+        conversationId: 'conv_1',
+        latestResponseId: 'resp_1',
+      }),
+    );
 
     const loaded = await getConversationState('chat-1');
+    expect(kvGetJson).toHaveBeenLastCalledWith('conversation-state:chat-1');
     expect(loaded).toEqual(first);
   });
 
@@ -47,11 +65,31 @@ describe('conversationState', () => {
       latestResponseId: 'resp_2',
     });
 
+    expect(kvSetJson).toHaveBeenNthCalledWith(
+      1,
+      'conversation-state:chat-2',
+      expect.objectContaining({
+        sessionId: 'chat-2',
+        conversationId: 'conv_2',
+        latestResponseId: 'resp_2',
+      }),
+    );
+
     const second = await saveConversationState({
       sessionId: 'chat-2',
       latestResponseId: 'resp_3',
     });
 
+    expect(kvGetJson).toHaveBeenCalledWith('conversation-state:chat-2');
+    expect(kvSetJson).toHaveBeenNthCalledWith(
+      2,
+      'conversation-state:chat-2',
+      expect.objectContaining({
+        sessionId: 'chat-2',
+        conversationId: 'conv_2',
+        latestResponseId: 'resp_3',
+      }),
+    );
     expect(second.sessionId).toBe('chat-2');
     expect(second.conversationId).toBe('conv_2');
     expect(second.latestResponseId).toBe('resp_3');

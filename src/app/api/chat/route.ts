@@ -146,7 +146,7 @@ export async function POST(req: Request) {
 — При ссылках на документацию предпочитай указывать Source URLs when referencing docs.
 
 Дополнение про использование примеров из контекста при написании кода:
-— Если в CONTEXT/SOURCES есть релевантные фрагменты кода или примеры API, используй их как первичный источник истины (имена, сигнатуры, порядок вызовов).
+— Если in CONTEXT/SOURCES есть релевантные фрагменты кода или примеры API, используй их как первичный источник истины (имена, сигнатуры, порядок вызовов).
 — Не задавай уточняющие вопросы, если ответ уже однозначно следует из контекста (например, обязательные параметры or правильный flow).
 — Если контекст предлагает несколько вариантов, выбери наиболее типовой и явно укажи, что это выбор; уточняющий вопрос задавай только если выбор критичен.
 `,
@@ -231,7 +231,7 @@ export async function POST(req: Request) {
       sentReasoningEffort: result.reasoningDecision.sentReasoningEffort,
       reasoningSuppressedReason: result.reasoningDecision.reasoningSuppressedReason,
       conversationId: result.state.conversationId,
-      previousResponseId: persistedState?.latestResponseId ?? null,
+      auxiliaryLatestResponseId: persistedState?.latestResponseId ?? null,
       responseId: response?.id ?? null,
       internal_code: result.error?.internalCode ?? null,
       ...(routingDebug !== undefined ? { routingDebug } : {}),
@@ -285,7 +285,7 @@ export async function POST(req: Request) {
       sessionId,
       messages,
       conversationId: persistedState?.conversationId ?? null,
-      previousResponseId: persistedState?.latestResponseId ?? null,
+      auxiliaryLatestResponseId: persistedState?.latestResponseId ?? null,
       error: {
         message: error?.message,
         name: error?.name,

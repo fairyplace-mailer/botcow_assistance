@@ -9,6 +9,8 @@ jest.mock('../src/backend/tools', () => ({
 
 jest.mock('../src/backend/log', () => ({
   logEvent: jest.fn().mockResolvedValue(undefined),
+  logInfo: jest.fn().mockResolvedValue(undefined),
+  logWarn: jest.fn().mockResolvedValue(undefined),
 }));
 
 import {
@@ -18,18 +20,23 @@ import {
 } from '../src/backend/assistant';
 import { getOpenAIClient } from '../src/backend/openai';
 import { logEvent } from '../src/backend/log';
+import { OPENAI_SDK_VERSION } from '../src/backend/openaiRuntime';
 
 describe('assistant routing propagation', () => {
   const runtimeSupported: ResponsesRuntimeCapabilities = {
     path: 'openai.responses.create',
     reasoning: 'supported',
-    sdkVersion: '6.16.0',
+    sdkVersion: OPENAI_SDK_VERSION,
+    apiBaseUrl: 'https://api.openai.com/v1',
+    runtimeKind: 'openai',
   };
 
   const runtimeUnsupported: ResponsesRuntimeCapabilities = {
     path: 'openai.responses.create',
     reasoning: 'unsupported',
-    sdkVersion: '6.16.0',
+    sdkVersion: OPENAI_SDK_VERSION,
+    apiBaseUrl: 'https://api.openai.com/v1',
+    runtimeKind: 'openai',
   };
 
   beforeEach(() => {
@@ -68,19 +75,22 @@ describe('assistant routing propagation', () => {
     expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
   });
 
-  test('responses.create omits reasoning when model is not confirmed as reasoning-capable', () => {
+  test.each([
+    ['gpt-5.4-mini', 'medium'],
+    ['gpt-5.4-nano', 'none'],
+  ] as const)('responses.create sends reasoning for %s when runtime is supported', (model, effort) => {
     const built = buildResponsesRequest(
       [{ role: 'user', content: 'hello' }],
-      { model: 'gpt-5.4-nano', reasoning: { effort: 'high' } },
+      { model, reasoning: { effort } },
       runtimeSupported,
     );
 
     expect(built.reasoningDecision).toEqual({
-      requestedReasoningEffort: 'high',
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'model_not_supported',
+      requestedReasoningEffort: effort,
+      sentReasoningEffort: effort,
+      reasoningSuppressedReason: null,
     });
-    expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
+    expect(built.request.reasoning).toEqual({ effort });
   });
 
   test('runAssistant logs model, requested effort, sent effort and suppression reason', async () => {
@@ -112,16 +122,25 @@ describe('assistant routing propagation', () => {
         methodWrapper: 'openai.responses.create',
         model: 'gpt-5.4',
         requestedReasoningEffort: 'high',
-        sentReasoningEffort: null,
-        reasoningSuppressedReason: 'sdk_contract_unknown',
-        sdkVersion: '6.16.0',
-        runtimeReasoningSupport: 'unknown',
+        sentReasoningEffort: 'high',
+        reasoningSuppressedReason: null,
+        runtimeReasoningSupport: 'supported',
+        runtimeKind: 'openai',
+        apiBaseUrl: 'https://api.openai.com/v1',
+        payloadKeys: expect.arrayContaining(['reasoning']),
       }),
     );
 
+    const requestLogPayload = (logEvent as jest.Mock).mock.calls.find(
+      ([eventName]) => eventName === 'openai-request',
+    )?.[1];
+
+    expect(requestLogPayload).toBeDefined();
+    expect(requestLogPayload.sdkVersion === null || typeof requestLogPayload.sdkVersion === 'string').toBe(true);
+
     const request = create.mock.calls[0][0];
     expect(request.model).toBe('gpt-5.4');
-    expect(Object.prototype.hasOwnProperty.call(request, 'reasoning')).toBe(false);
+    expect(request.reasoning).toEqual({ effort: 'high' });
   });
 
   test('regression: unsupported reasoning path no longer builds payload with reasoning key', () => {
@@ -131,7 +150,12 @@ describe('assistant routing propagation', () => {
       runtimeUnsupported,
     );
 
-    expect(Object.keys(built.request).sort()).toEqual(['input', 'model', 'tools']);
+    expect(Object.keys(built.request).sort()).toEqual([
+      'input',
+      'model',
+      'parallel_tool_calls',
+      'tools',
+    ]);
     expect(built.reasoningDecision.reasoningSuppressedReason).toBe('runtime_not_supported');
   });
 });

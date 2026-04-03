@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 import { NextResponse } from 'next/server';
 import { runAssistant } from '../../../backend/assistant';
 import { logEvent } from '../../../backend/log';
@@ -7,6 +9,15 @@ import {
   retrieveDevWixContext,
 } from '../../../backend/devWixDocs/retrieve';
 import { extractResponseText } from '../../../backend/responses';
+import {
+  getConversationState,
+  saveConversationState,
+} from '../../../backend/conversationState';
+
+function getSessionId(req: Request): string {
+  const headerValue = req.headers.get('x-botcow-session-id')?.trim();
+  return headerValue || randomUUID();
+}
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
@@ -15,6 +26,8 @@ export async function POST(req: Request) {
   if (!messages || !Array.isArray(messages)) {
     return NextResponse.json({ error: 'Invalid messages' }, { status: 400 });
   }
+
+  const sessionId = getSessionId(req);
 
   const systemMessage = {
     role: 'system' as const,
@@ -133,8 +146,8 @@ export async function POST(req: Request) {
 — При ссылках на документацию предпочитай указывать Source URLs when referencing docs.
 
 Дополнение про использование примеров из контекста при написании кода:
-— Если в CONTEXT/SOURCES есть релевантные фрагменты кода или примеры API, используй их как первичный источник истины (имена, сигнатуры, порядок вызовов).
-— Не задавай уточняющие вопросы, если ответ уже однозначно следует из контекста (например, обязательные параметры или правильный flow).
+— Если in CONTEXT/SOURCES есть релевантные фрагменты кода или примеры API, используй их как первичный источник истины (имена, сигнатуры, порядок вызовов).
+— Не задавай уточняющие вопросы, если ответ уже однозначно следует из контекста (например, обязательные параметры or правильный flow).
 — Если контекст предлагает несколько вариантов, выбери наиболее типовой и явно укажи, что это выбор; уточняющий вопрос задавай только если выбор критичен.
 `,
   };
@@ -171,14 +184,41 @@ export async function POST(req: Request) {
   const routing = chooseModel(fullMessages);
   const routingDebug =
     process.env.NODE_ENV !== 'production' && 'debug' in routing ? routing.debug : undefined;
+  const instructions = fullMessages
+    .filter((message) => message.role === 'system' && typeof message.content === 'string')
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join('\n\n');
+
+  if (!userQuery) {
+    return NextResponse.json({ error: 'Invalid messages' }, { status: 400 });
+  }
+
+  const persistedState = await getConversationState(sessionId);
+  const state = persistedState?.conversationId
+    ? { conversationId: persistedState.conversationId }
+    : {};
 
   try {
-    const result = await runAssistant(fullMessages, routing);
+    const result = await runAssistant({
+      instructions,
+      userInput: userQuery,
+      routing,
+      state,
+    });
     const ms = Date.now() - startedAt;
     const response = result.response;
     const responseText = extractResponseText(response);
+    const responsePhase = 'final_answer';
 
-    await logEvent('chat', {
+    await saveConversationState({
+      sessionId,
+      conversationId: result.state.conversationId,
+      latestResponseId: result.state.latestResponseId,
+    });
+
+    await logEvent('chat_request_completed', {
+      sessionId,
       messages,
       toolCalls: result.toolCalls,
       hasCompletion: !!response,
@@ -189,50 +229,80 @@ export async function POST(req: Request) {
       requestedReasoningEffort: result.reasoningDecision.requestedReasoningEffort,
       sentReasoningEffort: result.reasoningDecision.sentReasoningEffort,
       reasoningSuppressedReason: result.reasoningDecision.reasoningSuppressedReason,
+      conversationId: result.state.conversationId,
+      auxiliaryLatestResponseId: persistedState?.latestResponseId ?? null,
       responseId: response?.id ?? null,
+      internal_code: result.error?.internalCode ?? null,
       ...(routingDebug !== undefined ? { routingDebug } : {}),
     });
 
+    if (result.error) {
+      return NextResponse.json(
+        {
+          ok: false,
+          sessionId,
+          response: null,
+          error: {
+            code: result.error.publicCode,
+            message: result.error.publicMessage,
+          },
+        },
+        { status: 500 },
+      );
+    }
+
     if (!response || !responseText) {
       return NextResponse.json(
-        { error: 'Assistant did not produce a final answer' },
+        {
+          ok: false,
+          sessionId,
+          response: null,
+          error: {
+            code: 'assistant_run_failed',
+            message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+          },
+        },
         { status: 500 },
       );
     }
 
     return NextResponse.json({
-      id: response.id,
-      object: 'chat.completion',
-      model: response.model,
-      choices: [
-        {
-          index: 0,
-          finish_reason: 'stop',
-          message: {
-            role: 'assistant',
-            content: responseText,
-          },
-        },
-      ],
+      ok: true,
+      sessionId,
+      response: {
+        id: response.id,
+        model: response.model,
+        phase: responsePhase,
+        outputText: responseText,
+      },
+      error: null,
     });
   } catch (error: any) {
     const ms = Date.now() - startedAt;
 
-    await logEvent('chat-error', {
+    await logEvent('chat_request_failed', {
+      sessionId,
       messages,
+      conversationId: persistedState?.conversationId ?? null,
+      auxiliaryLatestResponseId: persistedState?.latestResponseId ?? null,
       error: {
         message: error?.message,
         name: error?.name,
         status: error?.status,
       },
       durationMs: ms,
+      internal_code: 'assistant_run_failed',
     });
-
-    const message = typeof error?.message === 'string' ? error.message : 'Chat request failed';
 
     return NextResponse.json(
       {
-        error: message,
+        ok: false,
+        sessionId,
+        response: null,
+        error: {
+          code: 'assistant_run_failed',
+          message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
+        },
       },
       { status: 500 },
     );

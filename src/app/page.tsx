@@ -6,6 +6,26 @@ import { clearRecentMessages, loadRecentMessages, saveRecentMessages, type Messa
 
 type Role = 'user' | 'assistant';
 
+const SESSION_STORAGE_KEY = 'botcow:chat-session-id';
+
+function getOrCreateSessionId(): string {
+  if (typeof window === 'undefined') {
+    return 'server-session';
+  }
+
+  const existing = window.localStorage.getItem(SESSION_STORAGE_KEY)?.trim();
+  if (existing) {
+    return existing;
+  }
+
+  const next =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  window.localStorage.setItem(SESSION_STORAGE_KEY, next);
+  return next;
+}
+
 export default function Page() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -35,9 +55,12 @@ export default function Page() {
   const [workflowError, setWorkflowError] = useState<string | null>(null);
 
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const sessionIdRef = useRef<string>('');
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
+    sessionIdRef.current = getOrCreateSessionId();
 
     loadRecentMessages().then((loaded) => {
       if (loaded.length > 0) setMessages(loaded);
@@ -63,6 +86,7 @@ export default function Page() {
       setInput('');
       setChatError(null);
       setChatLoading(false);
+      sessionIdRef.current = getOrCreateSessionId();
       void clearRecentMessages();
     }
 
@@ -129,7 +153,10 @@ export default function Page() {
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-botcow-session-id': sessionIdRef.current || getOrCreateSessionId(),
+        },
         body: JSON.stringify({ messages: nextMessages }),
       });
 

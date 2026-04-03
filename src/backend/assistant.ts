@@ -11,6 +11,7 @@ import {
   extractFinalAssistantMessage,
   extractFunctionCalls,
   responseUsage,
+  type ResponsesStateMode,
 } from './responses';
 import { logEvent, logInfo, logWarn } from './log';
 import {
@@ -322,6 +323,40 @@ function finalizeFailure(
   return params;
 }
 
+function selectResponsesStateMode(params: {
+  conversationId?: string;
+  previousResponseId?: string;
+}): ResponsesStateMode {
+  if (params.conversationId) {
+    return { kind: 'conversation', conversation: { id: params.conversationId } };
+  }
+
+  if (params.previousResponseId) {
+    return { kind: 'previous_response', previousResponseId: params.previousResponseId };
+  }
+
+  return { kind: 'stateless' };
+}
+
+function payloadKeysForStateMode(stateMode: ResponsesStateMode): string[] {
+  if (stateMode.kind === 'conversation') {
+    return ['conversation'];
+  }
+
+  if (stateMode.kind === 'previous_response') {
+    return ['previous_response_id'];
+  }
+
+  return [];
+}
+
+async function logFatalStop(event: string, payload: Record<string, unknown>) {
+  await logWarn(event, {
+    ...payload,
+    finalStatus: 'failed',
+  });
+}
+
 export async function runAssistant(params: RunAssistantTurnParams): Promise<AssistantResult> {
   const startedAt = Date.now();
   const toolCallsLog: AssistantResult['toolCalls'] = [];
@@ -355,13 +390,21 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     const runtimeCapabilities = getResponsesRuntimeCapabilities();
     const reasoningDecision = resolveReasoningDecision(params.routing, runtimeCapabilities);
     lastReasoningDecision = reasoningDecision;
+    const stateMode = selectResponsesStateMode({
+      conversationId: params.state.conversationId,
+      previousResponseId,
+    });
+    const requestPreviousResponseId =
+      stateMode.kind === 'previous_response' ? stateMode.previousResponseId : undefined;
+    const requestConversationId =
+      stateMode.kind === 'conversation' ? stateMode.conversation.id : params.state.conversationId ?? null;
 
     await logInfo('assistant_round_start', {
       traceId,
       userTurnId,
       round,
-      conversationId: params.state.conversationId ?? null,
-      previousResponseId: previousResponseId ?? null,
+      conversationId: requestConversationId,
+      previousResponseId: requestPreviousResponseId ?? null,
       totalToolCalls,
       model: params.routing.model,
       modelReason: params.routing.reason,
@@ -370,16 +413,12 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       duration: Date.now() - startedAt,
     });
 
-    const requestPreviousResponseId = previousResponseId;
     const response = await createModelResponse({
       client: openai,
       model: params.routing.model,
       input: pendingInput,
       instructions: params.instructions,
-      previousResponseId: requestPreviousResponseId,
-      conversation: params.state.conversationId
-        ? { id: params.state.conversationId }
-        : undefined,
+      state: stateMode,
       tools,
       ...(reasoningDecision.sentReasoningEffort
         ? { reasoning: { effort: reasoningDecision.sentReasoningEffort } }
@@ -394,15 +433,14 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       functionCalls = extractFunctionCalls(response.output);
     } catch {
       const error = abort('no_actionable_output', response.id);
-      await logWarn('assistant_invalid_function_call_cycle', {
+      await logFatalStop('assistant_invalid_function_call_cycle', {
         traceId,
         userTurnId,
         round,
-        conversationId: params.state.conversationId ?? null,
+        conversationId: requestConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         stopReason: error.internalCode,
-        finalStatus: 'failed',
         duration: Date.now() - startedAt,
         usage: responseUsage(response),
       });
@@ -425,7 +463,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       traceId,
       userTurnId,
       round,
-      conversationId: params.state.conversationId ?? null,
+      conversationId: requestConversationId,
       responseId: response.id ?? null,
       previousResponseId: requestPreviousResponseId ?? null,
       totalToolCalls,
@@ -461,7 +499,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       runtimeReasoningSupport: runtimeCapabilities.reasoning,
       runtimeKind: runtimeCapabilities.runtimeKind,
       apiBaseUrl: runtimeCapabilities.apiBaseUrl,
-      conversationId: params.state.conversationId ?? null,
+      conversationId: requestConversationId,
       previousResponseId: requestPreviousResponseId ?? null,
       responseId: response.id ?? null,
       round,
@@ -477,8 +515,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         ...(reasoningDecision.sentReasoningEffort ? ['reasoning'] : []),
         'tools',
         'parallel_tool_calls',
-        ...(params.state.conversationId ? ['conversation'] : []),
-        ...(requestPreviousResponseId ? ['previous_response_id'] : []),
+        ...payloadKeysForStateMode(stateMode),
       ],
     });
 
@@ -486,7 +523,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       await logInfo('assistant_run_completed', {
         traceId,
         userTurnId,
-        conversationId: params.state.conversationId ?? null,
+        conversationId: requestConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         totalToolCalls,
@@ -512,17 +549,16 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
     if (totalToolCalls + functionCalls.length > MAX_TOTAL_TOOL_CALLS) {
       const error = abort('tool_budget_exceeded', response.id);
-      await logWarn('assistant_tool_budget_exceeded', {
+      await logFatalStop('assistant_tool_budget_exceeded', {
         traceId,
         userTurnId,
         round,
-        conversationId: params.state.conversationId ?? null,
+        conversationId: requestConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         stopReason: error.internalCode,
         totalToolCalls,
         requestedCalls: functionCalls.length,
-        finalStatus: 'failed',
         duration: Date.now() - startedAt,
       });
       return finalizeFailure({
@@ -548,11 +584,11 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       if (!tool) {
         toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'unknown_tool' });
         const error = abort('unknown_tool', response.id);
-        await logWarn('assistant_unknown_tool', {
+        await logFatalStop('assistant_unknown_tool', {
           traceId,
           userTurnId,
           round,
-          conversationId: params.state.conversationId ?? null,
+          conversationId: requestConversationId,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -560,7 +596,6 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           toolResultClass: 'unknown_tool',
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
-          finalStatus: 'failed',
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
@@ -586,11 +621,11 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           error: 'invalid_tool_args_json',
         });
         const error = abort('invalid_tool_args_json', response.id);
-        await logWarn('assistant_invalid_tool_args_json', {
+        await logFatalStop('assistant_invalid_tool_args_json', {
           traceId,
           userTurnId,
           round,
-          conversationId: params.state.conversationId ?? null,
+          conversationId: requestConversationId,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -599,7 +634,6 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           toolResultClass: 'invalid_tool_args_json',
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
-          finalStatus: 'failed',
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
@@ -629,11 +663,11 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           error: 'invalid_tool_args_schema',
         });
         const error = abort('invalid_tool_args_schema', response.id);
-        await logWarn('assistant_invalid_tool_args_schema', {
+        await logFatalStop('assistant_invalid_tool_args_schema', {
           traceId,
           userTurnId,
           round,
-          conversationId: params.state.conversationId ?? null,
+          conversationId: requestConversationId,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -644,7 +678,6 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           toolResultClass: 'invalid_tool_args_schema',
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
-          finalStatus: 'failed',
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
@@ -678,11 +711,11 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           error: 'repeated_tool_call',
         });
         const error = abort('repeated_tool_call', response.id);
-        await logWarn('assistant_repeated_tool_call', {
+        await logFatalStop('assistant_repeated_tool_call', {
           traceId,
           userTurnId,
           round,
-          conversationId: params.state.conversationId ?? null,
+          conversationId: requestConversationId,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -690,10 +723,9 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           argsHash,
           argsParseOk: true,
           schemaValid: true,
-          toolResultClass: lastToolResultClass,
+          toolResultClass: 'ok',
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
-          finalStatus: 'failed',
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
@@ -724,11 +756,11 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           error: result.code,
         });
         const error = abort(result.code === 'tool_timeout' ? 'tool_timeout' : 'tool_execution_failed', response.id);
-        await logWarn('assistant_tool_failed', {
+        await logFatalStop('assistant_tool_failed', {
           traceId,
           userTurnId,
           round,
-          conversationId: params.state.conversationId ?? null,
+          conversationId: requestConversationId,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -740,7 +772,6 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           toolResultClass: result.code,
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
-          finalStatus: 'failed',
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
@@ -772,7 +803,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         traceId,
         userTurnId,
         round,
-        conversationId: params.state.conversationId ?? null,
+        conversationId: requestConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         totalToolCalls,
@@ -804,18 +835,17 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
     if (noProgressRounds >= MAX_NO_PROGRESS_ROUNDS) {
       const error = abort('no_progress_abort', response.id);
-      await logWarn('assistant_no_progress_abort', {
+      await logFatalStop('assistant_no_progress_abort', {
         traceId,
         userTurnId,
         round,
-        conversationId: params.state.conversationId ?? null,
+        conversationId: requestConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         toolName: functionCalls[0]?.name ?? null,
         toolCallId: functionCalls[0]?.call_id ?? null,
         assistantPhase: finalMessage?.phase ?? null,
         stopReason: error.internalCode,
-        finalStatus: 'failed',
         duration: Date.now() - startedAt,
         usage: responseUsage(response),
       });
@@ -834,16 +864,15 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
     if (functionCalls.length === 0 && !finalMessage?.text) {
       const error = abort('no_actionable_output', response.id);
-      await logWarn('assistant_no_actionable_output', {
+      await logFatalStop('assistant_no_actionable_output', {
         traceId,
         userTurnId,
         round,
-        conversationId: params.state.conversationId ?? null,
+        conversationId: requestConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         assistantPhase: finalMessage?.phase ?? null,
         stopReason: error.internalCode,
-        finalStatus: 'failed',
         duration: Date.now() - startedAt,
         usage: responseUsage(response),
       });
@@ -863,19 +892,26 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     pendingInput = nextInput;
   }
 
+  const finalStateMode = selectResponsesStateMode({
+    conversationId: params.state.conversationId,
+    previousResponseId,
+  });
+  const finalPreviousResponseId =
+    finalStateMode.kind === 'previous_response' ? finalStateMode.previousResponseId : previousResponseId;
+  const finalConversationId =
+    finalStateMode.kind === 'conversation' ? finalStateMode.conversation.id : params.state.conversationId ?? null;
   const error = abort('tool_loop_limit', previousResponseId);
-  await logWarn('assistant_tool_loop_limit', {
+  await logFatalStop('assistant_tool_loop_limit', {
     traceId,
     userTurnId,
-    conversationId: params.state.conversationId ?? null,
+    conversationId: finalConversationId,
     responseId: previousResponseId ?? null,
-    previousResponseId: previousResponseId ?? null,
+    previousResponseId: finalPreviousResponseId ?? null,
     totalToolCalls,
     model: params.routing.model,
     modelReason: params.routing.reason,
     reasoningEffort: lastReasoningDecision.sentReasoningEffort,
     stopReason: error.internalCode,
-    finalStatus: 'failed',
     duration: Date.now() - startedAt,
   });
 

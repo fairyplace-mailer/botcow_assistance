@@ -437,6 +437,28 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         : {}),
     });
 
+    if (!response) {
+      const error = abort('no_actionable_output', previousResponseId);
+      await logFatalStop('assistant_run_failed', {
+        traceId,
+        userTurnId,
+        round,
+        conversationId: currentConversationId,
+        responseId: previousResponseId ?? null,
+        previousResponseId: requestPreviousResponseId ?? null,
+        stopReason: error.internalCode,
+        duration: Date.now() - startedAt,
+      });
+      return finalizeFailure({
+        response: lastResponse,
+        completion: null,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+        state: buildFailureState(currentConversationId, previousResponseId),
+        error,
+      });
+    }
+
     lastResponse = response;
     previousResponseId = response.id;
     currentConversationId = extractConversationId(response, currentConversationId);
@@ -855,27 +877,8 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     }
 
     if (functionCalls.length === 0 && !finalMessage?.text) {
-      const error = abort('no_actionable_output', response.id);
-      await logFatalStop('assistant_run_failed', {
-        traceId,
-        userTurnId,
-        round,
-        conversationId: currentConversationId,
-        responseId: response.id ?? null,
-        previousResponseId: requestPreviousResponseId ?? null,
-        assistantPhase: finalMessage?.phase ?? null,
-        stopReason: error.internalCode,
-        duration: Date.now() - startedAt,
-        usage: responseUsage(response),
-      });
-      return finalizeFailure({
-        response,
-        completion: null,
-        toolCalls: toolCallsLog,
-        reasoningDecision,
-        state: buildFailureState(currentConversationId, response.id),
-        error,
-      });
+      pendingInput = [];
+      continue;
     }
 
     pendingInput = nextInput;

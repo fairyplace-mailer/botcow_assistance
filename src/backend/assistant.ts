@@ -398,10 +398,13 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     const runtimeCapabilities = getResponsesRuntimeCapabilities();
     const reasoningDecision = resolveReasoningDecision(params.routing, runtimeCapabilities);
     lastReasoningDecision = reasoningDecision;
-    const stateMode = selectResponsesStateMode({
-      conversationId: currentConversationId ?? undefined,
-      previousResponseId,
-    });
+    const stateModeInput = {
+      ...(currentConversationId !== undefined && currentConversationId !== null
+        ? { conversationId: currentConversationId }
+        : {}),
+      ...(previousResponseId !== undefined ? { previousResponseId } : {}),
+    };
+    const stateMode = selectResponsesStateMode(stateModeInput);
     const requestPreviousResponseId =
       stateMode.kind === 'previous_response' ? stateMode.previousResponseId : undefined;
     const requestConversationId =
@@ -880,10 +883,13 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     pendingInput = nextInput;
   }
 
-  const finalStateMode = selectResponsesStateMode({
-    conversationId: currentConversationId ?? undefined,
-    previousResponseId,
-  });
+  const finalStateModeInput = {
+    ...(currentConversationId !== undefined && currentConversationId !== null
+      ? { conversationId: currentConversationId }
+      : {}),
+    ...(previousResponseId !== undefined ? { previousResponseId } : {}),
+  };
+  const finalStateMode = selectResponsesStateMode(finalStateModeInput);
   const finalPreviousResponseId =
     finalStateMode.kind === 'previous_response' ? finalStateMode.previousResponseId : previousResponseId;
   const error = abort('tool_loop_limit', previousResponseId);

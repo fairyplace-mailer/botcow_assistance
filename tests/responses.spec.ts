@@ -1,5 +1,26 @@
 jest.mock('../src/backend/tools', () => ({
-  getToolsSchemas: jest.fn(() => []),
+  getToolsSchemas: jest.fn(() => [
+    {
+      type: 'function',
+      name: 'tool_one',
+      description: 'tool one',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+    {
+      type: 'function',
+      name: 'tool_two',
+      description: 'tool two',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+  ]),
   handleToolCall: jest.fn(),
 }));
 
@@ -113,6 +134,7 @@ describe('responses tool loop regressions', () => {
 
     expect(result.response?.id).toBe('resp_2');
     expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[1][0].previous_response_id).toBe('resp_1');
     expect(create.mock.calls[1][0].input).toEqual([
       { type: 'function_call_output', call_id: 'call_1', output: '{"first":true}' },
       { type: 'function_call_output', call_id: 'call_2', output: '{"second":true}' },
@@ -325,7 +347,13 @@ describe('responses tool loop regressions', () => {
       },
     );
 
-    expect(Object.keys(built.request).sort()).toEqual(['input', 'model', 'reasoning', 'tools']);
+    expect(Object.keys(built.request).sort()).toEqual([
+      'input',
+      'model',
+      'parallel_tool_calls',
+      'reasoning',
+      'tools',
+    ]);
     expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(true);
   });
 
@@ -387,7 +415,12 @@ describe('responses tool loop regressions', () => {
       },
     );
 
-    expect(Object.keys(built.request).sort()).toEqual(['input', 'model', 'tools']);
+    expect(Object.keys(built.request).sort()).toEqual([
+      'input',
+      'model',
+      'parallel_tool_calls',
+      'tools',
+    ]);
     expect(Object.prototype.hasOwnProperty.call(built.request, 'reasoning')).toBe(false);
   });
 

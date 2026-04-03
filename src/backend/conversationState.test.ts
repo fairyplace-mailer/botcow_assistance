@@ -7,6 +7,7 @@ jest.mock('./kv', () => {
       store.set(key, value);
     }),
     __resetStore: () => store.clear(),
+    __dumpStore: () => Array.from(store.entries()),
   };
 });
 
@@ -16,9 +17,10 @@ const kvMock = jest.requireMock('./kv') as {
   kvGetJson: jest.Mock;
   kvSetJson: jest.Mock;
   __resetStore: () => void;
+  __dumpStore: () => Array<[string, unknown]>;
 };
 
-const { __resetStore, kvGetJson, kvSetJson } = kvMock;
+const { __resetStore, __dumpStore, kvGetJson, kvSetJson } = kvMock;
 
 describe('conversationState', () => {
   beforeEach(() => {
@@ -52,9 +54,26 @@ describe('conversationState', () => {
         latestResponseId: 'resp_1',
       }),
     );
+    expect(__dumpStore()).toEqual([
+      [
+        'conversation-state:chat-1',
+        expect.objectContaining({
+          sessionId: 'chat-1',
+          conversationId: 'conv_1',
+          latestResponseId: 'resp_1',
+        }),
+      ],
+    ]);
 
     const loaded = await getConversationState('chat-1');
     expect(kvGetJson).toHaveBeenLastCalledWith('conversation-state:chat-1');
+    expect(kvGetJson.mock.results.at(-1)?.value).resolves.toEqual(
+      expect.objectContaining({
+        sessionId: 'chat-1',
+        conversationId: 'conv_1',
+        latestResponseId: 'resp_1',
+      }),
+    );
     expect(loaded).toEqual(first);
   });
 
@@ -74,6 +93,16 @@ describe('conversationState', () => {
         latestResponseId: 'resp_2',
       }),
     );
+    expect(__dumpStore()).toEqual([
+      [
+        'conversation-state:chat-2',
+        expect.objectContaining({
+          sessionId: 'chat-2',
+          conversationId: 'conv_2',
+          latestResponseId: 'resp_2',
+        }),
+      ],
+    ]);
 
     const second = await saveConversationState({
       sessionId: 'chat-2',
@@ -81,6 +110,13 @@ describe('conversationState', () => {
     });
 
     expect(kvGetJson).toHaveBeenCalledWith('conversation-state:chat-2');
+    expect(kvGetJson.mock.results.at(-1)?.value).resolves.toEqual(
+      expect.objectContaining({
+        sessionId: 'chat-2',
+        conversationId: 'conv_2',
+        latestResponseId: 'resp_2',
+      }),
+    );
     expect(kvSetJson).toHaveBeenNthCalledWith(
       2,
       'conversation-state:chat-2',

@@ -39,10 +39,12 @@ describe('runAssistant stabilization', () => {
     reason: 'test',
   };
 
-  const rawMessages = [
-    { role: 'system' as const, content: 'sys' },
-    { role: 'user' as const, content: 'hello' },
-  ];
+  const params = {
+    instructions: 'sys',
+    userInput: 'hello',
+    routing,
+    state: {},
+  };
 
   test('fails fast on invalid tool args json', async () => {
     mockedGetToolsSchemas.mockReturnValue([
@@ -77,7 +79,7 @@ describe('runAssistant stabilization', () => {
       },
     ]);
 
-    const result = await runAssistant(rawMessages, routing);
+    const result = await runAssistant(params);
 
     expect(result.error?.internalCode).toBe('invalid_tool_args_json');
     expect(mockedHandleToolCall).not.toHaveBeenCalled();
@@ -116,7 +118,7 @@ describe('runAssistant stabilization', () => {
       },
     ]);
 
-    const result = await runAssistant(rawMessages, routing);
+    const result = await runAssistant(params);
 
     expect(result.error?.internalCode).toBe('invalid_tool_args_schema');
     expect(mockedHandleToolCall).not.toHaveBeenCalled();
@@ -141,7 +143,7 @@ describe('runAssistant stabilization', () => {
       },
     ]);
 
-    const result = await runAssistant(rawMessages, routing);
+    const result = await runAssistant(params);
 
     expect(result.error?.internalCode).toBe('unknown_tool');
   });
@@ -180,7 +182,7 @@ describe('runAssistant stabilization', () => {
       },
     ]);
 
-    const result = await runAssistant(rawMessages, routing);
+    const result = await runAssistant(params);
 
     expect(result.error?.internalCode).toBe('tool_execution_failed');
   });
@@ -232,7 +234,7 @@ describe('runAssistant stabilization', () => {
       },
     ]);
 
-    const result = await runAssistant(rawMessages, routing);
+    const result = await runAssistant(params);
 
     expect(result.error?.internalCode).toBe('repeated_tool_call');
     expect(create).toHaveBeenCalledTimes(2);
@@ -285,7 +287,7 @@ describe('runAssistant stabilization', () => {
       },
     ]);
 
-    const result = await runAssistant(rawMessages, routing);
+    const result = await runAssistant(params);
 
     expect(result.error).toBeUndefined();
     expect(create).toHaveBeenCalledTimes(2);
@@ -296,5 +298,36 @@ describe('runAssistant stabilization', () => {
 
     const events = getRecentRunEvents();
     expect(events.some((event) => event.payload.previousResponseId === 'resp_1')).toBe(true);
+  });
+
+  test('passes conversation reference separately from previous_response_id', async () => {
+    mockedGetToolsSchemas.mockReturnValue([]);
+
+    const create = setupOpenAIResponses([
+      {
+        id: 'resp_9',
+        model: 'gpt-5.4-mini',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    ]);
+
+    const result = await runAssistant({
+      ...params,
+      state: { conversationId: 'conv_1' },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(create.mock.calls[0][0].conversation).toEqual({ id: 'conv_1' });
+    expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
+    expect(result.state.conversationId).toBe('conv_1');
+    expect(result.state.latestResponseId).toBe('resp_9');
   });
 });

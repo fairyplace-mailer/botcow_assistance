@@ -12,7 +12,11 @@ export type IngestStopReason =
   | 'maxChunksPerRun'
   | 'time_budget_exhausted'
   | 'embed_budget_exhausted'
-  | 'maxChunksPerPage';
+  | 'maxChunksPerPage'
+  | 'budget_warning_mode'
+  | 'budget_aggressive_mode';
+
+export type IngestBudgetMode = 'normal' | 'warning' | 'aggressive';
 
 export type IngestResult = {
   ok: true;
@@ -24,6 +28,10 @@ export type IngestResult = {
   chunksUpserted: number;
   discoveredQueued: number;
   stoppedReason?: IngestStopReason;
+  budgetMode: IngestBudgetMode;
+  officialPages: number;
+  officialChunks: number;
+  embeddingPressureRatio: number;
 
   // diagnostics
   startFetched: boolean;
@@ -66,20 +74,19 @@ export type IngestResult = {
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
+const TEMPORARY_TTL_DAYS = 7;
+const BUDGET_WARNING_THRESHOLD = 0.7;
+const BUDGET_AGGRESSIVE_THRESHOLD = 0.9;
 
 function nowMs(): number {
   return Date.now();
 }
 
 function normalizeMarkdownForHash(md: string): string {
-  // Canonicalize markdown to avoid re-embedding due to insignificant whitespace changes.
-  // Keep code blocks intact (code is critical for Wix docs).
   return (
     md
       .replace(/\r\n?/g, '\n')
-      // trim trailing whitespace per line
       .replace(/[^\S\n]+$/gm, '')
-      // collapse 3+ blank lines to 2
       .replace(/\n{3,}/g, '\n\n')
       .trim() +
     '\n'
@@ -87,8 +94,6 @@ function normalizeMarkdownForHash(md: string): string {
 }
 
 function markdownToTextForChunking(md: string): string {
-  // Important: code examples are part of the docs and MUST be embedded.
-  // We keep fenced/inline code, but we still simplify links and whitespace.
   return md
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
     .replace(/[#>*_~|-]/g, ' ')
@@ -106,7 +111,7 @@ function extractHtmlLang(html: string): string | null {
 }
 
 function isEnglishLang(lang: string | null): boolean {
-  if (!lang) return true; // if not provided, accept (wix pages usually are EN)
+  if (!lang) return true;
   const norm = lang.toLowerCase();
   return norm === 'en' || norm.startsWith('en-');
 }
@@ -119,9 +124,11 @@ function addHours(base: Date, hours: number): Date {
   return new Date(base.getTime() + hours * 60 * 60 * 1000);
 }
 
+function addDays(base: Date, days: number): Date {
+  return new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
 function stripHeavyHtml(html: string): string {
-  // Wix pages contain lots of JS and inline SVG; removing them drastically speeds up HTML->MD.
-  // Keep this conservative: remove only obvious heavy blocks.
   return html
     .replace(/<script\b[\s\S]*?<\/script>/gi, '')
     .replace(/<style\b[\s\S]*?<\/style>/gi, '')
@@ -135,8 +142,6 @@ async function claimDueDocPages(params: {
 }): Promise<Array<{ id: string; url: string; refreshIntervalHours: number }>> {
   const { now, limit } = params;
 
-  // Claim: inside a transaction, select due pages and immediately push their nextFetchAt
-  // forward a bit, so concurrent runs don't pick the same pages.
   return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const due = await tx.docPage.findMany({
       where: {
@@ -189,7 +194,6 @@ async function queueDiscoveredLinks(params: {
     linksMatchedAllowed += 1;
     if (sampleLinks.length < 20) sampleLinks.push(canon);
 
-    // Upsert with minimal changes; ingest owns scheduling.
     const existing = await prisma.docPage.findUnique({ where: { url: canon } });
     if (existing) {
       await prisma.docPage.update({ where: { url: canon }, data: { lastSeenAt: now } }).catch(() => undefined);
@@ -206,7 +210,6 @@ async function queueDiscoveredLinks(params: {
           fetchedAt: new Date(0),
           lastSeenAt: now,
           nextFetchAt: now,
-          // default refreshIntervalHours applies
         },
       })
       .catch(() => undefined);
@@ -246,6 +249,83 @@ WHERE c.id = v.id
   return { sql, values };
 }
 
+async function getEmbeddingPressureRatio(maxEmbeddings: number): Promise<{ ratio: number; officialPages: number; officialChunks: number }> {
+  const [officialPages, officialChunks] = await Promise.all([prisma.docPage.count(), prisma.docChunk.count()]);
+  const divisor = Math.max(1, maxEmbeddings);
+  const ratio = officialChunks / divisor;
+  return { ratio, officialPages, officialChunks };
+}
+
+function getBudgetMode(ratio: number): IngestBudgetMode {
+  if (ratio >= BUDGET_AGGRESSIVE_THRESHOLD) return 'aggressive';
+  if (ratio >= BUDGET_WARNING_THRESHOLD) return 'warning';
+  return 'normal';
+}
+
+function applyBudgetMode(params: {
+  budgetMode: IngestBudgetMode;
+  limitPages: number;
+  maxChunksPerRun: number;
+  maxEmbeddings: number;
+  maxDiscoveredPages: number;
+  discoverLinks: boolean;
+  maxChunksPerPage: number;
+  chunkTokens: number;
+  overlapTokens: number;
+}): {
+  limitPages: number;
+  maxChunksPerRun: number;
+  maxEmbeddings: number;
+  maxDiscoveredPages: number;
+  discoverLinks: boolean;
+  maxChunksPerPage: number;
+  chunkTokens: number;
+  overlapTokens: number;
+  stoppedReason?: IngestStopReason;
+} {
+  const { budgetMode } = params;
+  if (budgetMode === 'aggressive') {
+    return {
+      limitPages: Math.max(1, Math.min(params.limitPages, 1)),
+      maxChunksPerRun: 0,
+      maxEmbeddings: 0,
+      maxDiscoveredPages: 0,
+      discoverLinks: false,
+      maxChunksPerPage: Math.max(1, Math.min(params.maxChunksPerPage, 1)),
+      chunkTokens: Math.max(200, Math.min(params.chunkTokens, 900)),
+      overlapTokens: 0,
+      stoppedReason: 'budget_aggressive_mode',
+    };
+  }
+
+  if (budgetMode === 'warning') {
+    return {
+      limitPages: Math.max(1, Math.min(params.limitPages, 2)),
+      maxChunksPerRun: Math.max(1, Math.min(params.maxChunksPerRun, 8)),
+      maxEmbeddings: Math.max(0, Math.min(params.maxEmbeddings, 2)),
+      maxDiscoveredPages: 0,
+      discoverLinks: false,
+      maxChunksPerPage: Math.max(1, Math.min(params.maxChunksPerPage, 2)),
+      chunkTokens: Math.max(200, Math.min(params.chunkTokens, 950)),
+      overlapTokens: Math.min(params.overlapTokens, 40),
+      stoppedReason: 'budget_warning_mode',
+    };
+  }
+
+  return params;
+}
+
+async function cleanupTemporaryDerivatives(now: Date): Promise<void> {
+  const cutoff = addDays(now, -TEMPORARY_TTL_DAYS);
+  await prisma.docPage.deleteMany({
+    where: {
+      contentHash: 'seed',
+      fetchedAt: { lte: cutoff },
+      OR: [{ nextFetchAt: null }, { nextFetchAt: { lte: now } }],
+    },
+  });
+}
+
 export async function ingestDevWixArticles(
   opts?: {
     limitPages?: number;
@@ -260,25 +340,17 @@ export async function ingestDevWixArticles(
     overlapTokens?: number;
   },
 ): Promise<IngestResult> {
-  const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 1)));
-  const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 400)));
-
+  let limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 1)));
+  let maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 400)));
   const maxDurationMs = Math.max(500, Math.min(9000, Number(opts?.maxDurationMs ?? 6500)));
-
-  // Total embeddings per run (across all pages). Keep low for Hobby.
-  const maxEmbeddings = Math.max(0, Math.min(500, Number(opts?.maxEmbeddings ?? 8)));
-
-  const maxDiscoveredPages = Math.max(0, Math.min(500, Number(opts?.maxDiscoveredPages ?? 50)));
-
-  const discoverLinks = Boolean(opts?.discoverLinks ?? false);
-
-  // Per-page chunking controls for Hobby.
-  const maxChunksPerPage = Math.max(1, Math.min(50, Number(opts?.maxChunksPerPage ?? 8)));
-  const chunkTokens = Math.max(200, Math.min(2000, Number(opts?.chunkTokens ?? 1100)));
-  const overlapTokens = Math.max(0, Math.min(400, Number(opts?.overlapTokens ?? 150)));
+  let maxEmbeddings = Math.max(0, Math.min(500, Number(opts?.maxEmbeddings ?? 8)));
+  let maxDiscoveredPages = Math.max(0, Math.min(500, Number(opts?.maxDiscoveredPages ?? 50)));
+  let discoverLinks = Boolean(opts?.discoverLinks ?? false);
+  let maxChunksPerPage = Math.max(1, Math.min(50, Number(opts?.maxChunksPerPage ?? 8)));
+  let chunkTokens = Math.max(200, Math.min(2000, Number(opts?.chunkTokens ?? 1100)));
+  let overlapTokens = Math.max(0, Math.min(400, Number(opts?.overlapTokens ?? 150)));
 
   const startUrl = DEFAULT_START_URL;
-
   const runStartedAt = new Date();
   const deadlineMs = nowMs() + maxDurationMs;
   const timeBudget = { shouldStop: () => nowMs() > deadlineMs };
@@ -287,15 +359,12 @@ export async function ingestDevWixArticles(
   let stored = 0;
   let skippedUnchanged = 0;
   let chunksUpserted = 0;
-
   let embedFailures = 0;
   let lastEmbedErrorName: string | null = null;
   let lastEmbedError: string | null = null;
   let embeddingsAttempted = 0;
   let embeddingBatches = 0;
   let embeddingBatchSize = 0;
-
-  // diagnostics
   let startFetched = false;
   let startStatus: number | null = null;
   let startHtmlBytes: number | null = null;
@@ -305,8 +374,6 @@ export async function ingestDevWixArticles(
   let linksMatchedAllowed = 0;
   const sampleLinks: string[] = [];
   let stoppedReason: IngestStopReason | undefined;
-
-  // perf
   let msFetch = 0;
   let msTransform = 0;
   let msChunk = 0;
@@ -314,10 +381,79 @@ export async function ingestDevWixArticles(
   let msDb = 0;
   let msDiscover = 0;
 
+  const pressure = await getEmbeddingPressureRatio(maxEmbeddings);
+  const budgetMode = getBudgetMode(pressure.ratio);
+  const adjusted = applyBudgetMode({
+    budgetMode,
+    limitPages,
+    maxChunksPerRun,
+    maxEmbeddings,
+    maxDiscoveredPages,
+    discoverLinks,
+    maxChunksPerPage,
+    chunkTokens,
+    overlapTokens,
+  });
+
+  limitPages = adjusted.limitPages;
+  maxChunksPerRun = adjusted.maxChunksPerRun;
+  maxEmbeddings = adjusted.maxEmbeddings;
+  maxDiscoveredPages = adjusted.maxDiscoveredPages;
+  discoverLinks = adjusted.discoverLinks;
+  maxChunksPerPage = adjusted.maxChunksPerPage;
+  chunkTokens = adjusted.chunkTokens;
+  overlapTokens = adjusted.overlapTokens;
+  stoppedReason = adjusted.stoppedReason;
+
+  await cleanupTemporaryDerivatives(runStartedAt);
+
+  if (budgetMode === 'aggressive') {
+    return {
+      ok: true,
+      startUrl,
+      limitPages,
+      fetched,
+      stored,
+      skippedUnchanged,
+      chunksUpserted,
+      discoveredQueued: 0,
+      stoppedReason,
+      budgetMode,
+      officialPages: pressure.officialPages,
+      officialChunks: pressure.officialChunks,
+      embeddingPressureRatio: pressure.ratio,
+      startFetched,
+      startStatus,
+      startHtmlBytes,
+      startFetchErrorName,
+      startFetchError,
+      linksFoundTotal,
+      linksMatchedAllowed,
+      sampleLinks,
+      embedFailures,
+      lastEmbedErrorName,
+      lastEmbedError,
+      maxDurationMs,
+      maxEmbeddings,
+      embeddingsAttempted,
+      budgetHit: true,
+      budgetHitType: 'embeddings',
+      maxChunksPerPage,
+      chunkTokens,
+      overlapTokens,
+      msFetch,
+      msTransform,
+      msChunk,
+      msEmbed,
+      msDb,
+      msDiscover,
+      embeddingBatches,
+      embeddingBatchSize,
+    };
+  }
+
   try {
     if (timeBudget.shouldStop()) {
-      const budgetHit = true;
-      const budgetHitType: 'time' | 'embeddings' | null = 'time';
       return {
         ok: true,
         startUrl,
@@ -328,6 +464,10 @@ export async function ingestDevWixArticles(
         chunksUpserted,
         discoveredQueued: 0,
         stoppedReason: 'time_budget_exhausted',
+        budgetMode,
+        officialPages: pressure.officialPages,
+        officialChunks: pressure.officialChunks,
+        embeddingPressureRatio: pressure.ratio,
         startFetched,
         startStatus,
         startHtmlBytes,
@@ -342,8 +482,8 @@ export async function ingestDevWixArticles(
         maxDurationMs,
         maxEmbeddings,
         embeddingsAttempted,
-        budgetHit,
-        budgetHitType,
+        budgetHit: true,
+        budgetHitType: 'time',
         maxChunksPerPage,
         chunkTokens,
         overlapTokens,
@@ -437,6 +577,10 @@ export async function ingestDevWixArticles(
       chunksUpserted,
       discoveredQueued: 0,
       stoppedReason: 'start_fetch_failed',
+      budgetMode,
+      officialPages: pressure.officialPages,
+      officialChunks: pressure.officialChunks,
+      embeddingPressureRatio: pressure.ratio,
       startFetched,
       startStatus,
       startHtmlBytes,
@@ -479,7 +623,6 @@ export async function ingestDevWixArticles(
     : await claimDueDocPages({ now: runStartedAt, limit: limitPages });
 
   const discoveredQueued = targets.length;
-
   let discoveredRemaining = maxDiscoveredPages;
 
   for (const t of targets) {
@@ -487,7 +630,6 @@ export async function ingestDevWixArticles(
       stoppedReason = 'time_budget_exhausted';
       break;
     }
-
     if (fetched >= limitPages) break;
 
     const url = t.url;
@@ -502,9 +644,7 @@ export async function ingestDevWixArticles(
       msFetch += nowMs() - tFetch0;
 
       const tDbStatus0 = nowMs();
-      await prisma.docPage
-        .update({ where: { url }, data: { httpStatus: res.status } })
-        .catch(() => undefined);
+      await prisma.docPage.update({ where: { url }, data: { httpStatus: res.status } }).catch(() => undefined);
       msDb += nowMs() - tDbStatus0;
 
       if (isDefinitivelyGone(res.status)) {
@@ -627,12 +767,10 @@ export async function ingestDevWixArticles(
           stoppedReason = 'time_budget_exhausted';
           break;
         }
-
         if (chunksUpserted >= maxChunksPerRun) {
           stoppedReason = 'maxChunksPerRun';
           break;
         }
-
         if (idx >= maxChunksPerPage) {
           stoppedReason = stoppedReason ?? 'maxChunksPerPage';
           break;
@@ -661,7 +799,6 @@ export async function ingestDevWixArticles(
 
         embeddingsAttempted += 1;
         embeddingsInputs.push({ id: created.id, content });
-
         idx += 1;
       }
 
@@ -693,12 +830,11 @@ export async function ingestDevWixArticles(
       if (vectorUpdates.length > 0 && !timeBudget.shouldStop()) {
         const tDbVec0 = nowMs();
         const { sql, values } = buildVectorUpdateSql({ updates: vectorUpdates });
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         await prisma.$executeRawUnsafe(sql, ...values);
         msDb += nowMs() - tDbVec0;
       }
 
-      if (stoppedReason && stoppedReason !== 'embed_budget_exhausted') break;
+      if (stoppedReason && stoppedReason !== 'embed_budget_exhausted' && stoppedReason !== 'budget_warning_mode') break;
     } catch {
       const tDbUpd0 = nowMs();
       await prisma.docPage
@@ -712,11 +848,15 @@ export async function ingestDevWixArticles(
     }
   }
 
-  const budgetHit = stoppedReason === 'time_budget_exhausted' || stoppedReason === 'embed_budget_exhausted';
+  const budgetHit =
+    stoppedReason === 'time_budget_exhausted' ||
+    stoppedReason === 'embed_budget_exhausted' ||
+    stoppedReason === 'budget_warning_mode' ||
+    stoppedReason === 'budget_aggressive_mode';
   const budgetHitType: 'time' | 'embeddings' | null =
     stoppedReason === 'time_budget_exhausted'
       ? 'time'
-      : stoppedReason === 'embed_budget_exhausted'
+      : stoppedReason === 'embed_budget_exhausted' || stoppedReason === 'budget_warning_mode' || stoppedReason === 'budget_aggressive_mode'
         ? 'embeddings'
         : null;
 
@@ -729,6 +869,11 @@ export async function ingestDevWixArticles(
     skippedUnchanged,
     chunksUpserted,
     discoveredQueued,
+    stoppedReason,
+    budgetMode,
+    officialPages: pressure.officialPages,
+    officialChunks: pressure.officialChunks,
+    embeddingPressureRatio: pressure.ratio,
     startFetched,
     startStatus,
     startHtmlBytes,
@@ -757,6 +902,5 @@ export async function ingestDevWixArticles(
     embeddingBatches,
     embeddingBatchSize,
   };
-  if (stoppedReason) result.stoppedReason = stoppedReason;
   return result;
 }

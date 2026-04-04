@@ -26,7 +26,7 @@ describe('chat route routing contract', () => {
     (buildCoreInstructions as jest.Mock).mockReturnValue('CORE_INSTRUCTIONS');
   });
 
-  test('passes normalized params to runAssistant and returns normalized public success contract', async () => {
+  test('passes canonical params to runAssistant and returns normalized public success contract', async () => {
     const routing = {
       model: 'gpt-5.4',
       reasoning: { effort: 'high' },
@@ -67,7 +67,7 @@ describe('chat route routing contract', () => {
       },
       body: JSON.stringify({
         messages: [{ role: 'user', content: 'analyze stack trace' }],
-        hints: { channel: 'web' },
+        hints: { toolHeavy: true },
         state: { conversationId: 'conv_prev', previousResponseId: 'resp_prev' },
       }),
     });
@@ -78,7 +78,7 @@ describe('chat route routing contract', () => {
     expect(res.status).toBe(200);
     expect(buildCoreInstructions).toHaveBeenCalledWith({
       routing,
-      hints: { channel: 'web' },
+      hints: { toolHeavy: true },
     });
     expect(runAssistant).toHaveBeenCalledWith({
       instructions: 'CORE_INSTRUCTIONS',

@@ -8,6 +8,6 @@ module.exports = {
   restoreMocks: true,
   resetMocks: true,
   transformIgnorePatterns: [
-    '/node_modules/(?!(@octokit/rest|@octokit/core|@octokit/plugin-paginate-rest|@octokit/plugin-request-log|@octokit/request|@octokit/endpoint|@octokit/auth-token|before-after-hook|universal-user-agent)/)',
+    '/node_modules/(?!(@octokit/rest|@octokit/core|@octokit/plugin-paginate-rest|@octokit/plugin-request-log|@octokit/request|@octokit/endpoint|@octokit/auth-token|@octokit/graphql|@octokit/graphql-schema|before-after-hook|universal-user-agent)/)',
   ],
 };

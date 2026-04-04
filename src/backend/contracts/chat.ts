@@ -1,0 +1,66 @@
+export type ChatRole = 'system' | 'developer' | 'user' | 'assistant';
+
+export type ChatMessageContentPart = {
+  text?: string;
+  type?: string;
+};
+
+export type ChatMessageContent = string | ChatMessageContentPart[] | { text?: string };
+
+export type ChatMessage = {
+  role: ChatRole;
+  content: ChatMessageContent;
+};
+
+export type ChatRoutingHints = {
+  touchedFiles?: string[];
+  previousAttemptFailed?: boolean;
+  ragSourceCount?: number;
+  hasSourceConflict?: boolean;
+  toolHeavy?: boolean;
+};
+
+export type ChatStateRef = {
+  conversationId?: string;
+  previousResponseId?: string;
+};
+
+export type ChatRequestBody = {
+  messages: ChatMessage[];
+  state?: ChatStateRef;
+  hints?: ChatRoutingHints;
+};
+
+export type PublicResponsePhase = 'final_answer' | 'commentary' | 'unknown';
+
+export type NormalizedChatResponse = {
+  id: string | null;
+  model: string | null;
+  phase: PublicResponsePhase;
+  outputText: string;
+  reason: string;
+  reasoningEffort: string | null;
+  state: {
+    conversationId: string | null;
+    previousResponseId: string | null;
+  };
+};
+
+export type PublicChatSuccess = {
+  ok: true;
+  sessionId: string;
+  response: NormalizedChatResponse;
+  error: null;
+};
+
+export type PublicChatError = {
+  ok: false;
+  sessionId: string;
+  response: null;
+  error: {
+    code: string;
+    message: string;
+  };
+};
+
+export type PublicChatResult = PublicChatSuccess | PublicChatError;

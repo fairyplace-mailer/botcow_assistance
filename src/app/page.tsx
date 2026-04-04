@@ -3,12 +3,12 @@
 import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import type { FormEvent, ChangeEvent } from 'react';
 import {
-  clearRecentMessages,
-  loadRecentMessages,
-  saveRecentMessages,
+  clearRecentChatSession,
+  loadRecentChatSession,
+  saveRecentChatSession,
   type Message,
 } from './pwa/chatStore';
-import type { PublicChatResult } from '../backend/contracts/chat';
+import type { ChatStateRef, PublicChatResult } from '../backend/contracts/chat';
 
 type Role = 'user' | 'assistant';
 
@@ -62,14 +62,16 @@ export default function Page() {
 
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionIdRef = useRef<string>('');
+  const chatStateRef = useRef<ChatStateRef>({});
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     sessionIdRef.current = getOrCreateSessionId();
 
-    loadRecentMessages().then((loaded) => {
-      if (loaded.length > 0) setMessages(loaded);
+    loadRecentChatSession().then((loaded) => {
+      if (loaded.messages.length > 0) setMessages(loaded.messages);
+      chatStateRef.current = loaded.state;
     });
 
     const updateOnline = () => setIsOffline(!navigator.onLine);
@@ -93,7 +95,8 @@ export default function Page() {
       setChatError(null);
       setChatLoading(false);
       sessionIdRef.current = getOrCreateSessionId();
-      void clearRecentMessages();
+      chatStateRef.current = {};
+      void clearRecentChatSession();
     }
 
     window.addEventListener('botcow:new-chat', onNewChat);
@@ -102,7 +105,7 @@ export default function Page() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    void saveRecentMessages(messages);
+    void saveRecentChatSession({ messages, state: chatStateRef.current });
   }, [messages]);
 
   function getMaxHeight(): number {
@@ -163,7 +166,10 @@ export default function Page() {
           'Content-Type': 'application/json',
           'x-botcow-session-id': sessionIdRef.current || getOrCreateSessionId(),
         },
-        body: JSON.stringify({ messages: nextMessages }),
+        body: JSON.stringify({
+          messages: nextMessages,
+          state: chatStateRef.current,
+        }),
       });
 
       const data = (await res.json().catch(() => null)) as PublicChatResult | null;
@@ -172,12 +178,23 @@ export default function Page() {
         throw new Error(data?.error?.message || `HTTP ${res.status}`);
       }
 
+      chatStateRef.current = {
+        ...(data.response.state.conversationId ? { conversationId: data.response.state.conversationId } : {}),
+        ...(data.response.state.previousResponseId
+          ? { previousResponseId: data.response.state.previousResponseId }
+          : {}),
+      };
+
       const reply: Message = {
         role: 'assistant' as Role,
         content: data.response.outputText || '',
       };
 
       setMessages((prev) => [...prev, reply]);
+      void saveRecentChatSession({
+        messages: [...nextMessages, reply],
+        state: chatStateRef.current,
+      });
     } catch (err: any) {
       setChatError(err?.message || 'Chat request failed');
     } finally {

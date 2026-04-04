@@ -25,7 +25,7 @@ jest.mock('../src/backend/openai', () => ({
   })),
 }));
 
-jest.mock('../src/backend/db', () => ({
+jest.mock('@/backend/db', () => ({
   prisma: {
     $transaction: (...args: unknown[]) => transactionMock(...args),
     $executeRawUnsafe: (...args: unknown[]) => executeRawUnsafe(...args),

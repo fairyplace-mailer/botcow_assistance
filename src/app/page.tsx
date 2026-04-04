@@ -2,7 +2,13 @@
 
 import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import type { FormEvent, ChangeEvent } from 'react';
-import { clearRecentMessages, loadRecentMessages, saveRecentMessages, type Message } from './pwa/chatStore';
+import {
+  clearRecentMessages,
+  loadRecentMessages,
+  saveRecentMessages,
+  type Message,
+} from './pwa/chatStore';
+import type { PublicChatResult } from '../backend/contracts/chat';
 
 type Role = 'user' | 'assistant';
 
@@ -103,7 +109,7 @@ export default function Page() {
     const ta = taRef.current;
     if (!ta || typeof window === 'undefined') return 0;
     const style = window.getComputedStyle(ta);
-    const lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2) || 18;
+    const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2 || 18;
     const paddingTop = parseFloat(style.paddingTop) || 0;
     const paddingBottom = parseFloat(style.paddingBottom) || 0;
     const borderTop = parseFloat(style.borderTopWidth) || 0;
@@ -160,16 +166,15 @@ export default function Page() {
         body: JSON.stringify({ messages: nextMessages }),
       });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `HTTP ${res.status}`);
+      const data = (await res.json().catch(() => null)) as PublicChatResult | null;
+
+      if (!res.ok || !data?.ok || !data.response) {
+        throw new Error(data?.error?.message || `HTTP ${res.status}`);
       }
 
-      const data = await res.json();
-      const choice = data.choices?.[0]?.message;
       const reply: Message = {
-        role: (choice?.role as Role) || 'assistant',
-        content: choice?.content || '',
+        role: 'assistant' as Role,
+        content: data.response.outputText || '',
       };
 
       setMessages((prev) => [...prev, reply]);

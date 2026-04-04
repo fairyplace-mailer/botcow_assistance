@@ -138,9 +138,7 @@ describe('assistant routing propagation', () => {
     );
   });
 
-  test('runAssistant logs reasoning suppression when runtime support is disabled', async () => {
-    process.env.OPENAI_RESPONSES_REASONING = '0';
-
+  test('runAssistant logs supported runtime reasoning behavior', async () => {
     const create = jest.fn().mockResolvedValue({
       id: 'resp_3',
       model: 'gpt-5.4',
@@ -167,12 +165,10 @@ describe('assistant routing propagation', () => {
       'openai_request_completed',
       expect.objectContaining({
         requestedReasoningEffort: 'high',
-        sentReasoningEffort: null,
-        reasoningSuppressedReason: 'runtime_not_supported',
-        runtimeReasoningSupport: 'unsupported',
+        sentReasoningEffort: 'high',
+        reasoningSuppressedReason: null,
+        runtimeReasoningSupport: 'supported',
       }),
     );
-
-    process.env.OPENAI_RESPONSES_REASONING = '1';
   });
 });

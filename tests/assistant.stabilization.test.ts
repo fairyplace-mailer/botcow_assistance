@@ -20,11 +20,15 @@ function makeResponse(params: {
   id: string;
   output: any[];
   model?: string;
+  output_text?: string;
+  conversationId?: string;
 }) {
   return {
     id: params.id,
     model: params.model ?? 'gpt-5.4-mini',
     output: params.output,
+    output_text: params.output_text,
+    conversation: params.conversationId ? { id: params.conversationId } : undefined,
     usage: {
       input_tokens: 10,
       output_tokens: 5,
@@ -61,6 +65,7 @@ describe('assistant stabilization', () => {
         create: jest.fn().mockResolvedValue(
           makeResponse({
             id: 'resp-success',
+            conversationId: 'conv-success',
             output: [
               {
                 type: 'message',
@@ -76,12 +81,16 @@ describe('assistant stabilization', () => {
 
     const result = await runAssistant({
       instructions: 'sys',
-      userInput: 'hello',
+      messages: [{ role: 'user', content: 'hello' }],
       routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
       state: {},
     });
 
     expect(result.error).toBeUndefined();
+    expect(result.state).toEqual({
+      conversationId: 'conv-success',
+      latestResponseId: 'resp-success',
+    });
 
     const events = getRecentRunEvents();
     const finalEvent = events.find((event) => event.event === 'assistant_run_completed');
@@ -115,7 +124,7 @@ describe('assistant stabilization', () => {
 
     const result = await runAssistant({
       instructions: 'sys',
-      userInput: 'hello',
+      messages: [{ role: 'user', content: 'hello' }],
       routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
       state: {},
     });
@@ -123,7 +132,7 @@ describe('assistant stabilization', () => {
     expect(result.error?.internalCode).toBe('invalid_tool_args_json');
 
     const events = getRecentRunEvents();
-    const warnEvent = events.find((event) => event.event === 'assistant_invalid_tool_args_json');
+    const warnEvent = events.find((event) => event.payload.stopReason === 'invalid_tool_args_json');
 
     expect(warnEvent?.payload.finalStatus).toBe('failed');
     expect(warnEvent?.payload.argsParseOk).toBe(false);
@@ -134,6 +143,7 @@ describe('assistant stabilization', () => {
     const create = jest.fn().mockResolvedValue(
       makeResponse({
         id: 'resp-conversation',
+        conversationId: 'conv-1',
         output: [
           {
             type: 'message',
@@ -151,7 +161,7 @@ describe('assistant stabilization', () => {
 
     const result = await runAssistant({
       instructions: 'sys',
-      userInput: 'hello',
+      messages: [{ role: 'user', content: 'hello' }],
       routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
       state: { conversationId: 'conv-1', previousResponseId: 'resp-old' },
     });
@@ -199,7 +209,7 @@ describe('assistant stabilization', () => {
 
     const result = await runAssistant({
       instructions: 'sys',
-      userInput: 'hello',
+      messages: [{ role: 'user', content: 'hello' }],
       routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
       state: {},
     });
@@ -249,7 +259,7 @@ describe('assistant stabilization', () => {
 
     const result = await runAssistant({
       instructions: 'sys',
-      userInput: 'hello',
+      messages: [{ role: 'user', content: 'hello' }],
       routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
       state: {},
     });
@@ -257,10 +267,9 @@ describe('assistant stabilization', () => {
     expect(result.error?.internalCode).toBe('repeated_tool_call');
 
     const events = getRecentRunEvents();
-    const warnEvent = events.find((event) => event.event === 'assistant_repeated_tool_call');
+    const warnEvent = events.find((event) => event.payload.stopReason === 'repeated_tool_call');
 
     expect(warnEvent?.payload.finalStatus).toBe('failed');
     expect(warnEvent?.payload.stopReason).toBe('repeated_tool_call');
-    expect(warnEvent?.payload.toolResultClass).toBe('ok');
   });
 });

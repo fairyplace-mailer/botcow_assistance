@@ -4,7 +4,7 @@ import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
 import { embeddingToSqlVectorLiteral } from './pgvector';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, KnowledgeLayer } from '@prisma/client';
 import { canonicalizeDocsUrl, extractLinksFromHtml, isAllowedDocsUrl } from './sitemapSeed';
 
 export type IngestStopReason =
@@ -32,8 +32,6 @@ export type IngestResult = {
   officialPages: number;
   officialChunks: number;
   embeddingPressureRatio: number;
-
-  // diagnostics
   startFetched: boolean;
   startStatus: number | null;
   startHtmlBytes: number | null;
@@ -42,33 +40,23 @@ export type IngestResult = {
   linksFoundTotal: number;
   linksMatchedAllowed: number;
   sampleLinks: string[];
-
-  // embeddings diagnostics
   embedFailures: number;
   lastEmbedErrorName: string | null;
   lastEmbedError: string | null;
-
-  // budget diagnostics
   maxDurationMs: number;
   maxEmbeddings: number;
   embeddingsAttempted: number;
   budgetHit: boolean;
   budgetHitType: 'time' | 'embeddings' | null;
-
-  // chunking controls
   maxChunksPerPage: number;
   chunkTokens: number;
   overlapTokens: number;
-
-  // perf diagnostics
   msFetch: number;
   msTransform: number;
   msChunk: number;
   msEmbed: number;
   msDb: number;
   msDiscover: number;
-
-  // embeddings batching diagnostics
   embeddingBatches: number;
   embeddingBatchSize: number;
 };
@@ -83,22 +71,11 @@ function nowMs(): number {
 }
 
 function normalizeMarkdownForHash(md: string): string {
-  return (
-    md
-      .replace(/\r\n?/g, '\n')
-      .replace(/[^\S\n]+$/gm, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim() +
-    '\n'
-  );
+  return md.replace(/\r\n?/g, '\n').replace(/[^\S\n]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
 
 function markdownToTextForChunking(md: string): string {
-  return md
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
-    .replace(/[#>*_~|-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return md.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1').replace(/[#>*_~|-]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function isDefinitivelyGone(status: number): boolean {
@@ -146,6 +123,7 @@ async function claimDueDocPages(params: {
     const due = await tx.docPage.findMany({
       where: {
         url: { startsWith: 'https://dev.wix.com/docs/' },
+        knowledgeLayer: 'OFFICIAL',
         OR: [{ nextFetchAt: null }, { nextFetchAt: { lte: now } }],
       },
       orderBy: [{ nextFetchAt: 'asc' }, { fetchedAt: 'asc' }],
@@ -200,19 +178,20 @@ async function queueDiscoveredLinks(params: {
       continue;
     }
 
-    await prisma.docPage
-      .create({
-        data: {
-          url: canon,
-          title: null,
-          text: '',
-          contentHash: 'seed',
-          fetchedAt: new Date(0),
-          lastSeenAt: now,
-          nextFetchAt: now,
-        },
-      })
-      .catch(() => undefined);
+    await prisma.docPage.create({
+      data: {
+        url: canon,
+        title: null,
+        text: '',
+        contentHash: 'seed',
+        knowledgeLayer: 'TEMPORARY',
+        retentionUntil: addDays(now, TEMPORARY_TTL_DAYS),
+        retentionReason: 'seed_placeholder',
+        fetchedAt: new Date(0),
+        lastSeenAt: now,
+        nextFetchAt: now,
+      },
+    }).catch(() => undefined);
 
     inserted += 1;
   }
@@ -224,7 +203,6 @@ function buildVectorUpdateSql(params: {
   updates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }>;
 }): { sql: string; values: any[] } {
   const { updates } = params;
-
   const values: any[] = [];
   const rows: string[] = [];
 
@@ -250,7 +228,10 @@ WHERE c.id = v.id
 }
 
 async function getEmbeddingPressureRatio(maxEmbeddings: number): Promise<{ ratio: number; officialPages: number; officialChunks: number }> {
-  const [officialPages, officialChunks] = await Promise.all([prisma.docPage.count(), prisma.docChunk.count()]);
+  const [officialPages, officialChunks] = await Promise.all([
+    prisma.docPage.count({ where: { knowledgeLayer: 'OFFICIAL' } }),
+    prisma.docChunk.count({ where: { knowledgeLayer: 'OFFICIAL' } }),
+  ]);
   const divisor = Math.max(1, maxEmbeddings);
   const ratio = officialChunks / divisor;
   return { ratio, officialPages, officialChunks };
@@ -286,13 +267,13 @@ function applyBudgetMode(params: {
   const { budgetMode } = params;
   if (budgetMode === 'aggressive') {
     return {
-      limitPages: Math.max(1, Math.min(params.limitPages, 1)),
+      limitPages: 0,
       maxChunksPerRun: 0,
       maxEmbeddings: 0,
       maxDiscoveredPages: 0,
       discoverLinks: false,
-      maxChunksPerPage: Math.max(1, Math.min(params.maxChunksPerPage, 1)),
-      chunkTokens: Math.max(200, Math.min(params.chunkTokens, 900)),
+      maxChunksPerPage: 0,
+      chunkTokens: params.chunkTokens,
       overlapTokens: 0,
       stoppedReason: 'budget_aggressive_mode',
     };
@@ -315,15 +296,56 @@ function applyBudgetMode(params: {
   return params;
 }
 
-async function cleanupTemporaryDerivatives(now: Date): Promise<void> {
-  const cutoff = addDays(now, -TEMPORARY_TTL_DAYS);
-  await prisma.docPage.deleteMany({
+async function cleanupExpiredTemporaryData(now: Date): Promise<void> {
+  await prisma.docChunk.deleteMany({
     where: {
-      contentHash: 'seed',
-      fetchedAt: { lte: cutoff },
-      OR: [{ nextFetchAt: null }, { nextFetchAt: { lte: now } }],
+      knowledgeLayer: 'TEMPORARY',
+      retentionUntil: { lte: now },
     },
   });
+
+  await prisma.docPage.deleteMany({
+    where: {
+      knowledgeLayer: 'TEMPORARY',
+      retentionUntil: { lte: now },
+    },
+  });
+}
+
+function officialPageData(params: {
+  url: string;
+  title: string | null;
+  markdown: string;
+  contentHash: string;
+  now: Date;
+  refreshIntervalHours?: number;
+}) {
+  const { url, title, markdown, contentHash, now, refreshIntervalHours } = params;
+  return {
+    url,
+    title,
+    text: markdown,
+    contentHash,
+    knowledgeLayer: 'OFFICIAL' as KnowledgeLayer,
+    retentionUntil: null,
+    retentionReason: null,
+    fetchedAt: now,
+    lastSeenAt: now,
+    nextFetchAt: addHours(now, refreshIntervalHours ?? 24),
+  };
+}
+
+function officialChunkData(pageId: string, idx: number, content: string) {
+  return {
+    pageId,
+    idx,
+    content,
+    knowledgeLayer: 'OFFICIAL' as KnowledgeLayer,
+    retentionUntil: null,
+    lastAccessedAt: null,
+    embeddingModel: null,
+    dims: null,
+  };
 }
 
 export async function ingestDevWixArticles(
@@ -405,7 +427,7 @@ export async function ingestDevWixArticles(
   overlapTokens = adjusted.overlapTokens;
   stoppedReason = adjusted.stoppedReason;
 
-  await cleanupTemporaryDerivatives(runStartedAt);
+  await cleanupExpiredTemporaryData(runStartedAt);
 
   if (budgetMode === 'aggressive') {
     return {
@@ -533,6 +555,9 @@ export async function ingestDevWixArticles(
             title,
             text: markdown,
             contentHash,
+            knowledgeLayer: 'OFFICIAL',
+            retentionUntil: null,
+            retentionReason: null,
             fetchedAt: runStartedAt,
             lastSeenAt: runStartedAt,
           },
@@ -540,6 +565,9 @@ export async function ingestDevWixArticles(
             title,
             text: markdown,
             contentHash,
+            knowledgeLayer: 'OFFICIAL',
+            retentionUntil: null,
+            retentionReason: null,
             fetchedAt: runStartedAt,
             lastSeenAt: runStartedAt,
           },
@@ -615,6 +643,7 @@ export async function ingestDevWixArticles(
     ? await prisma.docPage.findMany({
         where: {
           url: { startsWith: 'https://dev.wix.com/docs/' },
+          knowledgeLayer: 'OFFICIAL',
         },
         orderBy: [{ fetchedAt: 'asc' }],
         take: limitPages,
@@ -656,12 +685,7 @@ export async function ingestDevWixArticles(
 
       if (!res.ok) {
         const tDbUpd0 = nowMs();
-        await prisma.docPage
-          .update({
-            where: { url },
-            data: { nextFetchAt: addMinutes(runStartedAt, 60) },
-          })
-          .catch(() => undefined);
+        await prisma.docPage.update({ where: { url }, data: { nextFetchAt: addMinutes(runStartedAt, 60) } }).catch(() => undefined);
         msDb += nowMs() - tDbUpd0;
         continue;
       }
@@ -709,16 +733,17 @@ export async function ingestDevWixArticles(
 
       if (existing?.contentHash === contentHash) {
         const tDbUpd0 = nowMs();
-        await prisma.docPage
-          .update({
-            where: { url },
-            data: {
-              lastSeenAt: runStartedAt,
-              fetchedAt: runStartedAt,
-              nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
-            },
-          })
-          .catch(() => undefined);
+        await prisma.docPage.update({
+          where: { url },
+          data: {
+            lastSeenAt: runStartedAt,
+            fetchedAt: runStartedAt,
+            knowledgeLayer: 'OFFICIAL',
+            retentionUntil: null,
+            retentionReason: null,
+            nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
+          },
+        }).catch(() => undefined);
         msDb += nowMs() - tDbUpd0;
         skippedUnchanged += 1;
         continue;
@@ -727,23 +752,8 @@ export async function ingestDevWixArticles(
       const tDbUpsert0 = nowMs();
       const page = await prisma.docPage.upsert({
         where: { url },
-        create: {
-          url,
-          title,
-          text: markdown,
-          contentHash,
-          fetchedAt: runStartedAt,
-          lastSeenAt: runStartedAt,
-          nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
-        },
-        update: {
-          title,
-          text: markdown,
-          contentHash,
-          fetchedAt: runStartedAt,
-          lastSeenAt: runStartedAt,
-          nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
-        },
+        create: officialPageData({ url, title, markdown, contentHash, now: runStartedAt, refreshIntervalHours: t.refreshIntervalHours }),
+        update: officialPageData({ url, title, markdown, contentHash, now: runStartedAt, refreshIntervalHours: t.refreshIntervalHours }),
       });
       msDb += nowMs() - tDbUpsert0;
 
@@ -780,15 +790,7 @@ export async function ingestDevWixArticles(
         if (!content || !content.trim()) continue;
 
         const tDbChunk0 = nowMs();
-        const created = await prisma.docChunk.create({
-          data: {
-            pageId: page.id,
-            idx,
-            content,
-            embeddingModel: null,
-            dims: null,
-          },
-        });
+        const created = await prisma.docChunk.create({ data: officialChunkData(page.id, idx, content) });
         msDb += nowMs() - tDbChunk0;
 
         if (embeddingsAttempted >= maxEmbeddings) {
@@ -837,12 +839,7 @@ export async function ingestDevWixArticles(
       if (stoppedReason && stoppedReason !== 'embed_budget_exhausted' && stoppedReason !== 'budget_warning_mode') break;
     } catch {
       const tDbUpd0 = nowMs();
-      await prisma.docPage
-        .update({
-          where: { url },
-          data: { nextFetchAt: addMinutes(runStartedAt, 60) },
-        })
-        .catch(() => undefined);
+      await prisma.docPage.update({ where: { url }, data: { nextFetchAt: addMinutes(runStartedAt, 60) } }).catch(() => undefined);
       msDb += nowMs() - tDbUpd0;
       continue;
     }
@@ -860,7 +857,7 @@ export async function ingestDevWixArticles(
         ? 'embeddings'
         : null;
 
-  const result: IngestResult = {
+  return {
     ok: true,
     startUrl,
     limitPages,
@@ -902,5 +899,4 @@ export async function ingestDevWixArticles(
     embeddingBatches,
     embeddingBatchSize,
   };
-  return result;
 }

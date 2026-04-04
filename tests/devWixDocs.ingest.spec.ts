@@ -9,9 +9,10 @@ const docPageFindMany = jest.fn(async () => []);
 const docPageUpdate = jest.fn(async () => ({}));
 const docChunkCreate = jest.fn(async (args: any) => ({ id: `chunk-${args.data.idx}`, ...args.data }));
 const executeRawUnsafe = jest.fn(async () => 1);
+const txDocPageUpdateMany = jest.fn(async () => ({ count: 0 }));
 const transactionMock = jest.fn(async (cbOrOps: any) => {
   if (typeof cbOrOps === 'function') {
-    return cbOrOps({ docPage: { findMany: docPageFindMany, updateMany: jest.fn(async () => ({ count: 0 })) } });
+    return cbOrOps({ docPage: { findMany: docPageFindMany, updateMany: txDocPageUpdateMany } });
   }
   return cbOrOps;
 });
@@ -36,7 +37,7 @@ jest.mock('../src/backend/db', () => ({
       upsert: (...args: unknown[]) => docPageUpsert(...args),
       findMany: (...args: unknown[]) => docPageFindMany(...args),
       update: (...args: unknown[]) => docPageUpdate(...args),
-      updateMany: jest.fn(async () => ({ count: 0 })),
+      updateMany: (...args: unknown[]) => txDocPageUpdateMany(...args),
       delete: jest.fn(async () => ({})),
     },
     docChunk: {
@@ -53,6 +54,7 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     docPageCount.mockResolvedValue(1);
     docChunkCount.mockResolvedValue(1);
     docPageFindUnique.mockResolvedValue(null);
+    docPageFindMany.mockResolvedValue([]);
     global.fetch = jest.fn(async () => ({
       ok: true,
       status: 200,
@@ -85,6 +87,7 @@ describe('ingestDevWixArticles retention and budget policy', () => {
   });
 
   it('creates official chunks without ordinary TTL', async () => {
+    docPageFindMany.mockResolvedValue([{ id: 'page-1', url: 'https://dev.wix.com/docs/sdk', refreshIntervalHours: 24 }]);
     const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
 
     await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: false, force: true, limitPages: 1 });

@@ -92,6 +92,9 @@ describe('ingestDevWixArticles retention and budget policy', () => {
 
     await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: false, force: true, limitPages: 1 });
 
+    expect(docPageFindMany).toHaveBeenCalledTimes(1);
+    expect(docPageUpdate).toHaveBeenCalledTimes(0);
+
     expect(docPageUpsert).toHaveBeenCalled();
     const upsertArg = docPageUpsert.mock.calls[0][0];
     expect(upsertArg.create.knowledgeLayer).toBe('OFFICIAL');

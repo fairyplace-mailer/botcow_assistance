@@ -1,5 +1,7 @@
 'use client';
 
+import type { ChatStateRef } from '../../backend/contracts/chat';
+
 export type Role = 'user' | 'assistant';
 
 export interface Message {
@@ -7,8 +9,13 @@ export interface Message {
   content: string;
 }
 
+export interface StoredChatSession {
+  messages: Message[];
+  state: ChatStateRef;
+}
+
 const DB_NAME = 'botcow';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'chat';
 const KEY = 'recent';
 const MAX_MESSAGES = 20;
@@ -46,46 +53,81 @@ async function withStore<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore
   }
 }
 
-export async function loadRecentMessages(): Promise<Message[]> {
+function normalizeMessages(value: unknown): Message[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((m) => m && typeof m === 'object')
+    .map((m) => ({
+      role: (m as { role?: unknown }).role,
+      content: (m as { content?: unknown }).content,
+    }))
+    .filter((m): m is Message => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-MAX_MESSAGES);
+}
+
+function normalizeState(value: unknown): ChatStateRef {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const conversationId = typeof (value as { conversationId?: unknown }).conversationId === 'string'
+    ? (value as { conversationId: string }).conversationId
+    : undefined;
+  const previousResponseId = typeof (value as { previousResponseId?: unknown }).previousResponseId === 'string'
+    ? (value as { previousResponseId: string }).previousResponseId
+    : undefined;
+
+  return {
+    ...(conversationId ? { conversationId } : {}),
+    ...(previousResponseId ? { previousResponseId } : {}),
+  };
+}
+
+export async function loadRecentChatSession(): Promise<StoredChatSession> {
   try {
     return await withStore('readonly', (store) => {
-      return new Promise<Message[]>((resolve, reject) => {
+      return new Promise<StoredChatSession>((resolve, reject) => {
         const req = store.get(KEY);
         req.onsuccess = () => {
           const value = req.result;
-          if (!value || typeof value !== 'object') return resolve([]);
-          const arr = (value as any).messages;
-          if (!Array.isArray(arr)) return resolve([]);
-          resolve(
-            arr
-              .filter((m) => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
-              .slice(-MAX_MESSAGES),
-          );
+          if (!value || typeof value !== 'object') {
+            resolve({ messages: [], state: {} });
+            return;
+          }
+
+          resolve({
+            messages: normalizeMessages((value as { messages?: unknown }).messages),
+            state: normalizeState((value as { state?: unknown }).state),
+          });
         };
         req.onerror = () => reject(req.error);
       });
     });
   } catch {
-    return [];
+    return { messages: [], state: {} };
   }
 }
 
-export async function saveRecentMessages(messages: Message[]): Promise<void> {
-  const trimmed = (Array.isArray(messages) ? messages : []).slice(-MAX_MESSAGES);
+export async function saveRecentChatSession(session: StoredChatSession): Promise<void> {
+  const payload: StoredChatSession = {
+    messages: normalizeMessages(session.messages),
+    state: normalizeState(session.state),
+  };
+
   try {
     await withStore('readwrite', (store) => {
       return new Promise<void>((resolve, reject) => {
-        const req = store.put({ messages: trimmed, updatedAt: Date.now() }, KEY);
+        const req = store.put({ ...payload, updatedAt: Date.now() }, KEY);
         req.onsuccess = () => resolve();
         req.onerror = () => reject(req.error);
       });
     });
   } catch {
-    // ignore (best-effort)
+    // ignore
   }
 }
 
-export async function clearRecentMessages(): Promise<void> {
+export async function clearRecentChatSession(): Promise<void> {
   try {
     await withStore('readwrite', (store) => {
       return new Promise<void>((resolve, reject) => {
@@ -95,6 +137,6 @@ export async function clearRecentMessages(): Promise<void> {
       });
     });
   } catch {
-    // ignore (best-effort)
+    // ignore
   }
 }

@@ -138,7 +138,7 @@ describe('assistant routing propagation', () => {
     );
   });
 
-  test('runAssistant does not send reasoning when runtime support is disabled', async () => {
+  test('runAssistant logs reasoning suppression when runtime support is disabled', async () => {
     process.env.OPENAI_RESPONSES_REASONING = '0';
 
     const create = jest.fn().mockResolvedValue({
@@ -163,8 +163,16 @@ describe('assistant routing propagation', () => {
       state: {},
     });
 
-    const request = create.mock.calls[0][0];
-    expect(Object.prototype.hasOwnProperty.call(request, 'reasoning')).toBe(false);
+    expect(logEvent).toHaveBeenCalledWith(
+      'openai_request_completed',
+      expect.objectContaining({
+        requestedReasoningEffort: 'high',
+        sentReasoningEffort: null,
+        reasoningSuppressedReason: 'runtime_not_supported',
+        runtimeReasoningSupport: 'unsupported',
+      }),
+    );
+
     process.env.OPENAI_RESPONSES_REASONING = '1';
   });
 });

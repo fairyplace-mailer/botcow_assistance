@@ -31,9 +31,13 @@ jest.mock('../src/backend/github', () => {
 });
 
 // saveRun should not be used if commitFile succeeds.
-jest.mock('../src/backend/ciStore', () => ({
-  saveRun: jest.fn().mockResolvedValue(undefined),
-}));
+jest.mock('../src/backend/ciStore', () => {
+  const actual = jest.requireActual('../src/backend/ciStore');
+  return {
+    ...actual,
+    saveRun: jest.fn().mockResolvedValue(undefined),
+  };
+});
 
 describe('ciRunner', () => {
   beforeEach(() => {

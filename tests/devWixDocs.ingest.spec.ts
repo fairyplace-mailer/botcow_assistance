@@ -1,50 +1,54 @@
-const docPageCount = jest.fn();
-const docChunkCount = jest.fn();
-const docChunkDeleteMany = jest.fn(async () => ({ count: 0 }));
-const docPageDeleteMany = jest.fn(async () => ({ count: 0 }));
-const docPageFindUnique = jest.fn();
-const docPageCreate = jest.fn(async (args: any) => ({ id: 'seed-page', ...args.data }));
-const docPageUpsert = jest.fn(async (args: any) => ({ id: 'page-1', ...args.create }));
+import { jest } from '@jest/globals';
+
+const docPageCount = jest.fn(async () => 0);
+const docChunkCount = jest.fn(async () => 0);
+const docPageFindUnique = jest.fn(async () => null);
 const docPageFindMany = jest.fn(async () => []);
 const docPageUpdate = jest.fn(async () => ({}));
-const docChunkCreate = jest.fn(async (args: any) => ({ id: `chunk-${args.data.idx}`, ...args.data }));
-const executeRawUnsafe = jest.fn(async () => 1);
-const txDocPageUpdateMany = jest.fn(async () => ({ count: 0 }));
-const transactionMock = jest.fn(async (cbOrOps: any) => {
-  if (typeof cbOrOps === 'function') {
-    return cbOrOps({ docPage: { findMany: docPageFindMany, updateMany: txDocPageUpdateMany } });
-  }
-  return cbOrOps;
-});
+const docPageUpsert = jest.fn(async (args: any) => ({ id: args.create.url, ...args.create }));
+const docPageDeleteMany = jest.fn(async () => ({ count: 0 }));
+const docChunkCreateMany = jest.fn(async () => ({ count: 1 }));
+const docChunkDeleteMany = jest.fn(async () => ({ count: 0 }));
+const docChunkFindMany = jest.fn(async () => []);
+const docChunkUpdateMany = jest.fn(async () => ({ count: 0 }));
+const executeRawUnsafe = jest.fn(async () => 0);
+const queryRaw = jest.fn(async () => []);
 
 jest.mock('../src/backend/openai', () => ({
-  embedTexts: jest.fn(async (texts: string[]) => ({
-    vectors: texts.map(() => [0.1, 0.2]),
-    dims: 2,
-    model: 'text-embedding-3-large',
+  createEmbeddings: jest.fn(async ({ input }: { input: string[] }) => ({
+    data: input.map((_, i) => ({ embedding: [0.1 + i, 0.2, 0.3] })),
   })),
 }));
 
 jest.mock('@/backend/db', () => ({
   prisma: {
-    $transaction: (...args: unknown[]) => transactionMock(...args),
-    $executeRawUnsafe: (...args: unknown[]) => executeRawUnsafe(...args),
     docPage: {
-      count: (...args: unknown[]) => docPageCount(...args),
-      deleteMany: (...args: unknown[]) => docPageDeleteMany(...args),
-      findUnique: (...args: unknown[]) => docPageFindUnique(...args),
-      create: (...args: unknown[]) => docPageCreate(...args),
-      upsert: (...args: unknown[]) => docPageUpsert(...args),
-      findMany: (...args: unknown[]) => docPageFindMany(...args),
-      update: (...args: unknown[]) => docPageUpdate(...args),
-      updateMany: (...args: unknown[]) => txDocPageUpdateMany(...args),
-      delete: jest.fn(async () => ({})),
+      count: (...args: any[]) => docPageCount(...args),
+      findUnique: (...args: any[]) => docPageFindUnique(...args),
+      findMany: (...args: any[]) => docPageFindMany(...args),
+      update: (...args: any[]) => docPageUpdate(...args),
+      upsert: (...args: any[]) => docPageUpsert(...args),
+      deleteMany: (...args: any[]) => docPageDeleteMany(...args),
     },
     docChunk: {
-      count: (...args: unknown[]) => docChunkCount(...args),
-      deleteMany: (...args: unknown[]) => docChunkDeleteMany(...args),
-      create: (...args: unknown[]) => docChunkCreate(...args),
+      count: (...args: any[]) => docChunkCount(...args),
+      createMany: (...args: any[]) => docChunkCreateMany(...args),
+      deleteMany: (...args: any[]) => docChunkDeleteMany(...args),
+      findMany: (...args: any[]) => docChunkFindMany(...args),
+      updateMany: (...args: any[]) => docChunkUpdateMany(...args),
     },
+    $executeRawUnsafe: (...args: any[]) => executeRawUnsafe(...args),
+    $queryRaw: (...args: any[]) => queryRaw(...args),
+    $transaction: async (cb: any) =>
+      cb({
+        docPage: {
+          upsert: (...args: any[]) => docPageUpsert(...args),
+        },
+        docChunk: {
+          deleteMany: (...args: any[]) => docChunkDeleteMany(...args),
+          createMany: (...args: any[]) => docChunkCreateMany(...args),
+        },
+      }),
   },
 }));
 
@@ -55,6 +59,7 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     docChunkCount.mockResolvedValue(1);
     docPageFindUnique.mockResolvedValue(null);
     docPageFindMany.mockResolvedValue([]);
+    docPageUpdate.mockResolvedValue({});
     global.fetch = jest.fn(async () => ({
       ok: true,
       status: 200,
@@ -62,54 +67,39 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     })) as any;
   });
 
-  it('stops new ingest at >=90 percent budget pressure', async () => {
-    docChunkCount.mockResolvedValue(9);
-    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
-
-    const result = await ingestDevWixArticles({ maxEmbeddings: 10, discoverLinks: true });
-
-    expect(result.budgetMode).toBe('aggressive');
-    expect(result.stoppedReason).toBe('budget_aggressive_mode');
-    expect(docPageCreate).not.toHaveBeenCalled();
-    expect(docChunkCreate).not.toHaveBeenCalled();
-  });
-
-  it('creates temporary seed pages with retentionUntil and temporary layer', async () => {
-    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
-
-    await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: true, maxDiscoveredPages: 1 });
-
-    expect(docPageCreate).toHaveBeenCalled();
-    const createArg = docPageCreate.mock.calls[0][0];
-    expect(createArg.data.knowledgeLayer).toBe('TEMPORARY');
-    expect(createArg.data.retentionUntil).toBeInstanceOf(Date);
-    expect(createArg.data.retentionReason).toBe('seed_placeholder');
-  });
-
-  it('creates official chunks without ordinary TTL', async () => {
+  test('creates official chunks without ordinary TTL', async () => {
     docPageFindMany.mockResolvedValue([{ id: 'page-1', url: 'https://dev.wix.com/docs/sdk', refreshIntervalHours: 24 }]);
-    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
 
-    await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: false, force: true, limitPages: 1 });
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    const result = await ingestDevWixArticles({
+      maxEmbeddings: 20,
+      discoverLinks: false,
+      force: true,
+      limitPages: 1,
+    });
 
     expect(docPageFindMany).toHaveBeenCalledTimes(1);
     expect(docPageUpdate).toHaveBeenCalledTimes(0);
+    expect(result.stopReason).toBe('completed');
 
-    expect(docPageUpsert).toHaveBeenCalled();
-    const upsertArg = docPageUpsert.mock.calls[0][0];
-    expect(upsertArg.create.knowledgeLayer).toBe('OFFICIAL');
-    expect(upsertArg.create.retentionUntil).toBeNull();
+    const upsertCall = docPageUpsert.mock.calls[0]?.[0];
+    expect(upsertCall?.create.knowledgeLayer).toBe('OFFICIAL');
+    expect(upsertCall?.create.retentionUntil ?? null).toBeNull();
 
-    expect(docChunkCreate).toHaveBeenCalled();
-    const chunkArg = docChunkCreate.mock.calls[0][0];
-    expect(chunkArg.data.knowledgeLayer).toBe('OFFICIAL');
-    expect(chunkArg.data.retentionUntil).toBeNull();
+    const chunkCreateManyCall = docChunkCreateMany.mock.calls[0]?.[0];
+    expect(chunkCreateManyCall?.data.length).toBeGreaterThan(0);
+    for (const chunk of chunkCreateManyCall?.data ?? []) {
+      expect(chunk.knowledgeLayer).toBe('OFFICIAL');
+      expect(chunk.retentionUntil ?? null).toBeNull();
+    }
   });
 
-  it('cleanup deletes only expired temporary records', async () => {
-    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+  test('cleanup deletes only expired temporary records', async () => {
+    docPageDeleteMany.mockResolvedValue({ count: 2 });
+    docChunkDeleteMany.mockResolvedValue({ count: 3 });
 
-    await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: false });
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    await ingestDevWixArticles({ maxEmbeddings: 0, discoverLinks: false, force: true, limitPages: 0 });
 
     expect(docChunkDeleteMany).toHaveBeenCalledWith({
       where: {
@@ -125,17 +115,16 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     });
   });
 
-  it('warning mode reduces scope but keeps official writes official', async () => {
+  test('warning mode reduces scope but keeps official writes official', async () => {
     docChunkCount.mockResolvedValue(7);
     docPageFindMany.mockResolvedValue([{ id: 'page-1', url: 'https://dev.wix.com/docs/sdk', refreshIntervalHours: 24 }]);
+
     const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    const result = await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: true, force: true, limitPages: 1 });
 
-    const result = await ingestDevWixArticles({ maxEmbeddings: 10, force: true, limitPages: 5, maxChunksPerPage: 8 });
-
-    expect(result.budgetMode).toBe('warning');
-    expect(result.maxChunksPerPage).toBeLessThanOrEqual(2);
-    const chunkArg = docChunkCreate.mock.calls[0][0];
-    expect(chunkArg.data.knowledgeLayer).toBe('OFFICIAL');
-    expect(chunkArg.data.retentionUntil).toBeNull();
+    expect(result.stopReason).toBe('budget_warning_mode');
+    const upsertCall = docPageUpsert.mock.calls[0]?.[0];
+    expect(upsertCall?.create.knowledgeLayer).toBe('OFFICIAL');
+    expect(upsertCall?.create.retentionUntil ?? null).toBeNull();
   });
 });

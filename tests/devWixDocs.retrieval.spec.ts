@@ -23,6 +23,10 @@ jest.mock('../src/backend/db', () => ({
 describe('retrieveDevWixContext retention policy', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    queryRawUnsafe.mockResolvedValue([]);
+    transactionMock.mockImplementation(async (ops: unknown[]) => ops);
+    docChunkUpdateMany.mockResolvedValue({ count: 1 });
+    docPageUpdateMany.mockResolvedValue({ count: 1 });
   });
 
   it('filters by persisted knowledge layers and retention markers in SQL', async () => {

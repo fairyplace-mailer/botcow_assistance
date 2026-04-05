@@ -1,8 +1,5 @@
 // Deterministic unit test for ciRunner without timers/env/network.
 
-import { runWorkflowAndTrack, getTrackedWorkflowRun } from '../src/backend/ciRunner';
-import { __resetTrackedRunsForTests } from '../src/backend/ciStore';
-
 // Mock the github module functions that ciRunner imports.
 jest.mock('../src/backend/github', () => {
   return {
@@ -26,7 +23,6 @@ jest.mock('../src/backend/github', () => {
   };
 });
 
-// saveRun should not be used if commitFile succeeds.
 jest.mock('../src/backend/ciStore', () => {
   const actual = jest.requireActual('../src/backend/ciStore');
   return {
@@ -35,8 +31,12 @@ jest.mock('../src/backend/ciStore', () => {
   };
 });
 
+const { runWorkflowAndTrack, getTrackedWorkflowRun } = require('../src/backend/ciRunner');
+const { __resetTrackedRunsForTests } = require('../src/backend/ciStore');
+
 describe('ciRunner', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     __resetTrackedRunsForTests();
     jest.useRealTimers();
   });

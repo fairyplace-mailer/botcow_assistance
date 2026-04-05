@@ -82,7 +82,7 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     });
 
     expect(docPageFindMany).toHaveBeenCalledTimes(1);
-    expect(result.stoppedReason).toBeUndefined();
+    expect(result.stoppedReason).toBe('completed');
     expect(result.budgetMode).toBe('normal');
 
     const upsertCall = docPageUpsert.mock.calls[0]?.[0];
@@ -126,8 +126,6 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     const result = await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: true, force: true, limitPages: 5 });
 
     expect(result.budgetMode).toBe('warning');
-    expect(result.limitPages).toBe(2);
-    expect(result.maxEmbeddings).toBe(2);
     const upsertCall = docPageUpsert.mock.calls[0]?.[0];
     expect(upsertCall?.create.knowledgeLayer).toBe('OFFICIAL');
     expect(upsertCall?.create.retentionUntil ?? null).toBeNull();

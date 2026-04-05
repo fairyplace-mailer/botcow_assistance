@@ -7,56 +7,42 @@ import {
   repoRegistrationToolSchema,
 } from './repoRegistrationTools';
 
-const resolvedGithubToolsSchemas = (
+const resolvedGithubToolsSchemas =
   githubTools.githubToolsSchemas ??
-  [githubTools.githubSearchInRepoSchema].filter(Boolean)
-) as readonly unknown[];
+  [githubTools.githubSearchInRepoSchema].filter(Boolean);
 
-const resolvedGithubToolHandlers = (
+const resolvedGithubToolHandlers =
   githubTools.githubToolHandlers ??
-  (githubTools.githubSearchInRepoTool
-    ? { githubSearchInRepo: githubTools.githubSearchInRepoTool }
-    : {})
-) as Record<string, unknown>;
+  ({
+    github_search_in_repo: githubTools.githubSearchInRepoTool,
+  } as const);
 
-const resolvedDeploymentToolsSchemas = (
+const resolvedDeploymentToolsSchemas =
   deploymentTools.deploymentToolsSchemas ??
-  [deploymentTools.deploymentWaitForPreviewAndCommentPrSchema].filter(Boolean)
-) as readonly unknown[];
+  [deploymentTools.deploymentWaitForPreviewAndCommentPrSchema].filter(Boolean);
 
-const resolvedDeploymentToolHandlers = (
+const resolvedDeploymentToolHandlers =
   deploymentTools.deploymentToolHandlers ??
-  (deploymentTools.deploymentWaitForPreviewAndCommentPrTool
-    ? {
-        deployment_wait_for_preview_and_comment_pr:
-          deploymentTools.deploymentWaitForPreviewAndCommentPrTool,
-      }
-    : {})
-) as Record<string, unknown>;
+  ({
+    deployment_wait_for_preview_and_comment_pr:
+      deploymentTools.deploymentWaitForPreviewAndCommentPrTool,
+  } as const);
 
-const resolvedPreviewToolsSchemas = (
+const resolvedPreviewToolsSchemas =
   previewTools.previewToolsSchemas ??
   [
     previewTools.previewGetUrlSchema,
     previewTools.previewHttpRequestSchema,
     previewTools.previewSmokeCheckSchema,
-  ].filter(Boolean)
-) as readonly unknown[];
+  ].filter(Boolean);
 
-const resolvedPreviewToolHandlers = (
+const resolvedPreviewToolHandlers =
   previewTools.previewToolHandlers ??
-  {
-    ...(previewTools.previewGetUrlTool
-      ? { preview_get_url: previewTools.previewGetUrlTool }
-      : {}),
-    ...(previewTools.previewHttpRequestTool
-      ? { preview_http_request: previewTools.previewHttpRequestTool }
-      : {}),
-    ...(previewTools.previewSmokeCheckTool
-      ? { preview_smoke_check: previewTools.previewSmokeCheckTool }
-      : {}),
-  }
-) as Record<string, unknown>;
+  ({
+    preview_get_url: previewTools.previewGetUrlTool,
+    preview_http_request: previewTools.previewHttpRequestTool,
+    preview_smoke_check: previewTools.previewSmokeCheckTool,
+  } as const);
 
 export const toolsSchemas = [
   ...resolvedGithubToolsSchemas,

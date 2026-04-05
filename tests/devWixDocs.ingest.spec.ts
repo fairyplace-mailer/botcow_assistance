@@ -37,16 +37,7 @@ jest.mock('@/backend/db', () => ({
     },
     $queryRaw: (...args: any[]) => queryRaw(...args),
     $executeRawUnsafe: (...args: any[]) => executeRawUnsafe(...args),
-    $transaction: async (cb: any) => cb({
-      docPage: {
-        upsert: (...args: any[]) => docPageUpsert(...args),
-        createMany: jest.fn(async () => ({ count: 0 })),
-      },
-      docChunk: {
-        createMany: (...args: any[]) => docChunkCreateMany(...args),
-        deleteMany: (...args: any[]) => docChunkDeleteMany(...args),
-      },
-    }),
+    $transaction: async (ops: any) => Promise.all(ops),
   },
 }));
 
@@ -114,8 +105,8 @@ describe('ingestDevWixArticles retention and budget policy', () => {
   });
 
   test('warning mode reduces scope but keeps official writes official', async () => {
-    docPageCount.mockResolvedValue(80);
-    docChunkCount.mockResolvedValue(10);
+    docPageCount.mockResolvedValue(700);
+    docChunkCount.mockResolvedValue(0);
     docPageFindMany.mockResolvedValue([{ id: 'page-1', url: 'https://dev.wix.com/docs/sdk', refreshIntervalHours: 24 }]);
 
     const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');

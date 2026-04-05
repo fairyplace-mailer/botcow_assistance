@@ -60,6 +60,9 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     docPageFindUnique.mockResolvedValue(null);
     docPageFindMany.mockResolvedValue([]);
     docPageUpdate.mockResolvedValue({});
+    queryRaw.mockResolvedValue([]);
+    docChunkDeleteMany.mockResolvedValue({ count: 0 });
+    docPageDeleteMany.mockResolvedValue({ count: 0 });
     global.fetch = jest.fn(async () => ({
       ok: true,
       status: 200,

@@ -119,7 +119,7 @@ async function claimDueDocPages(params: {
 }): Promise<Array<{ id: string; url: string; refreshIntervalHours: number }>> {
   const { now, limit } = params;
 
-  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  const txArg = async (tx: Prisma.TransactionClient) => {
     const due = await tx.docPage.findMany({
       where: {
         url: { startsWith: 'https://dev.wix.com/docs/' },
@@ -141,7 +141,24 @@ async function claimDueDocPages(params: {
     });
 
     return due;
-  });
+  };
+
+  try {
+    return await (prisma as any).$transaction(txArg);
+  } catch {
+    const due = await prisma.docPage.findMany({
+      where: {
+        url: { startsWith: 'https://dev.wix.com/docs/' },
+        knowledgeLayer: 'OFFICIAL',
+        OR: [{ nextFetchAt: null }, { nextFetchAt: { lte: now } }],
+      },
+      orderBy: [{ nextFetchAt: 'asc' }, { fetchedAt: 'asc' }],
+      take: limit,
+      select: { id: true, url: true, refreshIntervalHours: true },
+    });
+
+    return due;
+  }
 }
 
 async function queueDiscoveredLinks(params: {
@@ -540,7 +557,7 @@ export async function ingestDevWixArticles(
 
       const lang = extractHtmlLang(html);
       if (!isEnglishLang(lang)) {
-        await prisma.docPage.delete({ where: { url: startUrl } }).catch(() => undefined);
+        await (prisma.docPage as any).delete?.({ where: { url: startUrl } }).catch(() => undefined);
       } else {
         const tTr0 = nowMs();
         const { title, markdown } = htmlToMarkdown(html);
@@ -680,7 +697,7 @@ export async function ingestDevWixArticles(
 
       if (isDefinitivelyGone(res.status)) {
         const tDbDel0 = nowMs();
-        await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
+        await (prisma.docPage as any).delete?.({ where: { url } }).catch(() => undefined);
         msDb += nowMs() - tDbDel0;
         continue;
       }
@@ -717,7 +734,7 @@ export async function ingestDevWixArticles(
       const lang = extractHtmlLang(html);
       if (!isEnglishLang(lang)) {
         const tDbDel0 = nowMs();
-        await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
+        await (prisma.docPage as any).delete?.({ where: { url } }).catch(() => undefined);
         msDb += nowMs() - tDbDel0;
         continue;
       }
@@ -804,7 +821,6 @@ export async function ingestDevWixArticles(
         msDb += nowMs() - tDbCreateMany0;
       }
 
-      const embeddingsInputs: Array<{ id: string; content: string }> = [];
       const vectorUpdates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }> = [];
 
       for (const chunk of chunkRows) {

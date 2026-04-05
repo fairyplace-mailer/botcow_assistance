@@ -20,7 +20,7 @@ jest.mock('../src/backend/openai', () => ({
   })),
 }));
 
-jest.mock('../src/backend/db', () => ({
+jest.mock('@/backend/db', () => ({
   prisma: {
     docPage: {
       count: (...args: any[]) => docPageCount(...args),

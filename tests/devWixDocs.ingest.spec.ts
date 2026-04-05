@@ -82,8 +82,8 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     });
 
     expect(docPageFindMany).toHaveBeenCalledTimes(1);
-    expect(docPageUpdate).toHaveBeenCalledTimes(0);
-    expect(result.stopReason).toBe('completed');
+    expect(result.stoppedReason).toBeUndefined();
+    expect(result.budgetMode).toBe('normal');
 
     const upsertCall = docPageUpsert.mock.calls[0]?.[0];
     expect(upsertCall?.create.knowledgeLayer).toBe('OFFICIAL');
@@ -123,9 +123,11 @@ describe('ingestDevWixArticles retention and budget policy', () => {
     docPageFindMany.mockResolvedValue([{ id: 'page-1', url: 'https://dev.wix.com/docs/sdk', refreshIntervalHours: 24 }]);
 
     const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
-    const result = await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: true, force: true, limitPages: 1 });
+    const result = await ingestDevWixArticles({ maxEmbeddings: 20, discoverLinks: true, force: true, limitPages: 5 });
 
-    expect(result.stopReason).toBe('budget_warning_mode');
+    expect(result.budgetMode).toBe('warning');
+    expect(result.limitPages).toBe(2);
+    expect(result.maxEmbeddings).toBe(2);
     const upsertCall = docPageUpsert.mock.calls[0]?.[0];
     expect(upsertCall?.create.knowledgeLayer).toBe('OFFICIAL');
     expect(upsertCall?.create.retentionUntil ?? null).toBeNull();

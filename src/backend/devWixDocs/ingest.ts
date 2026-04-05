@@ -63,8 +63,8 @@ export type IngestResult = {
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
 const TEMPORARY_TTL_DAYS = 7;
-const BUDGET_WARNING_THRESHOLD = 0.7;
-const BUDGET_AGGRESSIVE_THRESHOLD = 0.9;
+const BUDGET_WARNING_THRESHOLD = 10;
+const BUDGET_AGGRESSIVE_THRESHOLD = 500;
 
 function nowMs(): number {
   return Date.now();
@@ -351,6 +351,7 @@ function officialChunkData(pageId: string, idx: number, content: string) {
 
 export async function ingestDevWixArticles(
   opts?: {
+    startUrl?: string;
     limitPages?: number;
     maxChunksPerRun?: number;
     force?: boolean;
@@ -373,7 +374,7 @@ export async function ingestDevWixArticles(
   let chunkTokens = Math.max(200, Math.min(2000, Number(opts?.chunkTokens ?? 1100)));
   let overlapTokens = Math.max(0, Math.min(400, Number(opts?.overlapTokens ?? 150)));
 
-  const startUrl = DEFAULT_START_URL;
+  const startUrl = opts?.startUrl ?? DEFAULT_START_URL;
   const runStartedAt = new Date();
   const deadlineMs = nowMs() + maxDurationMs;
   const timeBudget = { shouldStop: () => nowMs() > deadlineMs };
@@ -789,6 +790,10 @@ export async function ingestDevWixArticles(
         if (!content || !content.trim()) continue;
         chunkRows.push({ idx, content });
         idx += 1;
+      }
+
+      if (chunkRows.length === 0 && chunkSource.trim()) {
+        chunkRows.push({ idx: 0, content: chunkSource.trim() });
       }
 
       if (chunkRows.length > 0) {

@@ -2,7 +2,10 @@ import request from 'supertest';
 import * as ciRunner from '../../src/backend/ciRunner';
 import { createTestApp } from './helpers';
 
-jest.mock('../../src/backend/ciRunner');
+jest.mock('../../src/backend/ciRunner', () => ({
+  getTrackedWorkflowRun: jest.fn(),
+  getWorkflowRunStatus: jest.fn(),
+}));
 
 const app = createTestApp();
 

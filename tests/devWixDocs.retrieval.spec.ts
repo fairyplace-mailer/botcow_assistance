@@ -2,6 +2,8 @@ jest.mock('../src/backend/openai', () => ({
   embedText: jest.fn(async () => ({ vector: [0.1, 0.2], dims: 2 })),
 }));
 
+import { embedText } from '../src/backend/openai';
+
 const transactionMock = jest.fn(async (ops: unknown[]) => ops);
 const docChunkUpdateMany = jest.fn(async () => ({ count: 1 }));
 const docPageUpdateMany = jest.fn(async () => ({ count: 1 }));
@@ -23,6 +25,7 @@ jest.mock('../src/backend/db', () => ({
 describe('retrieveDevWixContext retention policy', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (embedText as jest.Mock).mockResolvedValue({ vector: [0.1, 0.2], dims: 2 });
     queryRawUnsafe.mockResolvedValue([]);
     transactionMock.mockImplementation(async (ops: unknown[]) => ops);
     docChunkUpdateMany.mockResolvedValue({ count: 1 });

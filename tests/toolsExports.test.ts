@@ -21,6 +21,66 @@ jest.mock('../src/backend/tools/githubTools', () => ({
   githubSearchInRepoTool: jest.fn(),
 }));
 
+jest.mock('../src/backend/tools/deploymentTools', () => ({
+  getPreviewUrlSchema: {
+    type: 'function',
+    function: {
+      name: 'get_preview_url',
+      description: 'Get preview URL for a given git sha or branch',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          repo: { type: 'string' },
+          git_sha: { type: 'string' },
+          branch: { type: 'string' },
+          target: { type: 'string', enum: ['preview'] },
+          timeWindowMinutes: { type: 'integer' },
+        },
+      },
+    },
+  },
+  getPreviewUrlTool: jest.fn(),
+  previewHttpRequestSchema: {
+    type: 'function',
+    function: {
+      name: 'preview_http_request',
+      description: 'Perform a safe HTTP request to a preview deployment',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          baseUrl: { type: 'string' },
+          path: { type: 'string' },
+          method: { type: 'string', enum: ['GET', 'POST'] },
+          body: {},
+          timeoutMs: { type: 'integer' },
+          maxResponseChars: { type: 'integer' },
+        },
+        required: ['baseUrl', 'path'],
+      },
+    },
+  },
+  previewHttpRequestTool: jest.fn(),
+  previewSmokeCheckSchema: {
+    type: 'function',
+    function: {
+      name: 'preview_smoke_check',
+      description: 'Run smoke checks against latest preview deployment',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          repo: { type: 'string' },
+          git_sha: { type: 'string' },
+          branch: { type: 'string' },
+        },
+      },
+    },
+  },
+  previewSmokeCheckTool: jest.fn(),
+}));
+
 import { toolSchemas, toolHandlers, type ToolName } from '../src/backend/tools';
 
 function isNonEmptyString(v: unknown): v is string {

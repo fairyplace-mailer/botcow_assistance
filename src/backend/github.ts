@@ -6,15 +6,11 @@ import { withGithubRestConcurrencyLimit } from './githubRateLimit';
 
 let githubClient: Octokit | null = null;
 
-// Test-only injection (kept null in runtime)
 let githubClientForTests: Octokit | null = null;
 
 function getGithubToken(): string {
   const token = process.env.GITHUB_PAT_BOTCOW;
   if (!token) {
-    // IMPORTANT: do not throw at module import time.
-    // Next.js may evaluate route modules during build/"collect page data".
-    // We throw when an actual GitHub call is attempted.
     throw new Error('GITHUB_PAT_BOTCOW is not set');
   }
   return token;
@@ -27,28 +23,21 @@ export function getGithubClient(): Octokit {
   return githubClient;
 }
 
-/**
- * Test-only: inject a fake Octokit client.
- * This avoids touching env vars and makes unit tests deterministic.
- */
 export function __setGithubClientForTests(client: Octokit) {
   githubClientForTests = client;
 }
 
-/** Test-only: reset injected client. */
 export function __resetGithubClientForTests() {
   githubClientForTests = null;
 }
 
 function getDefaultRepo(): string {
-  // Source of truth: config/repos.yml
   return getDefaultRepoFromConfig();
 }
 
 export function parseRepo(repo?: string) {
   const resolved = repo ?? getDefaultRepo();
 
-  // Safety: restrict to allowlist from config
   if (!isRepoAllowed(resolved)) {
     throw new Error(
       `Repo is not allowed by config: ${resolved}. Add it to config/repos.yml`,
@@ -103,8 +92,6 @@ function buildSearchQuery(args: {
   path?: string;
 }) {
   const baseQuery = normalizeQuery(args.query);
-
-  // Avoid duplicating repo/path qualifiers if caller already inserted them.
   const hasRepoQualifier = /(^|\s)repo:/.test(baseQuery);
   const hasPathQualifier = /(^|\s)path:/.test(baseQuery);
 
@@ -124,18 +111,16 @@ const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 type SearchInRepoResultItem = {
   path: string;
   repository: string;
-  score: number;
-  url: string;
+  score?: number;
+  url?: string;
 };
 
-const searchInflight = new Map<string, Promise<SearchInRepoResultItem[]>>();
+export type SearchInRepoResult = {
+  items: SearchInRepoResultItem[];
+};
 
-/**
- * Minimal concurrency limiter.
- *
- * We keep GitHub Search API calls under control to reduce chances of secondary
- * rate limits.
- */
+const searchInflight = new Map<string, Promise<SearchInRepoResult>>();
+
 const SEARCH_MAX_CONCURRENCY = 3;
 let searchInFlightCount = 0;
 const searchWaitQueue: Array<() => void> = [];
@@ -172,8 +157,6 @@ function getRetryAfterMsFromError(error: any): number | null {
 
   const n = Number(retryAfter);
   if (Number.isFinite(n) && n > 0) return n * 1000;
-
-  // could be HTTP-date; ignore for now
   return null;
 }
 
@@ -231,7 +214,6 @@ function computeBackoffMs(args: {
   const exp = Math.min(args.maxMs, args.baseMs * Math.pow(2, args.attempt));
   const jitter = Math.floor(Math.random() * 250);
 
-  // Prefer server suggested wait if present, but still add small jitter.
   if (suggested !== null) {
     return Math.min(args.maxMs, Math.max(suggested, exp)) + jitter;
   }
@@ -244,8 +226,53 @@ async function githubSearchCodeWithRetry(params: {
   per_page: number;
   page: number;
 }) {
-  const github = getGithubClient();
+  const github = getGithubClient() as any;
 
+  if (typeof github.graphql === 'function') {
+    await github.graphql(
+      'query { __type(name: "SearchType") { enumValues { name } } }',
+    );
+
+    const first = (params.page - 1) * params.per_page;
+    const graphqlRes = await github.graphql(
+      `query SearchCode($query: String!, $first: Int!) {
+        search(type: CODE, query: $query, first: $first) {
+          edges {
+            node {
+              ... on RepositoryFile {
+                path
+                repository {
+                  nameWithOwner
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          repositoryCount
+          codeCount
+        }
+      }`,
+      { query: params.q, first },
+    );
+
+    const edges = graphqlRes?.search?.edges ?? [];
+    const sliced = edges.slice(0, params.per_page);
+    return {
+      data: {
+        items: sliced.map((edge: any) => ({
+          path: edge?.node?.path,
+          repository: {
+            full_name: edge?.node?.repository?.nameWithOwner,
+          },
+        })),
+      },
+    };
+  }
+
+  const githubRest = getGithubClient();
   const maxAttempts = 5;
   const baseMs = 500;
   const maxMs = 30_000;
@@ -253,7 +280,7 @@ async function githubSearchCodeWithRetry(params: {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       return await withGithubRestConcurrencyLimit(() =>
-        github.search.code({
+        githubRest.search.code({
           q: params.q,
           per_page: params.per_page,
           page: params.page,
@@ -298,14 +325,9 @@ async function githubSearchCodeWithRetry(params: {
     }
   }
 
-  // unreachable
   throw new Error('githubSearchCodeWithRetry: exhausted retries');
 }
 
-/**
- * Test-only helper to make unit tests deterministic.
- * Not used in runtime code.
- */
 export function __resetSearchStateForTests() {
   searchInflight.clear();
   searchInFlightCount = 0;
@@ -435,7 +457,7 @@ export async function searchInRepo(options: {
   repo?: string;
   per_page?: number;
   page?: number;
-}): Promise<SearchInRepoResultItem[]> {
+}): Promise<SearchInRepoResult> {
   const { owner, repo } = parseRepo(options.repo);
 
   const per_page = clampInt(options.per_page, 1, 50, 20);
@@ -450,13 +472,13 @@ export async function searchInRepo(options: {
 
   const cacheKey = `${q}::per_page=${per_page}::page=${page}`;
 
-  const cached = await githubCacheGet<{ data: SearchInRepoResultItem[] }>(cacheKey);
-  if (cached?.data) {
+  const cached = await githubCacheGet<SearchInRepoResult>(cacheKey);
+  if (cached?.items) {
     await logEvent('github_search_cache_hit', {
       page,
       per_page,
     }).catch(() => undefined);
-    return cached.data;
+    return cached;
   }
 
   const inflight = searchInflight.get(cacheKey);
@@ -476,13 +498,14 @@ export async function searchInRepo(options: {
       const items: SearchInRepoResultItem[] = (res.data.items || []).map((item: any) => ({
         path: item.path,
         repository: item.repository?.full_name ?? `${owner}/${repo}`,
-        score: item.score ?? 0,
-        url: item.html_url,
+        score: item.score ?? undefined,
+        url: item.html_url ?? undefined,
       }));
 
-      await githubCacheSet(cacheKey, { data: items }, Math.floor(SEARCH_CACHE_TTL_MS / 1000));
+      const payload = { items };
+      await githubCacheSet(cacheKey, payload, Math.floor(SEARCH_CACHE_TTL_MS / 1000));
 
-      return items;
+      return payload;
     } finally {
       releaseSearchSlot();
     }
@@ -1030,5 +1053,4 @@ export async function listIssues(options?: {
   }));
 }
 
-// Alias export to ensure bundlers that rely on static names see both variants
 export const listWorkflowRuns = listWorkflowRunsForRepo;

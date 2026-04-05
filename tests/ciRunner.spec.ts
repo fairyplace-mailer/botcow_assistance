@@ -1,27 +1,20 @@
 // Deterministic unit test for ciRunner without timers/env/network.
 
-// Mock the github module functions that ciRunner imports.
-jest.mock('../src/backend/github', () => {
-  return {
-    runWorkflow: jest.fn().mockResolvedValue({ dispatched: true }),
-    // return commit sha so runner can match by head_sha
-    getRecentCommits: jest.fn().mockResolvedValue([{ sha: 'deadbeef' }]),
-    listWorkflowRuns: jest.fn().mockResolvedValue({
-      total_count: 1,
-      runs: [
-        {
-          id: 123,
-          head_sha: 'deadbeef',
-          created_at: new Date().toISOString(),
-        },
-      ],
-    }),
-    getWorkflowStatus: jest.fn(),
-    // repo file store
-    getFile: jest.fn().mockRejectedValue({ status: 404 }),
-    commitFile: jest.fn().mockResolvedValue({}),
-  };
-});
+const mockRunWorkflow = jest.fn();
+const mockGetRecentCommits = jest.fn();
+const mockListWorkflowRuns = jest.fn();
+const mockGetWorkflowStatus = jest.fn();
+const mockGetFile = jest.fn();
+const mockCommitFile = jest.fn();
+
+jest.mock('../src/backend/github', () => ({
+  runWorkflow: mockRunWorkflow,
+  getRecentCommits: mockGetRecentCommits,
+  listWorkflowRuns: mockListWorkflowRuns,
+  getWorkflowStatus: mockGetWorkflowStatus,
+  getFile: mockGetFile,
+  commitFile: mockCommitFile,
+}));
 
 jest.mock('../src/backend/ciStore', () => {
   const actual = jest.requireActual('../src/backend/ciStore');
@@ -36,13 +29,30 @@ const { __resetTrackedRunsForTests } = require('../src/backend/ciStore');
 
 describe('ciRunner', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
     __resetTrackedRunsForTests();
+    jest.clearAllMocks();
     jest.useRealTimers();
+
+    mockRunWorkflow.mockResolvedValue({ dispatched: true });
+    mockGetRecentCommits.mockResolvedValue([{ sha: 'deadbeef' }]);
+    mockListWorkflowRuns.mockResolvedValue({
+      total_count: 1,
+      runs: [
+        {
+          id: 123,
+          head_sha: 'deadbeef',
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+    mockGetWorkflowStatus.mockResolvedValue(undefined);
+    mockGetFile.mockRejectedValue({ status: 404 });
+    mockCommitFile.mockResolvedValue({});
   });
 
   test('runWorkflowAndTrack returns tracked result (no timers)', async () => {
     const startedAt = new Date().toISOString();
+
     const result = await runWorkflowAndTrack({
       repo: 'fairyplace-mailer/botcow_assistance',
       workflow_id: 'tests.yml',
@@ -50,6 +60,9 @@ describe('ciRunner', () => {
       inputs: { hello: 'world' },
       startedAt,
     });
+
+    expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
 
     expect(result.tracked.runId).toBe(123);
     expect(result.tracked.workflowId).toBe('tests.yml');

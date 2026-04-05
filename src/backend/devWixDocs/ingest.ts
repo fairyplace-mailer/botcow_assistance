@@ -805,18 +805,25 @@ export async function ingestDevWixArticles(
         update: officialPageData({ url, title, markdown, contentHash, now: runStartedAt, refreshIntervalHours: t.refreshIntervalHours }),
       });
       msDb += nowMs() - tDbUpsert0;
+      console.info('[devwix-ingest-debug] after upsert', { url, page, pageId: (page as any)?.id });
 
       stored += 1;
 
+      console.info('[devwix-ingest-debug] before deleteMany', { url, page, pageId: (page as any)?.id });
       const tDbChunks0 = nowMs();
       await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
       msDb += nowMs() - tDbChunks0;
+      console.info('[devwix-ingest-debug] after deleteMany', { url, pageId: (page as any)?.id });
 
+      console.info('[devwix-ingest-debug] before chunkSource', { url, markdownLength: markdown.length });
       const tChunk0 = nowMs();
       const chunkSource = markdownToTextForChunking(markdown);
+      console.info('[devwix-ingest-debug] after chunkSource', { url, chunkSourceLength: chunkSource.length, chunkSourcePreview: chunkSource.slice(0, 200) });
       const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens, overlapTokens });
+      console.info('[devwix-ingest-debug] after tokenChunks', { url, tokenChunksLength: tokenChunks.length, tokenChunks });
       msChunk += nowMs() - tChunk0;
 
+      console.info('[devwix-ingest-debug] before chunkRows', { url });
       const chunkRows: Array<{ idx: number; content: string }> = [];
       let idx = 0;
       for (const c of tokenChunks) {
@@ -838,6 +845,7 @@ export async function ingestDevWixArticles(
         chunkRows.push({ idx, content });
         idx += 1;
       }
+      console.info('[devwix-ingest-debug] after chunkRows', { url, chunkRowsLength: chunkRows.length, chunkRows });
 
       console.info('[devwix-ingest-debug] chunking before fallback', {
         url,
@@ -930,6 +938,7 @@ export async function ingestDevWixArticles(
         errorName: e?.name ?? null,
         error: e?.message ?? String(e),
       });
+      console.info('DBG stack', e instanceof Error ? e.stack : e);
       const tDbUpd0 = nowMs();
       await prisma.docPage.update({ where: { url }, data: { nextFetchAt: addMinutes(runStartedAt, 60) } }).catch(() => undefined);
       msDb += nowMs() - tDbUpd0;

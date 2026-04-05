@@ -20,14 +20,17 @@ const resolvedGithubToolHandlers =
 const resolvedDeploymentToolsSchemas =
   deploymentTools.deploymentToolsSchemas ??
   [
-    deploymentTools.deploymentWaitForPreviewAndCommentPrSchema,
+    deploymentTools.getPreviewUrlSchema,
+    deploymentTools.previewHttpRequestSchema,
+    deploymentTools.previewSmokeCheckSchema,
   ].filter(Boolean);
 
 const resolvedDeploymentToolHandlers =
   deploymentTools.deploymentToolHandlers ??
   ({
-    deployment_wait_for_preview_and_comment_pr:
-      deploymentTools.deploymentWaitForPreviewAndCommentPrTool,
+    preview_get_url: deploymentTools.getPreviewUrlTool,
+    preview_http_request: deploymentTools.previewHttpRequestTool,
+    preview_smoke_check: deploymentTools.previewSmokeCheckTool,
   } as const);
 
 const resolvedPreviewToolsSchemas =

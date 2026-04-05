@@ -4,6 +4,9 @@ module.exports = {
   roots: ['<rootDir>/src', '<rootDir>/tests'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
   testMatch: ['**/*.test.ts', '**/*.spec.ts'],
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/$1',
+  },
   clearMocks: true,
   restoreMocks: true,
   resetMocks: true,

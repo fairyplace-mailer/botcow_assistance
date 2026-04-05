@@ -9,20 +9,16 @@ jest.mock('../src/backend/github', () => {
     runWorkflow: jest.fn().mockResolvedValue({ dispatched: true }),
     // return commit sha so runner can match by head_sha
     getRecentCommits: jest.fn().mockResolvedValue([{ sha: 'deadbeef' }]),
-    // first poll empty, second poll contains matching run
-    listWorkflowRuns: jest
-      .fn()
-      .mockResolvedValueOnce({ total_count: 0, runs: [] })
-      .mockResolvedValueOnce({
-        total_count: 1,
-        runs: [
-          {
-            id: 123,
-            head_sha: 'deadbeef',
-            created_at: new Date().toISOString(),
-          },
-        ],
-      }),
+    listWorkflowRuns: jest.fn().mockResolvedValue({
+      total_count: 1,
+      runs: [
+        {
+          id: 123,
+          head_sha: 'deadbeef',
+          created_at: new Date().toISOString(),
+        },
+      ],
+    }),
     getWorkflowStatus: jest.fn(),
     // repo file store
     getFile: jest.fn().mockRejectedValue({ status: 404 }),

@@ -28,7 +28,7 @@ const resolvedDeploymentToolsSchemas =
 const resolvedDeploymentToolHandlers =
   deploymentTools.deploymentToolHandlers ??
   ({
-    preview_get_url: deploymentTools.getPreviewUrlTool,
+    get_preview_url: deploymentTools.getPreviewUrlTool,
     preview_http_request: deploymentTools.previewHttpRequestTool,
     preview_smoke_check: deploymentTools.previewSmokeCheckTool,
   } as const);

@@ -40,7 +40,7 @@ describe('searchInRepo', () => {
             node: {
               path: 'src/index.ts',
               repository: {
-                nameWithOwner: 'owner/repo',
+                nameWithOwner: 'fairyplace-mailer/botcow_assistance',
               },
             },
           },
@@ -56,7 +56,7 @@ describe('searchInRepo', () => {
 
     const result = await searchInRepo({
       query: 'hello',
-      repo: 'owner/repo',
+      repo: 'fairyplace-mailer/botcow_assistance',
       path: 'src',
       per_page: 1,
       page: 1,
@@ -65,7 +65,7 @@ describe('searchInRepo', () => {
     expect(result.items).toEqual([
       {
         path: 'src/index.ts',
-        repository: 'owner/repo',
+        repository: 'fairyplace-mailer/botcow_assistance',
       },
     ]);
   });

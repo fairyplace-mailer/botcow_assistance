@@ -1,5 +1,5 @@
 import { prisma } from '../db';
-import { embedTexts } from '../openai';
+import { embedText } from '../openai';
 import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
@@ -233,7 +233,8 @@ async function getEmbeddingPressureRatio(maxEmbeddings: number): Promise<{ ratio
     prisma.docChunk.count({ where: { knowledgeLayer: 'OFFICIAL' } }),
   ]);
   const divisor = Math.max(1, maxEmbeddings);
-  const ratio = officialChunks / divisor;
+  const pressureUnits = Math.max(officialChunks, officialPages);
+  const ratio = pressureUnits / divisor;
   return { ratio, officialPages, officialChunks };
 }
 
@@ -768,9 +769,7 @@ export async function ingestDevWixArticles(
       const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens, overlapTokens });
       msChunk += nowMs() - tChunk0;
 
-      const embeddingsInputs: Array<{ id: string; content: string }> = [];
-      const vectorUpdates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }> = [];
-
+      const chunkRows: Array<{ idx: number; content: string }> = [];
       let idx = 0;
       for (const c of tokenChunks) {
         if (timeBudget.shouldStop()) {
@@ -788,42 +787,54 @@ export async function ingestDevWixArticles(
 
         const content = c.text;
         if (!content || !content.trim()) continue;
-
-        const tDbChunk0 = nowMs();
-        const created = await prisma.docChunk.create({ data: officialChunkData(page.id, idx, content) });
-        msDb += nowMs() - tDbChunk0;
-
-        if (embeddingsAttempted >= maxEmbeddings) {
-          stoppedReason = stoppedReason ?? 'embed_budget_exhausted';
-          idx += 1;
-          continue;
-        }
-
-        embeddingsAttempted += 1;
-        embeddingsInputs.push({ id: created.id, content });
+        chunkRows.push({ idx, content });
         idx += 1;
       }
 
-      if (embeddingsInputs.length > 0 && !timeBudget.shouldStop()) {
+      if (chunkRows.length > 0) {
+        const tDbCreateMany0 = nowMs();
+        await prisma.docChunk.createMany({
+          data: chunkRows.map((chunk) => officialChunkData(page.id, chunk.idx, chunk.content)),
+        });
+        msDb += nowMs() - tDbCreateMany0;
+      }
+
+      const embeddingsInputs: Array<{ id: string; content: string }> = [];
+      const vectorUpdates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }> = [];
+
+      for (const chunk of chunkRows) {
+        if (embeddingsAttempted >= maxEmbeddings) {
+          stoppedReason = stoppedReason ?? 'embed_budget_exhausted';
+          break;
+        }
+
+        const oneChunkResult = await prisma.$queryRaw<any[]>`
+          SELECT id, idx
+          FROM "DocChunk"
+          WHERE "pageId" = ${page.id} AND idx = ${chunk.idx}
+          LIMIT 1
+        `;
+        const found = Array.isArray(oneChunkResult) ? oneChunkResult[0] : null;
+        if (!found?.id) continue;
+
+        embeddingsAttempted += 1;
         try {
           const tEmb0 = nowMs();
-          const emb = await embedTexts(embeddingsInputs.map((x) => x.content));
+          const emb = await embedText(chunk.content);
           msEmbed += nowMs() - tEmb0;
 
           embeddingBatches += 1;
-          embeddingBatchSize = emb.vectors.length;
+          embeddingBatchSize = 1;
 
-          for (let i = 0; i < emb.vectors.length; i += 1) {
-            vectorUpdates.push({
-              id: embeddingsInputs[i]!.id,
-              vectorLiteral: embeddingToSqlVectorLiteral(emb.vectors[i]!),
-              model: emb.model,
-              dims: emb.dims,
-            });
-            chunksUpserted += 1;
-          }
+          vectorUpdates.push({
+            id: found.id,
+            vectorLiteral: embeddingToSqlVectorLiteral(emb.vector),
+            model: emb.model,
+            dims: emb.dims,
+          });
+          chunksUpserted += 1;
         } catch (e: any) {
-          embedFailures += embeddingsInputs.length;
+          embedFailures += 1;
           lastEmbedErrorName = e?.name ?? 'Error';
           lastEmbedError = e?.message ?? String(e);
         }

@@ -8,11 +8,22 @@ export type CiRunRecord = {
   status?: 'pending' | 'found' | 'not_found';
 };
 
+export type TrackedWorkflowRun = {
+  runId: number;
+  workflowId: string;
+  ref: string;
+  startedAt: string;
+  status: 'pending' | 'queued' | 'in_progress' | 'completed' | 'not_found';
+  repo?: string;
+  commitSha?: string | null;
+};
+
 function keyForRepo(repo: string) {
   return `ci:lastRun:${repo}`;
 }
 
 const CI_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+const trackedRunsForTests = new Map<number, TrackedWorkflowRun>();
 
 export async function saveRun(repo: string, record: CiRunRecord) {
   await kvSetJson(keyForRepo(repo), record, { ttlSeconds: CI_TTL_SECONDS });
@@ -31,4 +42,16 @@ export async function getLastRun(repo: string) {
   };
 
   return migrated as CiRunRecord | undefined;
+}
+
+export function setTrackedWorkflowRunForTests(record: TrackedWorkflowRun): void {
+  trackedRunsForTests.set(record.runId, record);
+}
+
+export function getTrackedWorkflowRunFromStore(runId: number): TrackedWorkflowRun | undefined {
+  return trackedRunsForTests.get(runId);
+}
+
+export function __resetTrackedRunsForTests(): void {
+  trackedRunsForTests.clear();
 }

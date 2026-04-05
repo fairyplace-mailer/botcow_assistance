@@ -614,11 +614,6 @@ export async function ingestDevWixArticles(
   } catch (e: any) {
     startFetchErrorName = e?.name ?? null;
     startFetchError = e?.message ?? String(e);
-    console.info('[devwix-ingest-debug] start fetch failed', {
-      startUrl,
-      errorName: startFetchErrorName,
-      error: startFetchError,
-    });
     return {
       ok: true,
       startUrl,
@@ -675,14 +670,6 @@ export async function ingestDevWixArticles(
       })
     : await claimDueDocPages({ now: runStartedAt, limit: limitPages });
 
-  console.info('[devwix-ingest-debug] targets', {
-    force: Boolean(opts?.force),
-    startUrl,
-    limitPages,
-    targetsCount: Array.isArray(targets) ? targets.length : null,
-    targets,
-  });
-
   const discoveredQueued = targets.length;
   let discoveredRemaining = maxDiscoveredPages;
 
@@ -712,7 +699,6 @@ export async function ingestDevWixArticles(
         const tDbDel0 = nowMs();
         await (prisma.docPage as any).delete?.({ where: { url } }).catch(() => undefined);
         msDb += nowMs() - tDbDel0;
-        console.info('[devwix-ingest-debug] target definitive gone', { url, status: res.status });
         continue;
       }
 
@@ -720,7 +706,6 @@ export async function ingestDevWixArticles(
         const tDbUpd0 = nowMs();
         await prisma.docPage.update({ where: { url }, data: { nextFetchAt: addMinutes(runStartedAt, 60) } }).catch(() => undefined);
         msDb += nowMs() - tDbUpd0;
-        console.info('[devwix-ingest-debug] target non-ok', { url, status: res.status });
         continue;
       }
 
@@ -752,7 +737,6 @@ export async function ingestDevWixArticles(
         const tDbDel0 = nowMs();
         await (prisma.docPage as any).delete?.({ where: { url } }).catch(() => undefined);
         msDb += nowMs() - tDbDel0;
-        console.info('[devwix-ingest-debug] target non-english', { url, lang, english });
         continue;
       }
 
@@ -766,18 +750,6 @@ export async function ingestDevWixArticles(
       const tDbExisting0 = nowMs();
       const existing = await prisma.docPage.findUnique({ where: { url } });
       msDb += nowMs() - tDbExisting0;
-
-      console.info('[devwix-ingest-debug] target transformed', {
-        url,
-        htmlLength: html.length,
-        lang,
-        english,
-        title,
-        markdownLength: markdown.length,
-        canonicalMarkdownLength: canonicalMarkdown.length,
-        contentHash,
-        existingContentHash: existing?.contentHash ?? null,
-      });
 
       if (existing?.contentHash === contentHash) {
         const tDbUpd0 = nowMs();
@@ -794,36 +766,30 @@ export async function ingestDevWixArticles(
         }).catch(() => undefined);
         msDb += nowMs() - tDbUpd0;
         skippedUnchanged += 1;
-        console.info('[devwix-ingest-debug] target skipped unchanged', { url, contentHash });
         continue;
       }
 
+      const pageData = officialPageData({ url, title, markdown, contentHash, now: runStartedAt, refreshIntervalHours: t.refreshIntervalHours });
       const tDbUpsert0 = nowMs();
-      const page = await prisma.docPage.upsert({
+      const upsertedPage = await prisma.docPage.upsert({
         where: { url },
-        create: officialPageData({ url, title, markdown, contentHash, now: runStartedAt, refreshIntervalHours: t.refreshIntervalHours }),
-        update: officialPageData({ url, title, markdown, contentHash, now: runStartedAt, refreshIntervalHours: t.refreshIntervalHours }),
+        create: pageData,
+        update: pageData,
       });
+      const page = upsertedPage ?? { id: url, ...pageData };
       msDb += nowMs() - tDbUpsert0;
-      console.info('[devwix-ingest-debug] after upsert', { url, page, pageId: (page as any)?.id });
 
       stored += 1;
 
-      console.info('[devwix-ingest-debug] before deleteMany', { url, page, pageId: (page as any)?.id });
       const tDbChunks0 = nowMs();
       await prisma.docChunk.deleteMany({ where: { pageId: page.id } });
       msDb += nowMs() - tDbChunks0;
-      console.info('[devwix-ingest-debug] after deleteMany', { url, pageId: (page as any)?.id });
 
-      console.info('[devwix-ingest-debug] before chunkSource', { url, markdownLength: markdown.length });
       const tChunk0 = nowMs();
       const chunkSource = markdownToTextForChunking(markdown);
-      console.info('[devwix-ingest-debug] after chunkSource', { url, chunkSourceLength: chunkSource.length, chunkSourcePreview: chunkSource.slice(0, 200) });
       const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens, overlapTokens });
-      console.info('[devwix-ingest-debug] after tokenChunks', { url, tokenChunksLength: tokenChunks.length, tokenChunks });
       msChunk += nowMs() - tChunk0;
 
-      console.info('[devwix-ingest-debug] before chunkRows', { url });
       const chunkRows: Array<{ idx: number; content: string }> = [];
       let idx = 0;
       for (const c of tokenChunks) {
@@ -845,43 +811,18 @@ export async function ingestDevWixArticles(
         chunkRows.push({ idx, content });
         idx += 1;
       }
-      console.info('[devwix-ingest-debug] after chunkRows', { url, chunkRowsLength: chunkRows.length, chunkRows });
-
-      console.info('[devwix-ingest-debug] chunking before fallback', {
-        url,
-        chunkSourceLength: chunkSource.length,
-        chunkSourcePreview: chunkSource.slice(0, 200),
-        tokenChunksLength: tokenChunks.length,
-        tokenChunks,
-        chunkRowsLength: chunkRows.length,
-        chunkRows,
-      });
 
       if (chunkRows.length === 0 && chunkSource.trim()) {
         chunkRows.push({ idx: 0, content: chunkSource.trim() });
       }
 
-      console.info('[devwix-ingest-debug] chunking after fallback', {
-        url,
-        chunkRowsLength: chunkRows.length,
-        chunkRows,
-      });
-
       if (chunkRows.length > 0) {
         const data = chunkRows.map((chunk) => officialChunkData(page.id, chunk.idx, chunk.content));
-        console.info('[devwix-ingest-debug] createMany payload', {
-          url,
-          pageId: page.id,
-          dataLength: data.length,
-          data,
-        });
         const tDbCreateMany0 = nowMs();
         await prisma.docChunk.createMany({
           data,
         });
         msDb += nowMs() - tDbCreateMany0;
-      } else {
-        console.info('[devwix-ingest-debug] createMany skipped because no chunkRows', { url });
       }
 
       const vectorUpdates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }> = [];
@@ -933,12 +874,6 @@ export async function ingestDevWixArticles(
 
       if (stoppedReason && stoppedReason !== 'embed_budget_exhausted' && stoppedReason !== 'budget_warning_mode') break;
     } catch (e: any) {
-      console.info('[devwix-ingest-debug] target catch', {
-        url,
-        errorName: e?.name ?? null,
-        error: e?.message ?? String(e),
-      });
-      console.info('DBG stack', e instanceof Error ? e.stack : e);
       const tDbUpd0 = nowMs();
       await prisma.docPage.update({ where: { url }, data: { nextFetchAt: addMinutes(runStartedAt, 60) } }).catch(() => undefined);
       msDb += nowMs() - tDbUpd0;

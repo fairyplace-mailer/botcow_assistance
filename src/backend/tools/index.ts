@@ -19,7 +19,9 @@ const resolvedGithubToolHandlers =
 
 const resolvedDeploymentToolsSchemas =
   deploymentTools.deploymentToolsSchemas ??
-  [deploymentTools.deploymentWaitForPreviewAndCommentPrSchema].filter(Boolean);
+  [
+    deploymentTools.deploymentWaitForPreviewAndCommentPrSchema,
+  ].filter(Boolean);
 
 const resolvedDeploymentToolHandlers =
   deploymentTools.deploymentToolHandlers ??

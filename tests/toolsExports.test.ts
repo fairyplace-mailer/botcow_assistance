@@ -1,3 +1,26 @@
+jest.mock('../src/backend/tools/githubTools', () => ({
+  githubSearchInRepoSchema: {
+    type: 'function',
+    function: {
+      name: 'github_search_in_repo',
+      description: 'Search code in a GitHub repository',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          query: { type: 'string' },
+          repo: { type: 'string' },
+          path: { type: 'string' },
+          per_page: { type: 'integer', minimum: 1, maximum: 100 },
+          page: { type: 'integer', minimum: 1 },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  githubSearchInRepoTool: jest.fn(),
+}));
+
 import { toolSchemas, toolHandlers, type ToolName } from '../src/backend/tools';
 
 function isNonEmptyString(v: unknown): v is string {

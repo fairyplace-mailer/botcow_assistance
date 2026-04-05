@@ -1,3 +1,11 @@
+jest.mock('@octokit/rest', () => ({
+  Octokit: jest.fn().mockImplementation(() => ({
+    search: {
+      code: jest.fn(),
+    },
+  })),
+}));
+
 // Force KV to always miss in tests
 jest.mock('../src/backend/kv', () => ({
   kvGetJson: jest.fn(async () => null),

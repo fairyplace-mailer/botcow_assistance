@@ -4,7 +4,7 @@ import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
 import { embeddingToSqlVectorLiteral } from './pgvector';
-import type { Prisma, KnowledgeLayer } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { canonicalizeDocsUrl, extractLinksFromHtml, isAllowedDocsUrl } from './sitemapSeed';
 
 export type IngestStopReason =
@@ -344,7 +344,7 @@ function officialPageData(params: {
     title,
     text: markdown,
     contentHash,
-    knowledgeLayer: 'OFFICIAL' as KnowledgeLayer,
+    knowledgeLayer: 'OFFICIAL' as Prisma.DocPageUncheckedCreateInput['knowledgeLayer'],
     retentionUntil: null,
     retentionReason: null,
     fetchedAt: now,
@@ -358,7 +358,7 @@ function officialChunkData(pageId: string, idx: number, content: string) {
     pageId,
     idx,
     content,
-    knowledgeLayer: 'OFFICIAL' as KnowledgeLayer,
+    knowledgeLayer: 'OFFICIAL' as Prisma.DocChunkUncheckedCreateInput['knowledgeLayer'],
     retentionUntil: null,
     lastAccessedAt: null,
     embeddingModel: null,

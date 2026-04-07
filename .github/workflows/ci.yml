@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - provecta
+  pull_request:
+    branches:
+      - provecta
   workflow_dispatch:
 
 jobs:

@@ -355,18 +355,188 @@ RAG is allowed for coding/reference help.
 Current known source in existing BotCow is `dev.wix.com` docs.
 Later sources MAY be added explicitly.
 
-### 13.2 No UI upload rule
+### 13.2 Official knowledge source registry
+
+Official knowledge sources SHALL be declared explicitly in backend configuration and repository-controlled manifests.
+
+Minimum required fields for an official knowledge source:
+- `sourceKey`
+- `sourceKind`
+- `seedManifestPath`
+- `scopeAllowlist`
+- `status`
+
+For BotCow core v1, the canonical official public-doc source is:
+
+- `sourceKey = wix_docs_public`
+- `sourceKind = public_http_docs`
+- `seedManifestPath = docs/rag/dev_wix.seed.txt`
+- `scopeAllowlist = https://dev.wix.com/docs/*`
+
+Only URLs matching the declared scope allowlist MAY be ingested into that source.
+
+### 13.3 No UI upload rule
 
 Frontend file upload is out of scope for BotCow core v1.
 If the owner wants to supply knowledge files, the expected path is repository-based documents, such as `.md` files under `docs/` or another canonical repo folder.
 
-### 13.3 Event-driven ingest only
+### 13.4 Seed manifest rule
+
+Official public-doc ingest SHALL begin from an owner-controlled seed manifest stored in the repository.
+
+Minimum rules:
+- the seed manifest SHALL be plain text;
+- it SHALL contain one canonical URL per line;
+- duplicate URLs SHALL be removed before queueing;
+- out-of-scope URLs SHALL be rejected;
+- external URLs outside the declared source scope SHALL NOT be queued;
+- the runtime SHALL canonicalize URLs before persistence.
+
+Blind discovery outside the seed manifest is forbidden unless the owner explicitly adds a separate approved discovery mechanism.
+
+### 13.5 Event-driven ingest only
 
 Ingest SHALL be event-driven only.
 Blind cron ingest is forbidden.
 Cron is allowed for cleanup and maintenance, not as the primary ingest trigger.
 
-### 13.4 Budget-aware embeddings policy
+### 13.6 Bootstrap mode for empty knowledge base
+
+The core SHALL support owner-triggered bootstrap for an empty or incomplete knowledge base.
+
+Bootstrap mode minimum rules:
+- bootstrap SHALL start only by explicit owner action or protected server-side route;
+- bootstrap SHALL read the repository seed manifest;
+- bootstrap SHALL create or reuse the declared official knowledge source;
+- bootstrap SHALL enqueue documents deterministically;
+- bootstrap SHALL run in bounded batches;
+- bootstrap SHALL be resumable after interruption;
+- bootstrap SHALL be idempotent when re-run;
+- bootstrap SHALL NOT require cron as its primary driver.
+
+Owner-triggered bootstrap is allowed under the event-driven ingest rule and SHALL NOT be treated as blind cron ingest.
+
+### 13.7 Knowledge persistence contract
+
+The replacement core SHALL persist official knowledge in structured storage.
+
+Minimum required entities:
+- `knowledge_sources`
+- `knowledge_jobs`
+- `knowledge_documents`
+- `knowledge_chunks`
+
+Minimum requirements for `knowledge_sources`:
+- unique source key;
+- source kind;
+- seed manifest path;
+- declared status.
+
+Minimum requirements for `knowledge_jobs`:
+- source id;
+- job kind;
+- job status;
+- deterministic counters;
+- resumable cursor or equivalent continuation state;
+- start/finish timestamps.
+
+Minimum requirements for `knowledge_documents`:
+- source id;
+- original URL;
+- canonical URL;
+- section or equivalent source partition;
+- title when available;
+- normalized markdown content;
+- content hash;
+- last HTTP status;
+- document status;
+- fetch and embed timestamps;
+- last error when failed.
+
+Minimum requirements for `knowledge_chunks`:
+- document id;
+- chunk index;
+- chunk text;
+- token count or equivalent size metric;
+- embedding vector;
+- text hash.
+
+The runtime SHALL enforce uniqueness at least for:
+- `(source_id, canonical_url)`
+- `(document_id, chunk_index)`
+
+### 13.8 Document lifecycle and statuses
+
+The document lifecycle SHALL be explicit and deterministic.
+
+Minimum document statuses:
+- `pending`
+- `fetched`
+- `extracted`
+- `embedded`
+- `ready`
+- `failed`
+- `deleted`
+
+Minimum job statuses:
+- `queued`
+- `running`
+- `paused`
+- `done`
+- `failed`
+
+The runtime SHALL NOT silently skip a failed document without recording status and error class.
+
+### 13.9 Fetch / extract / normalize contract
+
+For approved public-doc sources, the pipeline SHALL operate in this order:
+
+1. read URL from seed manifest or queued document record;
+2. canonicalize the URL;
+3. fetch the document;
+4. verify acceptable response class and content type;
+5. extract the main article content;
+6. extract title, headings, and code blocks when present;
+7. normalize extracted content into stable markdown;
+8. compute content hash from normalized markdown;
+9. compare against the persisted content hash;
+10. rebuild dependent data only when the normalized content changed.
+
+Minimum extraction rule:
+- code examples SHALL be preserved as code blocks when possible.
+
+The runtime SHALL NOT store raw HTML as the canonical retrieval payload for official knowledge.
+
+### 13.10 Chunking and embedding contract
+
+Normalized markdown SHALL be split into retrieval chunks.
+
+Minimum chunking rules:
+- target size SHOULD be approximately `500–1000` tokens;
+- fenced code blocks SHALL NOT be split in the middle unless absolutely unavoidable;
+- headings SHOULD remain attached to the nearest relevant text/code;
+- each chunk SHALL preserve traceability back to document URL and position.
+
+Minimum embedding rules:
+- embeddings SHALL be created only for current active chunks;
+- unchanged normalized content SHALL NOT trigger unnecessary re-embedding;
+- changed normalized content SHALL trigger chunk rebuild and embedding refresh;
+- stale superseded chunks SHALL NOT remain active for retrieval.
+
+### 13.11 Retrieval contract
+
+Retrieval SHALL live outside `route.ts` and SHALL be executed by dedicated backend modules.
+
+Minimum retrieval behavior:
+- semantic search over active chunks;
+- bounded top-K selection;
+- optional reranking when explicitly implemented;
+- prompt injection through the prompt/policy layer, not through inline route logic;
+- traceable citation metadata including source URL and title when available.
+
+If retrieval returns no relevant chunks, the system SHALL behave honestly and SHALL NOT pretend that supporting source evidence was found.
+
+### 13.12 Budget-aware embeddings policy
 
 The system SHALL stay budget-aware for embeddings and retrieval.
 Minimum rules:
@@ -374,7 +544,7 @@ Minimum rules:
 - at `>= 90%` relevant embedding/DB budget -> stop new ingest until the system returns below safe band;
 - chat correctness and safety SHALL remain protected.
 
-### 13.5 Retention policy
+### 13.13 Retention policy
 
 Retention SHALL be layer-specific.
 Minimum BotCow v1 rules:
@@ -383,7 +553,7 @@ Minimum BotCow v1 rules:
 - official knowledge embeddings MAY be cleaned only by LRU-style pressure rules;
 - cleanup cadence SHOULD be at least every `24h` for TTL-governed temporary data.
 
-### 13.6 RAG degradation order
+### 13.14 RAG degradation order
 
 Under pressure, the system SHALL degrade in this order:
 1. optional enrichments;
@@ -392,7 +562,7 @@ Under pressure, the system SHALL degrade in this order:
 4. new ingest / new embedding creation;
 5. temporary derivative retention.
 
-### 13.7 Protected behavior under pressure
+### 13.15 Protected behavior under pressure
 
 As long as the service still works, the following SHALL stay protected:
 - ownership/control checks for dangerous routes;
@@ -488,7 +658,18 @@ The core SHALL log at least:
 - tool rounds;
 - tool success/failure class;
 - duration;
-- usage when available.
+- usage when available;
+- RAG source key when retrieval or ingest is involved;
+- knowledge job id when ingest/bootstrap is involved;
+- document canonical URL when a document is fetched or processed;
+- document status transitions;
+- HTTP status class for document fetches;
+- normalized content hash when computed;
+- chunk count produced from a document;
+- embedding count produced for a document;
+- retrieval hit count;
+- retrieval source count;
+- fetch duration and embed duration when available.
 
 ### 17.2 Secret safety
 
@@ -504,9 +685,28 @@ At minimum:
 - assistant orchestration contract tests;
 - model routing tests;
 - runtime capability tests;
-- response normalization tests.
+- response normalization tests;
+- seed manifest parsing tests;
+- URL canonicalization tests;
+- document lifecycle/status transition tests;
+- retrieval contract tests.
 
-### 18.2 Golden core protection tests
+### 18.2 Knowledge bootstrap and ingest tests
+
+There SHALL be tests that detect regression of:
+- bootstrap from an empty knowledge database;
+- deterministic queue creation from seed manifest;
+- duplicate URL elimination;
+- out-of-scope URL rejection;
+- extraction preserving code blocks;
+- normalized markdown hash stability;
+- unchanged content not triggering unnecessary re-embedding;
+- changed content triggering chunk rebuild and embedding refresh;
+- resumable job continuation after partial interruption;
+- failed document status recording;
+- deleted/inaccessible document invalidation behavior.
+
+### 18.3 Golden core protection tests
 
 There SHALL be tests that detect regression of:
 - route/assistant contract;
@@ -557,6 +757,16 @@ BotCow core v1 is accepted only if all of the following are true:
 10. Temporary embeddings use TTL policy; official knowledge embeddings do not use ordinary TTL.
 11. Golden core can be installed without modification and surrounding code can be adapted to it.
 12. Contract tests pass.
+13. An owner-triggered bootstrap can populate an empty knowledge database from the repository seed manifest.
+14. Bootstrap creates deterministic source, job, document, and chunk records.
+15. Each ready knowledge document has normalized markdown, chunk records, and embeddings.
+16. Re-running bootstrap or batch ingest is idempotent and resumable.
+17. Unchanged normalized content does not trigger unnecessary re-embedding.
+18. Changed normalized content triggers chunk rebuild and embedding refresh.
+19. Retrieval is executed outside `route.ts` and is wired into assistant orchestration.
+20. Retrieval returns only active chunks from approved knowledge sources.
+21. If retrieval finds no support, the runtime behaves honestly and does not pretend source-backed certainty.
+22. Cleanup cron, if used, performs maintenance only and does not become the primary ingest driver.
 
 ## 21. Explicit Forbidden Behaviors
 
@@ -568,7 +778,15 @@ The following are explicitly forbidden:
 - using `nano` for risky coding/debug tasks;
 - using cron as the primary ingest driver;
 - silently weakening validation, guardrails, or routing policy to simplify migration;
-- claiming success when tools/runtime/provider actually failed.
+- claiming success when tools/runtime/provider actually failed;
+- ingesting out-of-scope URLs into an official knowledge source;
+- treating raw HTML as the canonical retrieval payload for official knowledge;
+- splitting code examples carelessly such that code meaning is materially degraded;
+- re-embedding unchanged normalized content without cause;
+- silently leaving superseded chunks active after content replacement;
+- wiring retrieval logic directly into `route.ts`;
+- pretending that RAG support exists when retrieval returned no supporting chunks;
+- using cleanup cron as a disguised primary ingest driver.
 
 ## 22. Implementation Note for the Integrating Bot
 
@@ -583,3 +801,24 @@ When this spec is given to BotCow together with owner-supplied golden core files
 7. report only factual incompatibilities or remaining gaps.
 
 The bot SHALL NOT negotiate the spec downward.
+
+### 22.1 Implementation note for knowledge bootstrap
+
+When the repository contains an approved seed manifest for an official knowledge source, the bot SHALL perform this exact mode of work:
+
+1. read this spec;
+2. read the declared seed manifest;
+3. validate and canonicalize seed URLs against the approved source scope;
+4. create or reuse the official knowledge source record;
+5. create or reuse a bootstrap job record;
+6. enqueue missing or stale documents deterministically;
+7. process documents in bounded batches;
+8. fetch and extract the main article content;
+9. normalize extracted content into stable markdown;
+10. compute content hashes from normalized markdown;
+11. create or refresh chunks and embeddings only when needed;
+12. persist document, chunk, and job statuses honestly;
+13. resume safely after interruption when more work remains;
+14. report only factual progress, failures, and remaining gaps.
+
+The bot SHALL NOT claim that the knowledge base exists or is current unless the persisted source/job/document states support that claim.

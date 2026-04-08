@@ -35,7 +35,7 @@ CREATE TABLE "DocChunk" (
     "content" TEXT NOT NULL,
 
     -- pgvector embedding
-    "embedding" vector(3072),
+    "embedding" vector(1536),
     "embeddingModel" TEXT,
     "dims" INTEGER,
 

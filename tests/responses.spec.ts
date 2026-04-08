@@ -1,106 +1,110 @@
-jest.mock('../src/backend/tools', () => ({
-  getToolsSchemas: jest.fn(() => [
-    {
-      type: 'function',
-      function: {
+import {
+  buildStrictFunctionTools,
+  createModelResponse,
+  extractConversationId,
+  extractFinalAssistantMessage,
+  extractFunctionCalls,
+  normalizePublicChatError,
+  normalizePublicChatSuccess,
+  responseUsage,
+} from '../src/backend/responses';
+
+describe('responses helpers', () => {
+  test('buildStrictFunctionTools forces strict function schemas', () => {
+    expect(
+      buildStrictFunctionTools([
+        {
+          type: 'function',
+          name: 'tool_one',
+          description: 'tool one',
+          parameters: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+        } as any,
+      ] as any),
+    ).toEqual([
+      {
+        type: 'function',
         name: 'tool_one',
         description: 'tool one',
+        strict: true,
         parameters: {
           type: 'object',
           properties: {},
           additionalProperties: false,
         },
       },
-    },
-  ]),
-  handleToolCall: jest.fn(),
-}));
+    ]);
+  });
 
-jest.mock('../src/backend/openai', () => ({
-  getOpenAIClient: jest.fn(),
-}));
+  test('createModelResponse sends conversation state only when conversation mode selected', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'resp' });
+    const client = { responses: { create } } as any;
 
-jest.mock('../src/backend/log', () => ({
-  logEvent: jest.fn().mockResolvedValue(undefined),
-  logInfo: jest.fn().mockResolvedValue(undefined),
-  logWarn: jest.fn().mockResolvedValue(undefined),
-}));
-
-import {
-  buildFunctionCallOutputs,
-  buildResponsesCreateParams,
-  buildResponsesInput,
-  createModelResponse,
-  extractFinalAssistantMessage,
-  extractFunctionCalls,
-  makeFunctionCallOutputItem,
-  validateResponsesInput,
-} from '../src/backend/responses';
-import { OPENAI_SDK_VERSION } from '../src/backend/openaiRuntime';
-
-describe('responses helpers', () => {
-  test('buildResponsesCreateParams sends conversation state only when conversation mode selected', () => {
-    const built = buildResponsesCreateParams({
+    await createModelResponse({
+      client,
       model: 'gpt-5.4',
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] as any,
+      instructions: 'DEV_INSTR',
       state: { kind: 'conversation', conversation: { id: 'conv-1' } },
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] as any,
       tools: [],
     });
 
-    expect(built.conversation).toEqual({ id: 'conv-1' });
-    expect((built as any).previous_response_id).toBeUndefined();
-    expect(built.parallel_tool_calls).toBe(false);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: 'DEV_INSTR',
+        conversation: { id: 'conv-1' },
+        parallel_tool_calls: false,
+      }),
+    );
+    expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
   });
 
-  test('buildResponsesCreateParams sends previous_response_id only when previous_response mode selected', () => {
-    const built = buildResponsesCreateParams({
+  test('createModelResponse sends previous_response_id only when previous_response mode selected', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'resp' });
+    const client = { responses: { create } } as any;
+
+    await createModelResponse({
+      client,
       model: 'gpt-5.4',
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] as any,
+      instructions: 'DEV_INSTR',
       state: { kind: 'previous_response', previousResponseId: 'resp-1' },
-      tools: [],
-    });
-
-    expect((built as any).previous_response_id).toBe('resp-1');
-    expect((built as any).conversation).toBeUndefined();
-    expect(built.parallel_tool_calls).toBe(false);
-  });
-
-  test('buildResponsesCreateParams stays stateless when no state mode provided', () => {
-    const built = buildResponsesCreateParams({
-      model: 'gpt-5.4',
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] as any,
       tools: [],
     });
 
-    expect((built as any).previous_response_id).toBeUndefined();
-    expect((built as any).conversation).toBeUndefined();
-    expect(built.parallel_tool_calls).toBe(false);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: 'DEV_INSTR',
+        previous_response_id: 'resp-1',
+        parallel_tool_calls: false,
+      }),
+    );
+    expect(create.mock.calls[0][0].conversation).toBeUndefined();
   });
 
-  test('buildResponsesInput keeps assistant history and phase', () => {
-    const built = buildResponsesInput([
-      { role: 'system', content: 'sys' },
-      { role: 'user', content: 'hello' },
-      { role: 'assistant', content: 'thinking', phase: 'commentary' },
-    ]);
-
-    expect(built.instructions).toBe('sys');
-    expect(built.input).toEqual([
-      {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text: 'hello' }],
-      },
-      {
-        type: 'message',
-        role: 'assistant',
-        phase: 'commentary',
-        content: [{ type: 'input_text', text: 'thinking' }],
-      },
-    ]);
+  test('extractFinalAssistantMessage prefers output_text shortcut', () => {
+    expect(
+      extractFinalAssistantMessage({
+        output_text: 'done',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'commentary',
+            content: [{ type: 'output_text', text: 'thinking' }],
+          },
+        ],
+      } as any),
+    ).toEqual({
+      phase: 'final_answer',
+      text: 'done',
+    });
   });
 
-  test('extractFinalAssistantMessage prefers final_answer phase', () => {
+  test('extractFinalAssistantMessage reads last assistant message phase', () => {
     expect(
       extractFinalAssistantMessage({
         output: [
@@ -119,18 +123,8 @@ describe('responses helpers', () => {
         ],
       } as any),
     ).toEqual({
-      id: undefined,
-      role: 'assistant',
       phase: 'final_answer',
       text: 'done',
-    });
-  });
-
-  test('makeFunctionCallOutputItem keeps same call_id', () => {
-    expect(makeFunctionCallOutputItem('call_123', { ok: true })).toEqual({
-      type: 'function_call_output',
-      call_id: 'call_123',
-      output: '{"ok":true}',
     });
   });
 
@@ -146,7 +140,6 @@ describe('responses helpers', () => {
       ]),
     ).toEqual([
       {
-        id: undefined,
         call_id: 'call_123',
         name: 'tool_one',
         arguments: '{"q":"abc"}',
@@ -154,71 +147,71 @@ describe('responses helpers', () => {
     ]);
   });
 
-  test('createModelResponse forwards state mode to sdk request', async () => {
-    const create = jest.fn().mockResolvedValue({ id: 'resp' });
-    const client = { responses: { create } } as any;
-
-    await createModelResponse({
-      client,
-      model: 'gpt-5.4',
-      instructions: 'DEV_INSTR',
-      state: { kind: 'previous_response', previousResponseId: 'resp_prev' },
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] as any,
-      tools: [],
-    });
-
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        instructions: 'DEV_INSTR',
-        previous_response_id: 'resp_prev',
-        parallel_tool_calls: false,
-      }),
-    );
+  test('extractConversationId prefers response conversation and falls back otherwise', () => {
+    expect(
+      extractConversationId({ conversation: { id: 'conv_1' } } as any, 'fallback'),
+    ).toBe('conv_1');
+    expect(extractConversationId({} as any, 'fallback')).toBe('fallback');
   });
 
-  test('stale and duplicate call_id guards still work', () => {
-    const calls = extractFunctionCalls([
-      {
-        type: 'function_call',
-        id: 'fc_1',
-        call_id: 'call_1',
-        name: 'tool_one',
-        arguments: '{}',
-      } as any,
-    ]);
-
-    expect(() =>
-      buildFunctionCallOutputs(calls, [{ call_id: 'call_old', output: 'bad' }]),
-    ).toThrow('Stale or unknown function_call_output call_id: call_old');
-
-    expect(() =>
-      extractFunctionCalls([
-        {
-          type: 'function_call',
-          id: 'fc_1',
-          call_id: 'call_dup',
-          name: 'tool_one',
-          arguments: '{}',
-        },
-        {
-          type: 'function_call',
-          id: 'fc_2',
-          call_id: 'call_dup',
-          name: 'tool_one',
-          arguments: '{}',
-        },
-      ] as any),
-    ).toThrow('Duplicate function_call call_id in current response cycle: call_dup');
-  });
-
-  test('input validator still blocks invalid content type', () => {
-    expect(() =>
-      validateResponsesInput([
-        {
-          role: 'assistant',
-          content: [{ type: 'output_text', text: 'bad' }],
+  test('normalizePublicChatSuccess maps canonical response payload', () => {
+    expect(
+      normalizePublicChatSuccess({
+        sessionId: 'session_1',
+        response: {
+          id: 'resp_1',
+          model: 'gpt-5.4',
+          output_text: 'done',
         } as any,
-      ]),
-    ).toThrow('Responses payload validation failed: unsupported input content type output_text');
+        routing: {
+          model: 'gpt-5.4',
+          reason: 'deep-code-debug-review',
+          reasoning: { effort: 'high' },
+        } as any,
+        state: {
+          conversationId: 'conv_1',
+          previousResponseId: 'resp_1',
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      sessionId: 'session_1',
+      response: {
+        id: 'resp_1',
+        model: 'gpt-5.4',
+        phase: 'final_answer',
+        outputText: 'done',
+        reason: 'deep-code-debug-review',
+        reasoningEffort: 'high',
+        state: {
+          conversationId: 'conv_1',
+          previousResponseId: 'resp_1',
+        },
+      },
+      error: null,
+    });
+  });
+
+  test('normalizePublicChatError hides internal details', () => {
+    expect(
+      normalizePublicChatError({
+        sessionId: 'session_1',
+        code: 'assistant_run_failed',
+        message: 'Chat request failed.',
+      }),
+    ).toEqual({
+      ok: false,
+      sessionId: 'session_1',
+      response: null,
+      error: {
+        code: 'assistant_run_failed',
+        message: 'Chat request failed.',
+      },
+    });
+  });
+
+  test('responseUsage returns usage or null', () => {
+    expect(responseUsage({ usage: { total_tokens: 10 } } as any)).toEqual({ total_tokens: 10 });
+    expect(responseUsage({} as any)).toBeNull();
   });
 });

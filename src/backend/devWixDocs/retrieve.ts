@@ -9,6 +9,8 @@ export type RetrievedDocChunk = {
 };
 
 type RetrievedRow = {
+  id: string;
+  pageId: string;
   url: string;
   title: string | null;
   content: string;
@@ -16,15 +18,9 @@ type RetrievedRow = {
 };
 
 function vectorLiteral(vec: number[]): string {
-  // pgvector accepts: '[1,2,3]'::vector
   return `[${vec.join(',')}]`;
 }
 
-/**
- * Retrieve most relevant chunks from stored dev.wix.com/docs pages.
- *
- * Uses pgvector for similarity search.
- */
 export async function retrieveDevWixContext(opts: {
   query: string;
   topK?: number;
@@ -36,21 +32,32 @@ export async function retrieveDevWixContext(opts: {
   const emb = await embedText(opts.query);
   if (!emb.vector.length) return { chunks: [], queryEmbeddingDims: emb.dims };
 
-  // NOTE: We use $queryRawUnsafe because Prisma can't parameterize a pgvector literal
-  // in a typed-safe way without custom extensions. Input comes from OpenAI vector,
-  // not user-controlled string.
+  const nowIso = new Date().toISOString();
   const rows = (await prisma.$queryRawUnsafe(
-    `SELECT p.url, p.title, c.content, (c.embedding <-> '${vectorLiteral(emb.vector)}'::vector) AS distance
+    `SELECT c.id, c."pageId", p.url, p.title, c.content, (c.embedding <-> '${vectorLiteral(emb.vector)}'::vector) AS distance
      FROM "DocChunk" c
      JOIN "DocPage" p ON p.id = c."pageId"
      WHERE c.embedding IS NOT NULL
-     ORDER BY c.embedding <-> '${vectorLiteral(emb.vector)}'::vector
+       AND (
+         (c."knowledgeLayer" = 'OFFICIAL' AND p."knowledgeLayer" = 'OFFICIAL')
+         OR (
+           c."knowledgeLayer" = 'TEMPORARY'
+           AND p."knowledgeLayer" = 'TEMPORARY'
+           AND c."retentionUntil" IS NOT NULL
+           AND p."retentionUntil" IS NOT NULL
+           AND c."retentionUntil" > '${nowIso}'::timestamp
+           AND p."retentionUntil" > '${nowIso}'::timestamp
+         )
+       )
+     ORDER BY
+       CASE WHEN p."knowledgeLayer" = 'OFFICIAL' THEN 0 ELSE 1 END ASC,
+       c.embedding <-> '${vectorLiteral(emb.vector)}'::vector
      LIMIT ${Math.max(1, Math.min(20, topK * 3))};`,
   )) as RetrievedRow[];
 
-  // Convert distance to a descending score-like value.
-  // L2 distance: smaller is better. We map to score in (0, 1].
   const scored = rows.map((r) => ({
+    id: r.id,
+    pageId: r.pageId,
     url: r.url,
     title: r.title,
     content: r.content,
@@ -58,14 +65,26 @@ export async function retrieveDevWixContext(opts: {
   }));
 
   const out: RetrievedDocChunk[] = [];
+  const usedChunkIds: string[] = [];
+  const usedPageIds = new Set<string>();
   let used = 0;
   for (const s of scored) {
     const snippet = s.content.trim();
     if (!snippet) continue;
     if (used + snippet.length > maxChars) break;
-    out.push(s);
+    out.push({ url: s.url, title: s.title, content: s.content, score: s.score });
+    usedChunkIds.push(s.id);
+    usedPageIds.add(s.pageId);
     used += snippet.length;
     if (out.length >= topK) break;
+  }
+
+  if (usedChunkIds.length > 0) {
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.docChunk.updateMany({ where: { id: { in: usedChunkIds } }, data: { lastAccessedAt: now } }),
+      prisma.docPage.updateMany({ where: { id: { in: Array.from(usedPageIds) } }, data: { lastAccessedAt: now } }),
+    ]);
   }
 
   return { chunks: out, queryEmbeddingDims: emb.dims };

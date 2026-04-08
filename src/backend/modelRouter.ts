@@ -1,3 +1,5 @@
+import type { ChatRoutingHints } from './contracts/chat';
+
 export type ModelId = 'gpt-5.4' | 'gpt-5.4-mini' | 'gpt-5.4-nano';
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -15,16 +17,8 @@ export interface ModelRoutingDecision {
 
 type ModelConfig = Pick<ModelRoutingDecision, 'model' | 'reasoning'>;
 
-/**
- * OpenAI embeddings model used for RAG/search/analytics.
- *
- * Important:
- * - Keep separate from chat ModelId to avoid breaking chat routing.
- * - Embeddings model may change independently from chat models.
- */
 export const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small' as const;
 
-// единственный источник истины для debug-mode
 const isDebugMode = process.env.NODE_ENV !== 'production';
 
 const MODEL_MINI_NONE: ModelConfig = {
@@ -32,13 +26,49 @@ const MODEL_MINI_NONE: ModelConfig = {
   reasoning: { effort: 'none' },
 };
 
+const GOLDEN_CORE_FILES = new Set([
+  'src/app/api/chat/route.ts',
+  'src/backend/assistant.ts',
+  'src/backend/modelRouter.ts',
+  'src/backend/openai.ts',
+  'src/backend/openaiRuntime.ts',
+  'src/backend/responses.ts',
+]);
+
 export function chooseModel(
   messages: Array<{ role: string; content: unknown }>,
+  hints: ChatRoutingHints = {},
 ): ModelRoutingDecision {
   const lastUser = findLastUserMessage(messages);
   const lastUserText = normalizeContentToText(lastUser?.content);
 
   const messageCount = Array.isArray(messages) ? messages.length : 0;
+  const touchedFiles = hints.touchedFiles ?? [];
+
+  if (touchedFiles.some((file) => GOLDEN_CORE_FILES.has(file))) {
+    return withOptionalDebug(
+      {
+        model: 'gpt-5.4',
+        reasoning: { effort: hints.previousAttemptFailed ? 'xhigh' : 'high' },
+        reason: 'golden-core-self-rewrite',
+      },
+      {
+        textLength: lastUserText?.length ?? 0,
+        messageCount,
+        flags: { goldenCoreTouched: true },
+        scores: {
+          nanoScore: 0,
+          miniScore: 0,
+          fullScore: 10,
+          noneScore: 0,
+          lowScore: 0,
+          mediumScore: 0,
+          highScore: 8,
+          xhighScore: hints.previousAttemptFailed ? 9 : 0,
+        },
+      },
+    );
+  }
 
   if (!lastUserText) {
     return withOptionalDebug(
@@ -80,25 +110,29 @@ export function chooseModel(
     errorMarkerCount: counts.errorMarkerCount,
     keywordFlags: flags,
     isLikelyClassificationTask: isLikelyClassificationTask(flags, normalized.concatenatedText),
-    isLikelyArchitectureTask: isLikelyArchitectureTask(flags),
+    isLikelyArchitectureTask: isLikelyArchitectureTask(flags, hints),
     isLikelyDebugTask: isLikelyDebugTask(flags, counts),
     isLikelyCodegenTask: isLikelyCodegenTask(flags),
   };
 
-  const scores = scoreRouting(signals);
+  const scores = scoreRouting(signals, hints);
 
   let chosenModel: ModelId = pickModelByScore(scores);
   let chosenEffort: ReasoningEffort = pickEffortByScore(scores);
   let reason = 'score-based-routing';
 
-  // 1) classification/extraction/ranking -> nano
   if (signals.isLikelyClassificationTask) {
     chosenModel = 'gpt-5.4-nano';
     chosenEffort = scores.lowScore > scores.noneScore ? 'low' : 'none';
     reason = 'classification-or-extraction-or-ranking';
   }
 
-  // 2) deep debug/review -> full
+  if (hints.hasSourceConflict) {
+    chosenModel = 'gpt-5.4';
+    chosenEffort = 'high';
+    reason = 'source-conflict';
+  }
+
   if (signals.isLikelyDebugTask) {
     chosenModel = 'gpt-5.4';
     chosenEffort =
@@ -110,25 +144,18 @@ export function chooseModel(
     reason = 'deep-code-debug-review';
   }
 
-  // 3) architecture/design -> full high
   if (signals.isLikelyArchitectureTask && !signals.isLikelyDebugTask) {
     chosenModel = 'gpt-5.4';
     chosenEffort = 'high';
     reason = 'architecture-or-design';
   }
 
-  // 4) PM/status/CI/CD/deploy should win over "short-general-request"
   if (
-    (flags.hasPmWords ||
-      flags.hasRepoOpsWords ||
-      flags.hasVercelWords ||
-      flags.hasCICDWords) &&
+    (flags.hasPmWords || flags.hasRepoOpsWords || flags.hasVercelWords || flags.hasCICDWords) &&
     !signals.isLikelyDebugTask
   ) {
     chosenModel = 'gpt-5.4-mini';
 
-    // If we have CI/CD/Vercel/deploy logs, do not downgrade to low.
-    // Tests expect medium+ for such payloads.
     const isDeployOrLogs =
       flags.hasVercelWords ||
       flags.hasCICDWords ||
@@ -149,7 +176,6 @@ export function chooseModel(
     reason = 'pm-or-status-or-ci-cd-or-deploy';
   }
 
-  // 5) codegen/refactor
   if (
     signals.isLikelyCodegenTask &&
     !signals.isLikelyDebugTask &&
@@ -157,11 +183,11 @@ export function chooseModel(
     !signals.isLikelyClassificationTask
   ) {
     const longOrComplex =
-      // Keep threshold low enough for tests: a single long code block should go to full.
       estimatedTotalTextLength > 2500 ||
       messageCount > 25 ||
       counts.codeBlockCount >= 3 ||
-      flags.hasMultiFileIntent;
+      flags.hasMultiFileIntent ||
+      !!hints.toolHeavy;
 
     if (longOrComplex) {
       chosenModel = 'gpt-5.4';
@@ -174,7 +200,6 @@ export function chooseModel(
     }
   }
 
-  // 6) short general request
   if (
     !signals.isLikelyDebugTask &&
     !signals.isLikelyArchitectureTask &&
@@ -189,7 +214,6 @@ export function chooseModel(
     reason = 'short-general-request';
   }
 
-  // 7) long general context
   if (
     !signals.isLikelyDebugTask &&
     !signals.isLikelyArchitectureTask &&
@@ -206,14 +230,9 @@ export function chooseModel(
     reason = chosenModel === 'gpt-5.4' ? 'fallback-high-risk' : 'fallback-not-risky';
   }
 
-  // Hard overrides
   if (
     chosenModel === 'gpt-5.4-nano' &&
-    (flags.hasStackTrace ||
-      flags.hasDiff ||
-      flags.hasReviewWords ||
-      flags.hasArchWords ||
-      flags.hasBugWords)
+    (flags.hasStackTrace || flags.hasDiff || flags.hasReviewWords || flags.hasArchWords || flags.hasBugWords)
   ) {
     chosenModel = 'gpt-5.4-mini';
     chosenEffort = chosenEffort === 'none' ? 'low' : chosenEffort;
@@ -232,7 +251,6 @@ export function chooseModel(
     reason,
   };
 
-  // exactOptionalPropertyTypes: if scores is undefined, omit the property completely
   const debugBase = {
     textLength: lastUserTextLength,
     messageCount,
@@ -270,10 +288,7 @@ function withOptionalDebug(
   return { ...decision, debug };
 }
 
-function clampEffortForModel(
-  model: ModelId,
-  effort: ReasoningEffort,
-): ReasoningEffort {
+function clampEffortForModel(model: ModelId, effort: ReasoningEffort): ReasoningEffort {
   if (model === 'gpt-5.4-nano') {
     return effort === 'none' || effort === 'low' ? effort : 'low';
   }
@@ -287,8 +302,7 @@ function clampEffortForModel(
 }
 
 function pickModelByScore(scores: RoutingScores): ModelId {
-  if (scores.fullScore >= scores.miniScore && scores.fullScore >= scores.nanoScore)
-    return 'gpt-5.4';
+  if (scores.fullScore >= scores.miniScore && scores.fullScore >= scores.nanoScore) return 'gpt-5.4';
   if (scores.nanoScore > scores.miniScore) return 'gpt-5.4-nano';
   return 'gpt-5.4-mini';
 }
@@ -332,7 +346,7 @@ type RoutingScores = {
   xhighScore: number;
 };
 
-function scoreRouting(s: Signals): RoutingScores {
+function scoreRouting(s: Signals, hints: ChatRoutingHints): RoutingScores {
   const { keywordFlags: f } = s;
 
   const nanoScore =
@@ -349,9 +363,12 @@ function scoreRouting(s: Signals): RoutingScores {
   const fullScore =
     8 * bool(s.isLikelyDebugTask) +
     7 * bool(s.isLikelyArchitectureTask) +
+    4 * bool(!!hints.previousAttemptFailed) +
+    4 * bool(!!hints.hasSourceConflict) +
     3 * bool(f.hasSecurityWords) +
     3 * bool(f.hasLargeErrorPayload) +
     3 * bool(f.hasMultiFileIntent) +
+    2 * bool(!!hints.toolHeavy) +
     (s.estimatedTotalTextLength > 8000 ? 3 : 0) +
     (s.messageCount > 25 ? 2 : 0) +
     (s.diffMarkersCount >= 2 ? 2 : 0) +
@@ -362,6 +379,7 @@ function scoreRouting(s: Signals): RoutingScores {
     3 +
     4 * bool(s.isLikelyCodegenTask) +
     3 * bool(f.hasPmWords || f.hasRepoOpsWords || f.hasVercelWords || f.hasCICDWords) +
+    2 * bool((hints.ragSourceCount ?? 0) >= 2) +
     1 * bool(f.hasUiFrontendWords) +
     (s.lastUserTextLength < 800 ? 1 : 0) -
     2 * bool(s.isLikelyArchitectureTask) -
@@ -387,6 +405,7 @@ function scoreRouting(s: Signals): RoutingScores {
     3 * bool(f.hasTestWords) +
     2 * bool(f.hasMigrationWords) +
     2 * bool(f.hasUiFrontendWords) +
+    2 * bool((hints.ragSourceCount ?? 0) >= 2) +
     (s.messageCount > 10 ? 1 : 0) +
     (s.estimatedTotalTextLength > 3000 ? 1 : 0) -
     2 * bool(s.isLikelyClassificationTask);
@@ -394,6 +413,7 @@ function scoreRouting(s: Signals): RoutingScores {
   const highScore =
     6 * bool(s.isLikelyDebugTask) +
     5 * bool(s.isLikelyArchitectureTask) +
+    4 * bool(!!hints.hasSourceConflict) +
     2 * bool(s.estimatedTotalTextLength > 6000) +
     2 * bool(f.hasMultiFileIntent) +
     2 * bool(f.hasReviewWords) +
@@ -402,6 +422,7 @@ function scoreRouting(s: Signals): RoutingScores {
 
   const xhighScore =
     7 * bool(s.isLikelyDebugTask && f.hasLargeErrorPayload) +
+    5 * bool(!!hints.previousAttemptFailed) +
     3 * bool(s.diffMarkersCount >= 4) +
     3 * bool(s.errorMarkerCount >= 6) +
     2 * bool(s.estimatedTotalTextLength > 12000);
@@ -426,9 +447,7 @@ function findLastUserMessage(
   messages: Array<{ role: string; content: unknown }>,
 ): { role: string; content: unknown } | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]?.role === 'user') {
-      return messages[i];
-    }
+    if (messages[i]?.role === 'user') return messages[i];
   }
   return undefined;
 }
@@ -444,18 +463,16 @@ function normalizeAllMessagesToText(
   const parts: string[] = [];
   let totalTextLength = 0;
 
-  for (const m of messages ?? []) {
-    const text = normalizeContentToText(m?.content);
+  for (const message of messages ?? []) {
+    const text = normalizeContentToText(message?.content);
     if (text) {
       parts.push(text);
       totalTextLength += text.length;
     }
   }
 
-  const concatenatedText = parts.join('\n\n');
-
   return {
-    concatenatedText,
+    concatenatedText: parts.join('\n\n'),
     totalTextLength,
   };
 }
@@ -473,7 +490,7 @@ function normalizeContentToText(content: unknown): string | null {
       .map((part) => {
         if (!part) return '';
         if (typeof part === 'string') return part;
-        if (typeof part === 'object' && 'text' in part && (part as any).text) {
+        if (typeof part === 'object' && part !== null && 'text' in part && (part as any).text) {
           return String((part as any).text);
         }
         return '';
@@ -530,22 +547,15 @@ function isLikelyClassificationTask(flags: KeywordFlags, text: string): boolean 
   }
 
   const lower = text.toLowerCase();
-  if (
-    /output\s+only\s+json|верни\s+json|только\s+json|json\s+without\s+explanation/.test(
-      lower,
-    )
-  ) {
-    return true;
-  }
-
-  return false;
+  return /output\s+only\s+json|верни\s+json|только\s+json|json\s+without\s+explanation/.test(lower);
 }
 
-function isLikelyArchitectureTask(flags: KeywordFlags): boolean {
+function isLikelyArchitectureTask(flags: KeywordFlags, hints: ChatRoutingHints): boolean {
   return !!(
     flags.hasArchWords ||
     flags.hasSecurityWords ||
-    flags.hasMultiFileIntent
+    flags.hasMultiFileIntent ||
+    hints.hasSourceConflict
   );
 }
 
@@ -579,12 +589,7 @@ function detectFlags(text: string) {
   const lower = text.toLowerCase();
 
   const hasCodeFence = text.includes('```');
-
-  const hasTsKeywords =
-    /\b(import|export|function|class|interface|type|const|let|async|await)\b/.test(
-      text,
-    );
-
+  const hasTsKeywords = /\b(import|export|function|class|interface|type|const|let|async|await)\b/.test(text);
   const hasStackTrace =
     text.includes('Error:') ||
     text.includes('TypeError') ||
@@ -599,63 +604,41 @@ function detectFlags(text: string) {
     );
 
   const hasRefactorWords =
-    /рефактор|refactor|оптимизируй|оптимизация|почисти код|cleanup|rename|extract\s+method/i.test(
-      lower,
-    );
+    /рефактор|refactor|оптимизируй|оптимизация|почисти код|cleanup|rename|extract\s+method/i.test(lower);
 
   const hasBugWords =
-    /bug|баг|ошибк|сломалось|crash|crashed|падает|regression|incident|panic/i.test(
-      lower,
-    );
+    /bug|баг|ошибк|сломалось|crash|crashed|падает|regression|incident|panic/i.test(lower);
 
   const hasReviewWords =
-    /review|ревью|code\s*review|проверь\s+код|посмотри\s+дифф|посмотри\s+diff|nit:|nitpick/i.test(
-      lower,
-    );
+    /review|ревью|code\s*review|проверь\s+код|посмотри\s+дифф|посмотри\s+diff|nit:|nitpick/i.test(lower);
 
-  const hasDiff =
-    /diff --git|@@ .+ @@|^\+\+\+ |^--- /m.test(text) || /```diff/.test(text);
+  const hasDiff = /diff --git|@@ .+ @@|^\+\+\+ |^--- /m.test(text) || /```diff/.test(text);
 
   const hasPmWords =
     /issue|ticket|task|задач[аеии]|project\s+board|kanban|roadmap|эпик|epic|статус|status|update\s+status|progress|milestone/i.test(
       lower,
     );
 
-  const hasVercelWords = /\bvercel\b|верцел|deployment\s+log|лог\s+деплоя/i.test(
-    lower,
-  );
-
-  const hasCICDWords = /\bci\b|cicd|workflow|github\s+actions|pipeline|build\s+failed|test\s+failed/i.test(
-    lower,
-  );
-
+  const hasVercelWords = /\bvercel\b|верцел|deployment\s+log|лог\s+деплоя/i.test(lower);
+  const hasCICDWords = /\bci\b|cicd|workflow|github\s+actions|pipeline|build\s+failed|test\s+failed/i.test(lower);
   const hasRepoOpsWords =
     /merge\s+pr|pull\s+request|branch|rebase|squash|changelog|release|tag|version\s+bump|npm\s+publish/i.test(
       lower,
     );
 
   const hasExtractionWords =
-    /extract|extraction|извлеки|вытащи\s+поля|fields|entities|entity|normalize|parse|распарс/i.test(
-      lower,
-    );
+    /extract|extraction|извлеки|вытащи\s+поля|fields|entities|entity|normalize|parse|распарс/i.test(lower);
 
   const hasClassificationWords =
-    /classify|classification|категориз|label|intent|определи\s+intent|маршрутиз|route\s+this/i.test(
-      lower,
-    );
+    /classify|classification|категориз|label|intent|определи\s+intent|маршрутиз|route\s+this/i.test(lower);
 
   const hasRankingWords =
-    /rank|ranking|prioritiz|prioritize|sort\s+by\s+relevance|сравни\s+и\s+ранжируй|приоритиз/i.test(
-      lower,
-    );
+    /rank|ranking|prioritiz|prioritize|sort\s+by\s+relevance|сравни\s+и\s+ранжируй|приоритиз/i.test(lower);
 
   const hasJsonSchemaWords =
-    /json\s*schema|schema\s*:\s*\{|верни\s+json|return\s+json|output\s+json|strict\s+json/i.test(
-      lower,
-    );
+    /json\s*schema|schema\s*:\s*\{|верни\s+json|return\s+json|output\s+json|strict\s+json/i.test(lower);
 
-  const hasTestWords =
-    /test|tests|unit\s*test|jest|vitest|coverage|spec\b|tdd/i.test(lower);
+  const hasTestWords = /test|tests|unit\s*test|jest|vitest|coverage|spec\b|tdd/i.test(lower);
 
   const hasSecurityWords =
     /vulnerability|vulnerable|auth|authentication|authorization|token\s+leak|ssrf|csrf|xss|permission\s+denied|privilege|security/i.test(
@@ -663,9 +646,7 @@ function detectFlags(text: string) {
     );
 
   const hasMigrationWords =
-    /migration|migrate|prisma\s+migrate|schema\.prisma|sql\s+migration|db\s+migration|database\s+change/i.test(
-      lower,
-    );
+    /migration|migrate|prisma\s+migrate|schema\.prisma|sql\s+migration|db\s+migration|database\s+change/i.test(lower);
 
   const hasLargeErrorPayload =
     /\n\s*at\s+.+\(.+\)/.test(text) ||
@@ -678,9 +659,7 @@ function detectFlags(text: string) {
     );
 
   const hasUiFrontendWords =
-    /react|next\.js|nextjs|frontend|ui\b|ux\b|css|tailwind|component|tsx\b|hydration|layout/i.test(
-      lower,
-    );
+    /react|next\.js|nextjs|frontend|ui\b|ux\b|css|tailwind|component|tsx\b|hydration|layout/i.test(lower);
 
   return {
     hasCodeFence,

@@ -1,24 +1,24 @@
-import { githubToolHandlers, githubToolsSchemas } from './githubTools';
+import * as githubTools from './githubTools';
 import { vercelToolHandlers, vercelToolsSchemas } from './vercelTools';
-import { deploymentToolHandlers, deploymentToolsSchemas } from './deploymentTools';
-import { previewToolHandlers, previewToolsSchemas } from './previewTools';
+import * as deploymentTools from './deploymentTools';
+import * as previewTools from './previewTools';
 import {
   repo_register,
   repoRegistrationToolSchema,
 } from './repoRegistrationTools';
 
 export const toolsSchemas = [
-  ...githubToolsSchemas,
+  ...githubTools.githubToolsSchemas,
   ...vercelToolsSchemas,
-  ...deploymentToolsSchemas,
-  ...previewToolsSchemas,
+  ...deploymentTools.deploymentToolsSchemas,
+  ...previewTools.previewToolsSchemas,
   repoRegistrationToolSchema,
 ] as const;
 
 export const toolsHandlers = {
-  ...githubToolHandlers,
+  ...githubTools.githubToolHandlers,
   ...vercelToolHandlers,
-  ...deploymentToolHandlers,
-  ...previewToolHandlers,
+  ...deploymentTools.deploymentToolHandlers,
+  ...previewTools.previewToolHandlers,
   repo_register,
 } as const;

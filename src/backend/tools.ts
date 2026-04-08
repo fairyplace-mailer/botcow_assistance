@@ -2,13 +2,9 @@ import type OpenAI from 'openai';
 
 import { toolsHandlers, toolsSchemas } from './tools/index';
 
-/**
- * Legacy exports used by some parts of the codebase/tests.
- * Keep them as aliases to the canonical exports in ./tools/index.
- */
 export const toolSchemas = toolsSchemas;
 export const toolHandlers = toolsHandlers;
-export type ToolName = keyof typeof toolsHandlers;
+export type ToolName = keyof typeof toolHandlers;
 
 export function getToolsSchemas(): OpenAI.Responses.Tool[] {
   return [...toolsSchemas] as unknown as OpenAI.Responses.Tool[];

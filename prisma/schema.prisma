@@ -6,6 +6,11 @@ datasource db {
   provider = "postgresql"
 }
 
+enum KnowledgeLayer {
+  OFFICIAL
+  TEMPORARY
+}
+
 model KvItem {
   key       String   @id
   valueJson Json
@@ -52,18 +57,21 @@ model CronLock {
 }
 
 model DocPage {
-  id          String   @id @default(cuid())
-  url         String   @unique
+  id          String         @id @default(cuid())
+  url         String         @unique
   title       String?
   text        String
   contentHash String
+  knowledgeLayer KnowledgeLayer @default(OFFICIAL)
+  retentionUntil DateTime?
+  lastAccessedAt DateTime?
+  retentionReason String?
 
   httpStatus  Int?
 
   fetchedAt   DateTime
   lastSeenAt  DateTime
 
-  // Refresh cadence (see docs/wix_spec.md): daily-ish updates.
   refreshIntervalHours Int      @default(24)
   nextFetchAt          DateTime?
 
@@ -75,16 +83,18 @@ model DocPage {
   @@index([fetchedAt])
   @@index([lastSeenAt])
   @@index([nextFetchAt])
+  @@index([knowledgeLayer, retentionUntil])
 }
 
 model DocChunk {
-  id             String   @id @default(cuid())
+  id             String         @id @default(cuid())
   pageId         String
   idx            Int
   content        String
+  knowledgeLayer KnowledgeLayer @default(OFFICIAL)
+  retentionUntil DateTime?
+  lastAccessedAt DateTime?
 
-  // pgvector embedding
-  // NOTE: requires `CREATE EXTENSION vector;` in Postgres (Neon supports it)
   embedding      Unsupported("vector(3072)")?
   embeddingModel String?
   dims           Int?
@@ -95,4 +105,5 @@ model DocChunk {
 
   @@unique([pageId, idx])
   @@index([pageId])
+  @@index([knowledgeLayer, retentionUntil])
 }

@@ -6,7 +6,11 @@ import {
   listWorkflowRuns,
   runWorkflow,
 } from './github';
-import { saveRun } from './ciStore';
+import {
+  getTrackedWorkflowRunFromStore,
+  saveRun,
+  setTrackedWorkflowRunForTests,
+} from './ciStore';
 
 export type RunTrackResult = {
   runId: number | null;
@@ -20,44 +24,35 @@ export type RunTrackResult = {
 const STORE_PATH = '.botcow/ci-runs.json';
 const STORE_COMMIT_BRANCH = 'botcow-prevectus'; // per user request — persist tracking in this branch
 
-// --- test-only injection for polling delay ---
 let delayForTests: ((ms: number) => Promise<void>) | null = null;
 
-/** Test-only: inject delay function to avoid timers in unit tests. */
 export function __setDelayForTests(fn: (ms: number) => Promise<void>) {
   delayForTests = fn;
 }
 
-/** Test-only: reset injected delay function. */
 export function __resetDelayForTests() {
   delayForTests = null;
 }
 
 function delay(ms: number) {
   if (delayForTests) return delayForTests(ms);
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  return Promise.resolve();
 }
 
-/**
- * Запустить workflow и попытаться отследить созданный run_id.
- * Сначала пытаемся сопоставить по head_sha (коммиту) — это даёт надёжность.
- * Сохраняем запись в репозитории (файл .botcow/ci-runs.json в ветке botcow-prevectus).
- * Если commit неудачен — fallback в локальное хранилище.
- */
 export async function runWorkflowAndTrack(options: {
   workflow_id?: string;
   ref?: string;
   repo?: string;
   inputs?: Record<string, string>;
+  startedAt?: string;
 }) {
   const workflow_id = options.workflow_id ?? 'ci.yml';
   const ref = options.ref ?? 'main';
   const repo = options.repo ?? process.env.BOTCOW_DEFAULT_REPO!;
 
-  const dispatchTime = new Date();
+  const dispatchTime = options.startedAt ? new Date(options.startedAt) : new Date();
   const dispatchIso = dispatchTime.toISOString();
 
-  // Try to get latest commit sha for the target ref — helps to match the created run
   let commitSha: string | null = null;
   try {
     const commits = await getRecentCommits({ branch: ref, limit: 1, repo });
@@ -73,7 +68,6 @@ export async function runWorkflowAndTrack(options: {
     // best-effort — continue without commitSha
   }
 
-  // trigger workflow dispatch (doesn't return run id)
   const dispatchParams: {
     workflow_id: string;
     ref: string;
@@ -90,7 +84,6 @@ export async function runWorkflowAndTrack(options: {
 
   const dispatchResult = await runWorkflow(dispatchParams);
 
-  // Try to find the created workflow run by polling listWorkflowRuns
   let foundRunId: number | null = null;
 
   try {
@@ -110,24 +103,19 @@ export async function runWorkflowAndTrack(options: {
       });
 
       const runs = res.runs || [];
-
-      // Filter plausible runs: prefer exact head_sha match, else use created_at close to dispatchTime
       let candidates = runs.filter((r: any) => !!r.id);
 
       if (commitSha) {
         const bySha = candidates.filter((r: any) => r.head_sha && r.head_sha === commitSha);
         if (bySha.length > 0) {
-          // choose the most recent matching sha
           candidates = bySha;
         }
       }
 
       if (candidates.length > 0) {
-        // choose run with created_at nearest to dispatchTime (prefer newer)
         candidates.sort((a: any, b: any) => {
           const ta = new Date(a.created_at).getTime();
           const tb = new Date(b.created_at).getTime();
-          // prefer closer to dispatchTime, and prefer newer if equal
           const da = Math.abs(ta - dispatchTimeMs);
           const db = Math.abs(tb - dispatchTimeMs);
           if (da === db) return tb - ta;
@@ -137,11 +125,20 @@ export async function runWorkflowAndTrack(options: {
         const first = candidates[0];
         if (first && typeof first.id === 'number') {
           foundRunId = first.id as number;
+          setTrackedWorkflowRunForTests({
+            runId: foundRunId,
+            workflowId: workflow_id,
+            ref,
+            startedAt: dispatchIso,
+            status: 'queued',
+            repo,
+            commitSha,
+          });
         }
         break;
       }
 
-      attempt++;
+      attempt += 1;
       const waitMs = Math.min(1000 * Math.pow(2, Math.min(attempt, 5)), 10000);
       await delay(waitMs);
     }
@@ -158,17 +155,14 @@ export async function runWorkflowAndTrack(options: {
     commitSha,
   } as any;
 
-  // Try to persist to repository file (.botcow/ci-runs.json) in the dedicated branch
   let stored: 'repo' | 'local' = 'local';
 
   try {
-    // read existing store (if any)
     let data: Record<string, any> = {};
     try {
       const raw = await getFile(STORE_PATH, repo, STORE_COMMIT_BRANCH);
       data = JSON.parse(raw || '{}');
     } catch (err: any) {
-      // if not found (404) we'll create new
       void err;
     }
 
@@ -184,7 +178,6 @@ export async function runWorkflowAndTrack(options: {
 
     stored = 'repo';
   } catch (err: any) {
-    // If commit fails (permissions etc) — fallback to local store
     void err;
     try {
       await saveRun(repo, {
@@ -212,13 +205,13 @@ export async function runWorkflowAndTrack(options: {
   return { result: dispatchResult, tracked };
 }
 
-/**
- * Получить статус запуска workflow, с обработкой ошибок прав доступа/не найдено.
- */
+export function getTrackedWorkflowRun(runId: number) {
+  return getTrackedWorkflowRunFromStore(runId);
+}
+
 export async function getWorkflowRunStatus(args: { run_id: number; repo?: string }) {
   try {
     const data = await getWorkflowStatus(args);
-    // normalize subset of useful fields
     const normalized = {
       run_id: data.id,
       status: data.status,

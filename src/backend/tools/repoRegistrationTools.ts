@@ -1,6 +1,5 @@
 import type { RepoConfig } from '../config/repos';
 import { upsertRepoConfig } from '../config/repos';
-import { getGithubClient, parseRepo } from '../github';
 
 export type RepoRegistrationArgs = {
   repo: string; // owner/name
@@ -27,6 +26,7 @@ function normalizeRepo(repo: string): { fullName: string; owner: string; name: s
 }
 
 async function getRepoOwnerLogin(owner: string, repo: string): Promise<string> {
+  const { getGithubClient } = await import('../github');
   const github = getGithubClient();
   const res = await github.repos.get({ owner, repo });
   const ownerLogin = res.data?.owner?.login;
@@ -37,6 +37,7 @@ async function getRepoOwnerLogin(owner: string, repo: string): Promise<string> {
 }
 
 async function getAuthenticatedUserLogin(): Promise<string> {
+  const { getGithubClient } = await import('../github');
   const github = getGithubClient();
   const res = await github.users.getAuthenticated();
   const login = res.data?.login;
@@ -86,6 +87,7 @@ export const repoRegistrationToolSchema = {
 } as const;
 
 export async function repo_register(args: RepoRegistrationArgs) {
+  const { parseRepo } = await import('../github');
   const { fullName: repo, owner, name } = normalizeRepo(args.repo);
   assertNonEmpty('defaultBranch', args.defaultBranch);
   assertNonEmpty('vercel.projectIdEnv', args.vercel?.projectIdEnv);

@@ -18,20 +18,24 @@ export async function githubCacheGet<T>(
   // Treat cache as a best-effort optimization and fail open.
   if (!hasGithubCacheModel(prisma)) return null;
 
-  const row = await (prisma as any).githubCache.findUnique({
-    where: { key },
-    select: { responseJson: true, expiresAt: true },
-  });
+  try {
+    const row = await (prisma as any).githubCache.findUnique({
+      where: { key },
+      select: { responseJson: true, expiresAt: true },
+    });
 
-  if (!row) return null;
+    if (!row) return null;
 
-  if (row.expiresAt <= now) {
-    // Best-effort cleanup
-    await (prisma as any).githubCache.delete({ where: { key } }).catch(() => undefined);
+    if (row.expiresAt <= now) {
+      // Best-effort cleanup
+      await (prisma as any).githubCache.delete({ where: { key } }).catch(() => undefined);
+      return null;
+    }
+
+    return row.responseJson as T;
+  } catch {
     return null;
   }
-
-  return row.responseJson as T;
 }
 
 export async function githubCacheSet<T>(
@@ -46,9 +50,13 @@ export async function githubCacheSet<T>(
   // Best-effort; see note in githubCacheGet.
   if (!hasGithubCacheModel(prisma)) return;
 
-  await (prisma as any).githubCache.upsert({
-    where: { key },
-    update: { responseJson: value as any, expiresAt },
-    create: { key, responseJson: value as any, expiresAt },
-  });
+  try {
+    await (prisma as any).githubCache.upsert({
+      where: { key },
+      update: { responseJson: value as any, expiresAt },
+      create: { key, responseJson: value as any, expiresAt },
+    });
+  } catch {
+    // fail-open: cache write must not break GitHub flow
+  }
 }

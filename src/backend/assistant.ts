@@ -1,10 +1,9 @@
 import { createHash } from 'crypto';
 
-import { getOpenAIClient } from './openai';
-import { getToolsSchemas, handleToolCall } from './tools';
-import type { ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import type OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
+
+import { getOpenAIClient } from './openai';
 import {
   buildStrictFunctionTools,
   createModelResponse,
@@ -14,6 +13,8 @@ import {
   responseUsage,
   type ResponsesStateMode,
 } from './responses';
+import { getToolsSchemas, handleToolCall } from './tools';
+import type { ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import { logEvent, logInfo, logWarn } from './log';
 import {
   getResponsesRuntimeCapabilities,
@@ -22,12 +23,6 @@ import {
   type ReasoningSuppressedReason,
   type ResponsesRuntimeCapabilities,
 } from './openaiRuntime';
-
-const MAX_TOOL_LOOPS = 12;
-const MAX_TOTAL_TOOL_CALLS = 24;
-const MAX_SAME_FINGERPRINT_IN_ROW = 2;
-const MAX_NO_PROGRESS_ROUNDS = 2;
-const TOOL_TIMEOUT_MS = 20_000;
 
 type ToolResultClass =
   | 'ok'
@@ -52,6 +47,8 @@ type AssistantInternalCode =
 export type AssistantRunOptions = {
   model: ModelRoutingDecision['model'];
   reasoning?: { effort: ReasoningEffort };
+  text?: { verbosity?: 'low' | 'medium' | 'high' };
+  maxOutputTokens?: number;
   reason?: string;
 };
 
@@ -62,15 +59,20 @@ export type ConversationStateRef = {
 
 export type RunAssistantTurnParams = {
   instructions: string;
-  userInput: string;
+  messages: Array<{ role: string; content: unknown }>;
   tools?: OpenAI.Responses.Tool[];
   routing: AssistantRunOptions;
   state: ConversationStateRef;
 };
 
-interface AssistantResult {
+export type ReasoningDecision = {
+  requestedReasoningEffort: ReasoningEffort | null;
+  sentReasoningEffort: ReasoningEffort | null;
+  reasoningSuppressedReason: ReasoningSuppressedReason | null;
+};
+
+export type AssistantResult = {
   response: Response | null;
-  completion: null;
   toolCalls: Array<{
     tool_call_id: string;
     name: string;
@@ -88,13 +90,15 @@ interface AssistantResult {
     internalCode: AssistantInternalCode;
     responseId?: string;
   };
-}
-
-export type ReasoningDecision = {
-  requestedReasoningEffort: ReasoningEffort | null;
-  sentReasoningEffort: ReasoningEffort | null;
-  reasoningSuppressedReason: ReasoningSuppressedReason | null;
 };
+
+const MAX_TOOL_LOOPS = 12;
+const MAX_TOTAL_TOOL_CALLS = 24;
+const MAX_SAME_FINGERPRINT_IN_ROW = 2;
+const MAX_NO_PROGRESS_ROUNDS = 2;
+const TOOL_TIMEOUT_MS = 20_000;
+const OPENAI_RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
+const OPENAI_MAX_ATTEMPTS = 3;
 
 export { getResponsesRuntimeCapabilities, supportsReasoning };
 export type { ResponsesRuntimeCapabilities, ReasoningSuppressedReason };
@@ -131,27 +135,12 @@ export function resolveReasoningDecision(
     };
   }
 
-  if (runtimeCapabilities.reasoning === 'unsupported') {
-    return {
-      requestedReasoningEffort,
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'runtime_not_supported',
-    };
-  }
-
-  if (runtimeCapabilities.reasoning === 'unknown') {
-    return {
-      requestedReasoningEffort,
-      sentReasoningEffort: null,
-      reasoningSuppressedReason: 'sdk_contract_unknown',
-    };
-  }
-
   if (!supportsReasoning(routing.model, runtimeCapabilities)) {
     return {
       requestedReasoningEffort,
       sentReasoningEffort: null,
-      reasoningSuppressedReason: 'runtime_not_supported',
+      reasoningSuppressedReason:
+        runtimeCapabilities.reasoning === 'unknown' ? 'sdk_contract_unknown' : 'runtime_not_supported',
     };
   }
 
@@ -163,21 +152,11 @@ export function resolveReasoningDecision(
 }
 
 function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
-  }
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
 
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-  }
-
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-    a.localeCompare(b),
-  );
-
-  return `{${entries
-    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
-    .join(',')}}`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(',')}}`;
 }
 
 function sha256(value: string): string {
@@ -210,10 +189,7 @@ function abort(code: AssistantInternalCode, responseId?: string) {
 }
 
 function getToolDefinition(name: string, tools: OpenAI.Responses.Tool[] | undefined) {
-  if (!Array.isArray(tools) || tools.length === 0) {
-    return undefined;
-  }
-
+  if (!Array.isArray(tools) || tools.length === 0) return undefined;
   return tools.find((tool: any) => tool?.type === 'function' && tool?.name === name) as
     | OpenAI.Responses.FunctionTool
     | undefined;
@@ -223,10 +199,7 @@ function validateToolArgsAgainstSchema(
   schema: Record<string, unknown> | null | undefined,
   value: unknown,
 ): { ok: true } | { ok: false; issues: string[] } {
-  if (!schema || typeof schema !== 'object') {
-    return { ok: true };
-  }
-
+  if (!schema || typeof schema !== 'object') return { ok: true };
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return { ok: false, issues: ['arguments must be an object'] };
   }
@@ -243,31 +216,81 @@ function validateToolArgsAgainstSchema(
   const issues: string[] = [];
 
   for (const key of required) {
-    if (!(key in objectValue)) {
-      issues.push(`missing required field: ${key}`);
-    }
+    if (!(key in objectValue)) issues.push(`missing required field: ${key}`);
   }
 
   for (const [key, item] of Object.entries(objectValue)) {
     const propSchema = properties[key];
-
     if (!propSchema) {
-      if (additionalProperties === false) {
-        issues.push(`unexpected field: ${key}`);
-      }
+      if (additionalProperties === false) issues.push(`unexpected field: ${key}`);
       continue;
     }
 
     const expectedType = propSchema.type;
     if (typeof expectedType === 'string') {
       const actualType = Array.isArray(item) ? 'array' : item === null ? 'null' : typeof item;
-      if (expectedType !== actualType) {
-        issues.push(`field ${key} must be ${expectedType}`);
-      }
+      if (expectedType !== actualType) issues.push(`field ${key} must be ${expectedType}`);
     }
   }
 
   return issues.length ? { ok: false, issues } : { ok: true };
+}
+
+function normalizeContentToText(content: unknown): string | null {
+  if (!content) return null;
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  if (Array.isArray(content)) {
+    const text = content
+      .map((part) => {
+        if (!part) return '';
+        if (typeof part === 'string') return part;
+        if (typeof part === 'object' && part !== null && 'text' in part) {
+          return String((part as any).text ?? '');
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+
+    return text ? text : null;
+  }
+
+  if (typeof content === 'object' && content !== null && 'text' in content) {
+    const text = String((content as any).text ?? '').trim();
+    return text ? text : null;
+  }
+
+  return null;
+}
+
+function normalizeMessagesToInput(
+  messages: Array<{ role: string; content: unknown }>,
+): OpenAI.Responses.ResponseInputItem[] {
+  const normalized: OpenAI.Responses.ResponseInputItem[] = [];
+
+  for (const message of messages) {
+    if (!message || typeof message.role !== 'string') continue;
+    const text = normalizeContentToText(message.content);
+    if (!text) continue;
+
+    const role =
+      message.role === 'user' || message.role === 'assistant' || message.role === 'system' || message.role === 'developer'
+        ? message.role
+        : 'user';
+
+    normalized.push({
+      type: 'message',
+      role: role as any,
+      content: [{ type: 'input_text', text }],
+    });
+  }
+
+  return normalized;
 }
 
 async function runToolWithTimeout(
@@ -302,22 +325,8 @@ async function runToolWithTimeout(
       error: error?.message ? String(error.message) : String(error),
     };
   } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
+    if (timeoutId) clearTimeout(timeoutId);
   }
-}
-
-function finalizeSuccess(result: AssistantResult): AssistantResult {
-  return result;
-}
-
-function finalizeFailure(
-  params: Omit<AssistantResult, 'error'> & {
-    error: NonNullable<AssistantResult['error']>;
-  },
-): AssistantResult {
-  return params;
 }
 
 function selectResponsesStateMode(params: {
@@ -336,37 +345,58 @@ function selectResponsesStateMode(params: {
 }
 
 function payloadKeysForStateMode(stateMode: ResponsesStateMode): string[] {
-  if (stateMode.kind === 'conversation') {
-    return ['conversation'];
-  }
-
-  if (stateMode.kind === 'previous_response') {
-    return ['previous_response_id'];
-  }
-
+  if (stateMode.kind === 'conversation') return ['conversation'];
+  if (stateMode.kind === 'previous_response') return ['previous_response_id'];
   return [];
 }
 
 async function logFatalStop(event: string, payload: Parameters<typeof logWarn>[1]) {
-  await logWarn(event, {
-    ...payload,
-    finalStatus: 'failed',
-  });
+  await logWarn(event, { ...payload, finalStatus: 'failed' });
 }
 
-function buildFailureState(
-  conversationId: string | null,
-  responseId?: string | null,
-) {
+function buildFailureState(conversationId: string | null, responseId?: string | null) {
   return {
     conversationId,
     latestResponseId: responseId ?? null,
   };
 }
 
+function isRetryableOpenAIError(error: any): boolean {
+  const status = error?.status ?? error?.statusCode ?? error?.cause?.status;
+  if (typeof status === 'number' && OPENAI_RETRYABLE_STATUS.has(status)) return true;
+
+  const code = String(error?.code ?? error?.cause?.code ?? '').toLowerCase();
+  return code === 'etimedout' || code === 'econnreset' || code === 'eai_again';
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function createModelResponseWithRetry(params: Parameters<typeof createModelResponse>[0]) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await createModelResponse(params);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= OPENAI_MAX_ATTEMPTS || !isRetryableOpenAIError(error)) {
+        throw error;
+      }
+      await delay(300 * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
 export async function runAssistant(params: RunAssistantTurnParams): Promise<AssistantResult> {
   const startedAt = Date.now();
+  const traceId = `assistant_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const userTurnId = traceId;
   const toolCallsLog: AssistantResult['toolCalls'] = [];
+
   let lastResponse: Response | null = null;
   let lastReasoningDecision: ReasoningDecision = {
     requestedReasoningEffort: params.routing.reasoning?.effort ?? null,
@@ -374,37 +404,27 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     reasoningSuppressedReason: null,
   };
 
-  let pendingInput: OpenAI.Responses.ResponseInputItem[] = [
-    {
-      type: 'message',
-      role: 'user',
-      content: [{ type: 'input_text', text: params.userInput }],
-    },
-  ];
+  let pendingInput = normalizeMessagesToInput(params.messages);
   let previousResponseId: string | undefined = params.state.previousResponseId;
+  let currentConversationId: string | null = params.state.conversationId ?? null;
   let totalToolCalls = 0;
   let noProgressRounds = 0;
   let lastFingerprint: string | null = null;
   let sameFingerprintInRow = 0;
-  let lastToolResultClass: ToolResultClass | null = null;
-  let currentConversationId: string | null = params.state.conversationId ?? null;
 
   const openai = getOpenAIClient();
   const tools = buildStrictFunctionTools(params.tools ?? getToolsSchemas() ?? []);
-  const traceId = `assistant_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-  const userTurnId = traceId;
 
   for (let round = 1; round <= MAX_TOOL_LOOPS; round += 1) {
     const runtimeCapabilities = getResponsesRuntimeCapabilities();
     const reasoningDecision = resolveReasoningDecision(params.routing, runtimeCapabilities);
     lastReasoningDecision = reasoningDecision;
-    const stateModeInput = {
-      ...(currentConversationId !== undefined && currentConversationId !== null
-        ? { conversationId: currentConversationId }
-        : {}),
-      ...(previousResponseId !== undefined ? { previousResponseId } : {}),
-    };
-    const stateMode = selectResponsesStateMode(stateModeInput);
+
+    const stateMode = selectResponsesStateMode({
+      ...(currentConversationId ? { conversationId: currentConversationId } : {}),
+      ...(previousResponseId ? { previousResponseId } : {}),
+    });
+
     const requestPreviousResponseId =
       stateMode.kind === 'previous_response' ? stateMode.previousResponseId : undefined;
     const requestConversationId =
@@ -424,7 +444,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       duration: Date.now() - startedAt,
     });
 
-    const response = await createModelResponse({
+    const response = await createModelResponseWithRetry({
       client: openai,
       model: params.routing.model,
       input: pendingInput,
@@ -432,62 +452,19 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       state: stateMode,
       tools,
       ...(reasoningDecision.sentReasoningEffort
-        ? { reasoning: { effort: reasoningDecision.sentReasoningEffort } }
+        ? { reasoning: { effort: reasoningDecision.sentReasoningEffort, summary: 'concise' as const } }
+        : {}),
+      ...(params.routing.text ? { text: params.routing.text } : {}),
+      ...(typeof params.routing.maxOutputTokens === 'number'
+        ? { maxOutputTokens: params.routing.maxOutputTokens }
         : {}),
     });
-
-    if (!response) {
-      const error = abort('no_actionable_output', previousResponseId);
-      await logFatalStop('assistant_run_failed', {
-        traceId,
-        userTurnId,
-        round,
-        conversationId: currentConversationId,
-        responseId: previousResponseId ?? null,
-        previousResponseId: requestPreviousResponseId ?? null,
-        stopReason: error.internalCode,
-        duration: Date.now() - startedAt,
-      });
-      return finalizeFailure({
-        response: lastResponse,
-        completion: null,
-        toolCalls: toolCallsLog,
-        reasoningDecision,
-        state: buildFailureState(currentConversationId, previousResponseId),
-        error,
-      });
-    }
 
     lastResponse = response;
     previousResponseId = response.id;
     currentConversationId = extractConversationId(response, currentConversationId);
 
-    let functionCalls;
-    try {
-      functionCalls = extractFunctionCalls(response.output);
-    } catch {
-      const error = abort('no_actionable_output', response.id);
-      await logFatalStop('assistant_run_failed', {
-        traceId,
-        userTurnId,
-        round,
-        conversationId: currentConversationId,
-        responseId: response.id ?? null,
-        previousResponseId: requestPreviousResponseId ?? null,
-        stopReason: error.internalCode,
-        duration: Date.now() - startedAt,
-        usage: responseUsage(response),
-      });
-      return finalizeFailure({
-        response,
-        completion: null,
-        toolCalls: toolCallsLog,
-        reasoningDecision,
-        state: buildFailureState(currentConversationId, response.id),
-        error,
-      });
-    }
-
+    const functionCalls = extractFunctionCalls((response as any).output);
     const finalMessage = extractFinalAssistantMessage(response);
 
     await logInfo('assistant_round_completed', {
@@ -503,13 +480,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       reasoningEffort: reasoningDecision.sentReasoningEffort,
       toolName: functionCalls[0]?.name ?? null,
       toolCallId: functionCalls[0]?.call_id ?? null,
-      argsHash: null,
-      argsParseOk: null,
-      schemaValid: null,
-      toolLatencyMs: null,
-      toolResultClass: null,
       assistantPhase: finalMessage?.phase ?? null,
-      stopReason: null,
       finalStatus: finalMessage?.text && functionCalls.length === 0 ? 'completed' : 'in_progress',
       duration: Date.now() - startedAt,
       usage: responseUsage(response),
@@ -544,6 +515,8 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         'input',
         'instructions',
         ...(reasoningDecision.sentReasoningEffort ? ['reasoning'] : []),
+        ...(params.routing.text ? ['text'] : []),
+        ...(typeof params.routing.maxOutputTokens === 'number' ? ['max_output_tokens'] : []),
         'tools',
         'parallel_tool_calls',
         ...payloadKeysForStateMode(stateMode),
@@ -566,16 +539,38 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         duration: Date.now() - startedAt,
         usage: responseUsage(response),
       });
-      return finalizeSuccess({
+
+      return {
         response,
-        completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
         state: {
           conversationId: currentConversationId,
           latestResponseId: response.id ?? null,
         },
+      };
+    }
+
+    if (functionCalls.length === 0) {
+      const error = abort('no_actionable_output', response.id);
+      await logFatalStop('assistant_run_failed', {
+        traceId,
+        userTurnId,
+        round,
+        conversationId: currentConversationId,
+        responseId: response.id ?? null,
+        previousResponseId: requestPreviousResponseId ?? null,
+        stopReason: error.internalCode,
+        duration: Date.now() - startedAt,
+        usage: responseUsage(response),
       });
+      return {
+        response,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+        state: buildFailureState(currentConversationId, response.id),
+        error,
+      };
     }
 
     if (totalToolCalls + functionCalls.length > MAX_TOTAL_TOOL_CALLS) {
@@ -592,14 +587,13 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         requestedCalls: functionCalls.length,
         duration: Date.now() - startedAt,
       });
-      return finalizeFailure({
+      return {
         response,
-        completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
         state: buildFailureState(currentConversationId, response.id),
         error,
-      });
+      };
     }
 
     let progressThisRound = false;
@@ -627,24 +621,18 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
-        return finalizeFailure({
+        return {
           response,
-          completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
           state: buildFailureState(currentConversationId, response.id),
           error,
-        });
+        };
       }
 
       const parsed = safeParseToolArgs(call.arguments);
       if (!parsed.ok) {
-        toolCallsLog.push({
-          tool_call_id: call.call_id,
-          name: call.name,
-          ok: false,
-          error: 'invalid_tool_args_json',
-        });
+        toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'invalid_tool_args_json' });
         const error = abort('invalid_tool_args_json', response.id);
         await logFatalStop('assistant_run_failed', {
           traceId,
@@ -662,14 +650,13 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
-        return finalizeFailure({
+        return {
           response,
-          completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
           state: buildFailureState(currentConversationId, response.id),
           error,
-        });
+        };
       }
 
       const argsHash = hashArgs(parsed.value);
@@ -678,12 +665,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         parsed.value,
       );
       if (!schemaValidation.ok) {
-        toolCallsLog.push({
-          tool_call_id: call.call_id,
-          name: call.name,
-          ok: false,
-          error: 'invalid_tool_args_schema',
-        });
+        toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'invalid_tool_args_schema' });
         const error = abort('invalid_tool_args_schema', response.id);
         await logFatalStop('assistant_run_failed', {
           traceId,
@@ -703,32 +685,23 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
-        return finalizeFailure({
+        return {
           response,
-          completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
           state: buildFailureState(currentConversationId, response.id),
           error,
-        });
+        };
       }
 
       const fingerprint = makeToolFingerprint(call.name, parsed.value);
       roundFingerprints.push(fingerprint);
 
-      if (fingerprint === lastFingerprint) {
-        sameFingerprintInRow += 1;
-      } else {
-        sameFingerprintInRow = 1;
-      }
+      if (fingerprint === lastFingerprint) sameFingerprintInRow += 1;
+      else sameFingerprintInRow = 1;
 
       if (sameFingerprintInRow >= MAX_SAME_FINGERPRINT_IN_ROW) {
-        toolCallsLog.push({
-          tool_call_id: call.call_id,
-          name: call.name,
-          ok: false,
-          error: 'repeated_tool_call',
-        });
+        toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'repeated_tool_call' });
         const error = abort('repeated_tool_call', response.id);
         await logFatalStop('assistant_run_failed', {
           traceId,
@@ -742,35 +715,27 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           argsHash,
           argsParseOk: true,
           schemaValid: true,
-          toolResultClass: null,
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
-        return finalizeFailure({
+        return {
           response,
-          completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
           state: buildFailureState(currentConversationId, response.id),
           error,
-        });
+        };
       }
 
       const startedToolAt = Date.now();
       const result = await runToolWithTimeout(call.name, parsed.value, TOOL_TIMEOUT_MS);
       const toolLatencyMs = Date.now() - startedToolAt;
 
-      if (!result.ok) {
-        lastToolResultClass = result.code;
+      if (result.ok === false) {
         lastFingerprint = fingerprint;
-        toolCallsLog.push({
-          tool_call_id: call.call_id,
-          name: call.name,
-          ok: false,
-          error: result.code,
-        });
+        toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: result.code });
         const error = abort(result.code === 'tool_timeout' ? 'tool_timeout' : 'tool_execution_failed', response.id);
         await logFatalStop('assistant_run_failed', {
           traceId,
@@ -791,17 +756,15 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           duration: Date.now() - startedAt,
           usage: responseUsage(response),
         });
-        return finalizeFailure({
+        return {
           response,
-          completion: null,
           toolCalls: toolCallsLog,
           reasoningDecision,
           state: buildFailureState(currentConversationId, response.id),
           error,
-        });
+        };
       }
 
-      lastToolResultClass = 'ok';
       lastFingerprint = fingerprint;
       totalToolCalls += 1;
       progressThisRound = true;
@@ -829,7 +792,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         argsParseOk: true,
         schemaValid: true,
         toolLatencyMs,
-        toolResultClass: 'ok',
+        toolResultClass: 'ok' as ToolResultClass,
         assistantPhase: finalMessage?.phase ?? null,
         finalStatus: 'in_progress',
         duration: Date.now() - startedAt,
@@ -840,11 +803,8 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     const roundFingerprint = roundFingerprints.length ? roundFingerprints.join('|') : null;
     const fingerprintChanged = roundFingerprint !== previousFingerprintBeforeRound;
 
-    if (!progressThisRound && !finalMessage?.text && !fingerprintChanged) {
-      noProgressRounds += 1;
-    } else {
-      noProgressRounds = 0;
-    }
+    if (!progressThisRound && !finalMessage?.text && !fingerprintChanged) noProgressRounds += 1;
+    else noProgressRounds = 0;
 
     if (noProgressRounds >= MAX_NO_PROGRESS_ROUNDS) {
       const error = abort('no_progress_abort', response.id);
@@ -855,8 +815,6 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
-        toolName: functionCalls[0]?.name ?? null,
-        toolCallId: functionCalls[0]?.call_id ?? null,
         assistantPhase: finalMessage?.phase ?? null,
         stopReason: error.internalCode,
         progressThisRound,
@@ -865,54 +823,36 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         duration: Date.now() - startedAt,
         usage: responseUsage(response),
       });
-      return finalizeFailure({
+      return {
         response,
-        completion: null,
         toolCalls: toolCallsLog,
         reasoningDecision,
         state: buildFailureState(currentConversationId, response.id),
         error,
-      });
-    }
-
-    if (functionCalls.length === 0 && !finalMessage?.text) {
-      pendingInput = [];
-      continue;
+      };
     }
 
     pendingInput = nextInput;
   }
 
-  const finalStateModeInput = {
-    ...(currentConversationId !== undefined && currentConversationId !== null
-      ? { conversationId: currentConversationId }
-      : {}),
-    ...(previousResponseId !== undefined ? { previousResponseId } : {}),
-  };
-  const finalStateMode = selectResponsesStateMode(finalStateModeInput);
-  const finalPreviousResponseId =
-    finalStateMode.kind === 'previous_response' ? finalStateMode.previousResponseId : previousResponseId;
-  const error = abort('tool_loop_limit', previousResponseId);
+  const error = abort('tool_loop_limit', lastResponse?.id);
   await logFatalStop('assistant_run_failed', {
     traceId,
     userTurnId,
     conversationId: currentConversationId,
-    responseId: previousResponseId ?? null,
-    previousResponseId: finalPreviousResponseId ?? null,
-    totalToolCalls,
-    model: params.routing.model,
-    modelReason: params.routing.reason,
-    reasoningEffort: lastReasoningDecision.sentReasoningEffort,
+    responseId: lastResponse?.id ?? null,
+    previousResponseId: previousResponseId ?? null,
     stopReason: error.internalCode,
+    totalToolCalls,
     duration: Date.now() - startedAt,
+    usage: lastResponse ? responseUsage(lastResponse) : null,
   });
 
-  return finalizeFailure({
+  return {
     response: lastResponse,
-    completion: null,
     toolCalls: toolCallsLog,
     reasoningDecision: lastReasoningDecision,
     state: buildFailureState(currentConversationId, previousResponseId),
     error,
-  });
+  };
 }

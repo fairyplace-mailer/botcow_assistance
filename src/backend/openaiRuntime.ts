@@ -15,17 +15,12 @@ export type ResponsesRuntimeCapabilities = {
 
 function normalizeBaseUrl(rawBaseUrl: string | undefined): string | null {
   const trimmed = rawBaseUrl?.trim();
-  if (!trimmed) {
-    return 'https://api.openai.com/v1';
-  }
-
+  if (!trimmed) return 'https://api.openai.com/v1';
   return trimmed.replace(/\/+$/, '');
 }
 
 function inferRuntimeKind(apiBaseUrl: string | null): 'openai' | 'custom' {
-  if (!apiBaseUrl) {
-    return 'custom';
-  }
+  if (!apiBaseUrl) return 'custom';
 
   try {
     const parsed = new URL(apiBaseUrl);
@@ -37,6 +32,8 @@ function inferRuntimeKind(apiBaseUrl: string | null): 'openai' | 'custom' {
 
 export const OPENAI_SDK_VERSION: string | null = null;
 
+// Internal BotCow policy. The public Responses API supports a wider set,
+// but BotCow core intentionally limits itself to this matrix.
 export const REASONING_ALLOWED_EFFORTS: Readonly<Record<ModelId, ReadonlySet<ReasoningEffort>>> = {
   'gpt-5.4': new Set(['none', 'low', 'medium', 'high', 'xhigh']),
   'gpt-5.4-mini': new Set(['none', 'low', 'medium', 'high']),
@@ -60,17 +57,8 @@ export function supportsReasoning(
   model: ModelId,
   runtimeCapabilities: ResponsesRuntimeCapabilities,
 ): boolean {
-  if (runtimeCapabilities.path !== 'openai.responses.create') {
-    return false;
-  }
-
-  if (runtimeCapabilities.runtimeKind !== 'openai') {
-    return false;
-  }
-
-  if (runtimeCapabilities.reasoning !== 'supported') {
-    return false;
-  }
-
+  if (runtimeCapabilities.path !== 'openai.responses.create') return false;
+  if (runtimeCapabilities.runtimeKind !== 'openai') return false;
+  if (runtimeCapabilities.reasoning !== 'supported') return false;
   return (REASONING_ALLOWED_EFFORTS[model]?.size ?? 0) > 0;
 }

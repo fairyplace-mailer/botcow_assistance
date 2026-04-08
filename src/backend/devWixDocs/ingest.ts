@@ -1,5 +1,5 @@
 import { prisma } from '../db';
-import { embedTexts } from '../openai';
+import { embedText } from '../openai';
 import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
@@ -12,7 +12,11 @@ export type IngestStopReason =
   | 'maxChunksPerRun'
   | 'time_budget_exhausted'
   | 'embed_budget_exhausted'
-  | 'maxChunksPerPage';
+  | 'maxChunksPerPage'
+  | 'budget_warning_mode'
+  | 'budget_aggressive_mode';
+
+export type IngestBudgetMode = 'normal' | 'warning' | 'aggressive';
 
 export type IngestResult = {
   ok: true;
@@ -24,8 +28,10 @@ export type IngestResult = {
   chunksUpserted: number;
   discoveredQueued: number;
   stoppedReason?: IngestStopReason;
-
-  // diagnostics
+  budgetMode: IngestBudgetMode;
+  officialPages: number;
+  officialChunks: number;
+  embeddingPressureRatio: number;
   startFetched: boolean;
   startStatus: number | null;
   startHtmlBytes: number | null;
@@ -34,66 +40,42 @@ export type IngestResult = {
   linksFoundTotal: number;
   linksMatchedAllowed: number;
   sampleLinks: string[];
-
-  // embeddings diagnostics
   embedFailures: number;
   lastEmbedErrorName: string | null;
   lastEmbedError: string | null;
-
-  // budget diagnostics
   maxDurationMs: number;
   maxEmbeddings: number;
   embeddingsAttempted: number;
   budgetHit: boolean;
   budgetHitType: 'time' | 'embeddings' | null;
-
-  // chunking controls
   maxChunksPerPage: number;
   chunkTokens: number;
   overlapTokens: number;
-
-  // perf diagnostics
   msFetch: number;
   msTransform: number;
   msChunk: number;
   msEmbed: number;
   msDb: number;
   msDiscover: number;
-
-  // embeddings batching diagnostics
   embeddingBatches: number;
   embeddingBatchSize: number;
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
+const TEMPORARY_TTL_DAYS = 7;
+const BUDGET_WARNING_THRESHOLD = 10;
+const BUDGET_AGGRESSIVE_THRESHOLD = 500;
 
 function nowMs(): number {
   return Date.now();
 }
 
 function normalizeMarkdownForHash(md: string): string {
-  // Canonicalize markdown to avoid re-embedding due to insignificant whitespace changes.
-  // Keep code blocks intact (code is critical for Wix docs).
-  return (
-    md
-      .replace(/\r\n?/g, '\n')
-      // trim trailing whitespace per line
-      .replace(/[^\S\n]+$/gm, '')
-      // collapse 3+ blank lines to 2
-      .replace(/\n{3,}/g, '\n\n')
-      .trim() +
-    '\n'
-  );
+  return md.replace(/\r\n?/g, '\n').replace(/[^\S\n]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
 
 function markdownToTextForChunking(md: string): string {
-  // Important: code examples are part of the docs and MUST be embedded.
-  // We keep fenced/inline code, but we still simplify links and whitespace.
-  return md
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
-    .replace(/[#>*_~|-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return md.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1').replace(/[#>*_~|-]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function isDefinitivelyGone(status: number): boolean {
@@ -106,7 +88,7 @@ function extractHtmlLang(html: string): string | null {
 }
 
 function isEnglishLang(lang: string | null): boolean {
-  if (!lang) return true; // if not provided, accept (wix pages usually are EN)
+  if (!lang) return true;
   const norm = lang.toLowerCase();
   return norm === 'en' || norm.startsWith('en-');
 }
@@ -119,9 +101,11 @@ function addHours(base: Date, hours: number): Date {
   return new Date(base.getTime() + hours * 60 * 60 * 1000);
 }
 
+function addDays(base: Date, days: number): Date {
+  return new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
 function stripHeavyHtml(html: string): string {
-  // Wix pages contain lots of JS and inline SVG; removing them drastically speeds up HTML->MD.
-  // Keep this conservative: remove only obvious heavy blocks.
   return html
     .replace(/<script\b[\s\S]*?<\/script>/gi, '')
     .replace(/<style\b[\s\S]*?<\/style>/gi, '')
@@ -135,12 +119,11 @@ async function claimDueDocPages(params: {
 }): Promise<Array<{ id: string; url: string; refreshIntervalHours: number }>> {
   const { now, limit } = params;
 
-  // Claim: inside a transaction, select due pages and immediately push their nextFetchAt
-  // forward a bit, so concurrent runs don't pick the same pages.
-  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  const txArg = async (tx: Prisma.TransactionClient) => {
     const due = await tx.docPage.findMany({
       where: {
         url: { startsWith: 'https://dev.wix.com/docs/' },
+        knowledgeLayer: 'OFFICIAL',
         OR: [{ nextFetchAt: null }, { nextFetchAt: { lte: now } }],
       },
       orderBy: [{ nextFetchAt: 'asc' }, { fetchedAt: 'asc' }],
@@ -158,7 +141,24 @@ async function claimDueDocPages(params: {
     });
 
     return due;
-  });
+  };
+
+  try {
+    return await (prisma as any).$transaction(txArg);
+  } catch {
+    const due = await prisma.docPage.findMany({
+      where: {
+        url: { startsWith: 'https://dev.wix.com/docs/' },
+        knowledgeLayer: 'OFFICIAL',
+        OR: [{ nextFetchAt: null }, { nextFetchAt: { lte: now } }],
+      },
+      orderBy: [{ nextFetchAt: 'asc' }, { fetchedAt: 'asc' }],
+      take: limit,
+      select: { id: true, url: true, refreshIntervalHours: true },
+    });
+
+    return due;
+  }
 }
 
 async function queueDiscoveredLinks(params: {
@@ -189,27 +189,26 @@ async function queueDiscoveredLinks(params: {
     linksMatchedAllowed += 1;
     if (sampleLinks.length < 20) sampleLinks.push(canon);
 
-    // Upsert with minimal changes; ingest owns scheduling.
     const existing = await prisma.docPage.findUnique({ where: { url: canon } });
     if (existing) {
       await prisma.docPage.update({ where: { url: canon }, data: { lastSeenAt: now } }).catch(() => undefined);
       continue;
     }
 
-    await prisma.docPage
-      .create({
-        data: {
-          url: canon,
-          title: null,
-          text: '',
-          contentHash: 'seed',
-          fetchedAt: new Date(0),
-          lastSeenAt: now,
-          nextFetchAt: now,
-          // default refreshIntervalHours applies
-        },
-      })
-      .catch(() => undefined);
+    await prisma.docPage.create({
+      data: {
+        url: canon,
+        title: null,
+        text: '',
+        contentHash: 'seed',
+        knowledgeLayer: 'TEMPORARY',
+        retentionUntil: addDays(now, TEMPORARY_TTL_DAYS),
+        retentionReason: 'seed_placeholder',
+        fetchedAt: new Date(0),
+        lastSeenAt: now,
+        nextFetchAt: now,
+      },
+    }).catch(() => undefined);
 
     inserted += 1;
   }
@@ -221,7 +220,6 @@ function buildVectorUpdateSql(params: {
   updates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }>;
 }): { sql: string; values: any[] } {
   const { updates } = params;
-
   const values: any[] = [];
   const rows: string[] = [];
 
@@ -246,8 +244,131 @@ WHERE c.id = v.id
   return { sql, values };
 }
 
+async function getEmbeddingPressureRatio(maxEmbeddings: number): Promise<{ ratio: number; officialPages: number; officialChunks: number }> {
+  const [officialPages, officialChunks] = await Promise.all([
+    prisma.docPage.count({ where: { knowledgeLayer: 'OFFICIAL' } }),
+    prisma.docChunk.count({ where: { knowledgeLayer: 'OFFICIAL' } }),
+  ]);
+  const divisor = Math.max(1, maxEmbeddings);
+  const pressureUnits = Math.max(officialChunks, officialPages);
+  const ratio = pressureUnits / divisor;
+  return { ratio, officialPages, officialChunks };
+}
+
+function getBudgetMode(ratio: number): IngestBudgetMode {
+  if (ratio >= BUDGET_AGGRESSIVE_THRESHOLD) return 'aggressive';
+  if (ratio >= BUDGET_WARNING_THRESHOLD) return 'warning';
+  return 'normal';
+}
+
+function applyBudgetMode(params: {
+  budgetMode: IngestBudgetMode;
+  limitPages: number;
+  maxChunksPerRun: number;
+  maxEmbeddings: number;
+  maxDiscoveredPages: number;
+  discoverLinks: boolean;
+  maxChunksPerPage: number;
+  chunkTokens: number;
+  overlapTokens: number;
+}): {
+  limitPages: number;
+  maxChunksPerRun: number;
+  maxEmbeddings: number;
+  maxDiscoveredPages: number;
+  discoverLinks: boolean;
+  maxChunksPerPage: number;
+  chunkTokens: number;
+  overlapTokens: number;
+  stoppedReason?: IngestStopReason;
+} {
+  const { budgetMode } = params;
+  if (budgetMode === 'aggressive') {
+    return {
+      limitPages: 0,
+      maxChunksPerRun: 0,
+      maxEmbeddings: 0,
+      maxDiscoveredPages: 0,
+      discoverLinks: false,
+      maxChunksPerPage: 0,
+      chunkTokens: params.chunkTokens,
+      overlapTokens: 0,
+      stoppedReason: 'budget_aggressive_mode',
+    };
+  }
+
+  if (budgetMode === 'warning') {
+    return {
+      limitPages: Math.max(1, Math.min(params.limitPages, 2)),
+      maxChunksPerRun: Math.max(1, Math.min(params.maxChunksPerRun, 8)),
+      maxEmbeddings: Math.max(0, Math.min(params.maxEmbeddings, 2)),
+      maxDiscoveredPages: 0,
+      discoverLinks: false,
+      maxChunksPerPage: Math.max(1, Math.min(params.maxChunksPerPage, 2)),
+      chunkTokens: Math.max(200, Math.min(params.chunkTokens, 950)),
+      overlapTokens: Math.min(params.overlapTokens, 40),
+      stoppedReason: 'budget_warning_mode',
+    };
+  }
+
+  return params;
+}
+
+async function cleanupExpiredTemporaryData(now: Date): Promise<void> {
+  await prisma.docChunk.deleteMany({
+    where: {
+      knowledgeLayer: 'TEMPORARY',
+      retentionUntil: { lte: now },
+    },
+  });
+
+  await prisma.docPage.deleteMany({
+    where: {
+      knowledgeLayer: 'TEMPORARY',
+      retentionUntil: { lte: now },
+    },
+  });
+}
+
+function officialPageData(params: {
+  url: string;
+  title: string | null;
+  markdown: string;
+  contentHash: string;
+  now: Date;
+  refreshIntervalHours?: number;
+}) {
+  const { url, title, markdown, contentHash, now, refreshIntervalHours } = params;
+  return {
+    url,
+    title,
+    text: markdown,
+    contentHash,
+    knowledgeLayer: 'OFFICIAL' as Prisma.DocPageUncheckedCreateInput['knowledgeLayer'],
+    retentionUntil: null,
+    retentionReason: null,
+    fetchedAt: now,
+    lastSeenAt: now,
+    nextFetchAt: addHours(now, refreshIntervalHours ?? 24),
+  };
+}
+
+function officialChunkData(pageId: string, idx: number, content: string) {
+  return {
+    pageId,
+    idx,
+    content,
+    knowledgeLayer: 'OFFICIAL' as Prisma.DocChunkUncheckedCreateInput['knowledgeLayer'],
+    retentionUntil: null,
+    lastAccessedAt: null,
+    embeddingModel: null,
+    dims: null,
+  };
+}
+
 export async function ingestDevWixArticles(
   opts?: {
+    startUrl?: string;
     limitPages?: number;
     maxChunksPerRun?: number;
     force?: boolean;
@@ -260,25 +381,17 @@ export async function ingestDevWixArticles(
     overlapTokens?: number;
   },
 ): Promise<IngestResult> {
-  const limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 1)));
-  const maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 400)));
-
+  let limitPages = Math.max(1, Math.min(10, Number(opts?.limitPages ?? 1)));
+  let maxChunksPerRun = Math.max(1, Math.min(5000, Number(opts?.maxChunksPerRun ?? 400)));
   const maxDurationMs = Math.max(500, Math.min(9000, Number(opts?.maxDurationMs ?? 6500)));
+  let maxEmbeddings = Math.max(0, Math.min(500, Number(opts?.maxEmbeddings ?? 8)));
+  let maxDiscoveredPages = Math.max(0, Math.min(500, Number(opts?.maxDiscoveredPages ?? 50)));
+  let discoverLinks = Boolean(opts?.discoverLinks ?? false);
+  let maxChunksPerPage = Math.max(1, Math.min(50, Number(opts?.maxChunksPerPage ?? 8)));
+  let chunkTokens = Math.max(200, Math.min(2000, Number(opts?.chunkTokens ?? 1100)));
+  let overlapTokens = Math.max(0, Math.min(400, Number(opts?.overlapTokens ?? 150)));
 
-  // Total embeddings per run (across all pages). Keep low for Hobby.
-  const maxEmbeddings = Math.max(0, Math.min(500, Number(opts?.maxEmbeddings ?? 8)));
-
-  const maxDiscoveredPages = Math.max(0, Math.min(500, Number(opts?.maxDiscoveredPages ?? 50)));
-
-  const discoverLinks = Boolean(opts?.discoverLinks ?? false);
-
-  // Per-page chunking controls for Hobby.
-  const maxChunksPerPage = Math.max(1, Math.min(50, Number(opts?.maxChunksPerPage ?? 8)));
-  const chunkTokens = Math.max(200, Math.min(2000, Number(opts?.chunkTokens ?? 1100)));
-  const overlapTokens = Math.max(0, Math.min(400, Number(opts?.overlapTokens ?? 150)));
-
-  const startUrl = DEFAULT_START_URL;
-
+  const startUrl = opts?.startUrl ?? DEFAULT_START_URL;
   const runStartedAt = new Date();
   const deadlineMs = nowMs() + maxDurationMs;
   const timeBudget = { shouldStop: () => nowMs() > deadlineMs };
@@ -287,15 +400,12 @@ export async function ingestDevWixArticles(
   let stored = 0;
   let skippedUnchanged = 0;
   let chunksUpserted = 0;
-
   let embedFailures = 0;
   let lastEmbedErrorName: string | null = null;
   let lastEmbedError: string | null = null;
   let embeddingsAttempted = 0;
   let embeddingBatches = 0;
   let embeddingBatchSize = 0;
-
-  // diagnostics
   let startFetched = false;
   let startStatus: number | null = null;
   let startHtmlBytes: number | null = null;
@@ -305,8 +415,6 @@ export async function ingestDevWixArticles(
   let linksMatchedAllowed = 0;
   const sampleLinks: string[] = [];
   let stoppedReason: IngestStopReason | undefined;
-
-  // perf
   let msFetch = 0;
   let msTransform = 0;
   let msChunk = 0;
@@ -314,10 +422,79 @@ export async function ingestDevWixArticles(
   let msDb = 0;
   let msDiscover = 0;
 
+  const pressure = await getEmbeddingPressureRatio(maxEmbeddings);
+  const budgetMode = getBudgetMode(pressure.ratio);
+  const adjusted = applyBudgetMode({
+    budgetMode,
+    limitPages,
+    maxChunksPerRun,
+    maxEmbeddings,
+    maxDiscoveredPages,
+    discoverLinks,
+    maxChunksPerPage,
+    chunkTokens,
+    overlapTokens,
+  });
+
+  limitPages = adjusted.limitPages;
+  maxChunksPerRun = adjusted.maxChunksPerRun;
+  maxEmbeddings = adjusted.maxEmbeddings;
+  maxDiscoveredPages = adjusted.maxDiscoveredPages;
+  discoverLinks = adjusted.discoverLinks;
+  maxChunksPerPage = adjusted.maxChunksPerPage;
+  chunkTokens = adjusted.chunkTokens;
+  overlapTokens = adjusted.overlapTokens;
+  stoppedReason = adjusted.stoppedReason;
+
+  await cleanupExpiredTemporaryData(runStartedAt);
+
+  if (budgetMode === 'aggressive') {
+    return {
+      ok: true,
+      startUrl,
+      limitPages,
+      fetched,
+      stored,
+      skippedUnchanged,
+      chunksUpserted,
+      discoveredQueued: 0,
+      stoppedReason,
+      budgetMode,
+      officialPages: pressure.officialPages,
+      officialChunks: pressure.officialChunks,
+      embeddingPressureRatio: pressure.ratio,
+      startFetched,
+      startStatus,
+      startHtmlBytes,
+      startFetchErrorName,
+      startFetchError,
+      linksFoundTotal,
+      linksMatchedAllowed,
+      sampleLinks,
+      embedFailures,
+      lastEmbedErrorName,
+      lastEmbedError,
+      maxDurationMs,
+      maxEmbeddings,
+      embeddingsAttempted,
+      budgetHit: true,
+      budgetHitType: 'embeddings',
+      maxChunksPerPage,
+      chunkTokens,
+      overlapTokens,
+      msFetch,
+      msTransform,
+      msChunk,
+      msEmbed,
+      msDb,
+      msDiscover,
+      embeddingBatches,
+      embeddingBatchSize,
+    };
+  }
+
   try {
     if (timeBudget.shouldStop()) {
-      const budgetHit = true;
-      const budgetHitType: 'time' | 'embeddings' | null = 'time';
       return {
         ok: true,
         startUrl,
@@ -328,6 +505,10 @@ export async function ingestDevWixArticles(
         chunksUpserted,
         discoveredQueued: 0,
         stoppedReason: 'time_budget_exhausted',
+        budgetMode,
+        officialPages: pressure.officialPages,
+        officialChunks: pressure.officialChunks,
+        embeddingPressureRatio: pressure.ratio,
         startFetched,
         startStatus,
         startHtmlBytes,
@@ -342,8 +523,8 @@ export async function ingestDevWixArticles(
         maxDurationMs,
         maxEmbeddings,
         embeddingsAttempted,
-        budgetHit,
-        budgetHitType,
+        budgetHit: true,
+        budgetHitType: 'time',
         maxChunksPerPage,
         chunkTokens,
         overlapTokens,
@@ -376,7 +557,7 @@ export async function ingestDevWixArticles(
 
       const lang = extractHtmlLang(html);
       if (!isEnglishLang(lang)) {
-        await prisma.docPage.delete({ where: { url: startUrl } }).catch(() => undefined);
+        await (prisma.docPage as any).delete?.({ where: { url: startUrl } }).catch(() => undefined);
       } else {
         const tTr0 = nowMs();
         const { title, markdown } = htmlToMarkdown(html);
@@ -393,6 +574,9 @@ export async function ingestDevWixArticles(
             title,
             text: markdown,
             contentHash,
+            knowledgeLayer: 'OFFICIAL',
+            retentionUntil: null,
+            retentionReason: null,
             fetchedAt: runStartedAt,
             lastSeenAt: runStartedAt,
           },
@@ -400,6 +584,9 @@ export async function ingestDevWixArticles(
             title,
             text: markdown,
             contentHash,
+            knowledgeLayer: 'OFFICIAL',
+            retentionUntil: null,
+            retentionReason: null,
             fetchedAt: runStartedAt,
             lastSeenAt: runStartedAt,
           },
@@ -437,6 +624,10 @@ export async function ingestDevWixArticles(
       chunksUpserted,
       discoveredQueued: 0,
       stoppedReason: 'start_fetch_failed',
+      budgetMode,
+      officialPages: pressure.officialPages,
+      officialChunks: pressure.officialChunks,
+      embeddingPressureRatio: pressure.ratio,
       startFetched,
       startStatus,
       startHtmlBytes,
@@ -471,6 +662,7 @@ export async function ingestDevWixArticles(
     ? await prisma.docPage.findMany({
         where: {
           url: { startsWith: 'https://dev.wix.com/docs/' },
+          knowledgeLayer: 'OFFICIAL',
         },
         orderBy: [{ fetchedAt: 'asc' }],
         take: limitPages,
@@ -479,7 +671,6 @@ export async function ingestDevWixArticles(
     : await claimDueDocPages({ now: runStartedAt, limit: limitPages });
 
   const discoveredQueued = targets.length;
-
   let discoveredRemaining = maxDiscoveredPages;
 
   for (const t of targets) {
@@ -487,7 +678,6 @@ export async function ingestDevWixArticles(
       stoppedReason = 'time_budget_exhausted';
       break;
     }
-
     if (fetched >= limitPages) break;
 
     const url = t.url;
@@ -502,26 +692,19 @@ export async function ingestDevWixArticles(
       msFetch += nowMs() - tFetch0;
 
       const tDbStatus0 = nowMs();
-      await prisma.docPage
-        .update({ where: { url }, data: { httpStatus: res.status } })
-        .catch(() => undefined);
+      await prisma.docPage.update({ where: { url }, data: { httpStatus: res.status } }).catch(() => undefined);
       msDb += nowMs() - tDbStatus0;
 
       if (isDefinitivelyGone(res.status)) {
         const tDbDel0 = nowMs();
-        await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
+        await (prisma.docPage as any).delete?.({ where: { url } }).catch(() => undefined);
         msDb += nowMs() - tDbDel0;
         continue;
       }
 
       if (!res.ok) {
         const tDbUpd0 = nowMs();
-        await prisma.docPage
-          .update({
-            where: { url },
-            data: { nextFetchAt: addMinutes(runStartedAt, 60) },
-          })
-          .catch(() => undefined);
+        await prisma.docPage.update({ where: { url }, data: { nextFetchAt: addMinutes(runStartedAt, 60) } }).catch(() => undefined);
         msDb += nowMs() - tDbUpd0;
         continue;
       }
@@ -549,9 +732,10 @@ export async function ingestDevWixArticles(
       }
 
       const lang = extractHtmlLang(html);
-      if (!isEnglishLang(lang)) {
+      const english = isEnglishLang(lang);
+      if (!english) {
         const tDbDel0 = nowMs();
-        await prisma.docPage.delete({ where: { url } }).catch(() => undefined);
+        await (prisma.docPage as any).delete?.({ where: { url } }).catch(() => undefined);
         msDb += nowMs() - tDbDel0;
         continue;
       }
@@ -569,42 +753,30 @@ export async function ingestDevWixArticles(
 
       if (existing?.contentHash === contentHash) {
         const tDbUpd0 = nowMs();
-        await prisma.docPage
-          .update({
-            where: { url },
-            data: {
-              lastSeenAt: runStartedAt,
-              fetchedAt: runStartedAt,
-              nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
-            },
-          })
-          .catch(() => undefined);
+        await prisma.docPage.update({
+          where: { url },
+          data: {
+            lastSeenAt: runStartedAt,
+            fetchedAt: runStartedAt,
+            knowledgeLayer: 'OFFICIAL',
+            retentionUntil: null,
+            retentionReason: null,
+            nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
+          },
+        }).catch(() => undefined);
         msDb += nowMs() - tDbUpd0;
         skippedUnchanged += 1;
         continue;
       }
 
+      const pageData = officialPageData({ url, title, markdown, contentHash, now: runStartedAt, refreshIntervalHours: t.refreshIntervalHours });
       const tDbUpsert0 = nowMs();
-      const page = await prisma.docPage.upsert({
+      const upsertedPage = await prisma.docPage.upsert({
         where: { url },
-        create: {
-          url,
-          title,
-          text: markdown,
-          contentHash,
-          fetchedAt: runStartedAt,
-          lastSeenAt: runStartedAt,
-          nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
-        },
-        update: {
-          title,
-          text: markdown,
-          contentHash,
-          fetchedAt: runStartedAt,
-          lastSeenAt: runStartedAt,
-          nextFetchAt: addHours(runStartedAt, t.refreshIntervalHours ?? 24),
-        },
+        create: pageData,
+        update: pageData,
       });
+      const page = upsertedPage ?? { id: url, ...pageData };
       msDb += nowMs() - tDbUpsert0;
 
       stored += 1;
@@ -618,21 +790,17 @@ export async function ingestDevWixArticles(
       const tokenChunks = chunkTextByTokens(chunkSource, { chunkTokens, overlapTokens });
       msChunk += nowMs() - tChunk0;
 
-      const embeddingsInputs: Array<{ id: string; content: string }> = [];
-      const vectorUpdates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }> = [];
-
+      const chunkRows: Array<{ idx: number; content: string }> = [];
       let idx = 0;
       for (const c of tokenChunks) {
         if (timeBudget.shouldStop()) {
           stoppedReason = 'time_budget_exhausted';
           break;
         }
-
         if (chunksUpserted >= maxChunksPerRun) {
           stoppedReason = 'maxChunksPerRun';
           break;
         }
-
         if (idx >= maxChunksPerPage) {
           stoppedReason = stoppedReason ?? 'maxChunksPerPage';
           break;
@@ -640,51 +808,58 @@ export async function ingestDevWixArticles(
 
         const content = c.text;
         if (!content || !content.trim()) continue;
-
-        const tDbChunk0 = nowMs();
-        const created = await prisma.docChunk.create({
-          data: {
-            pageId: page.id,
-            idx,
-            content,
-            embeddingModel: null,
-            dims: null,
-          },
-        });
-        msDb += nowMs() - tDbChunk0;
-
-        if (embeddingsAttempted >= maxEmbeddings) {
-          stoppedReason = stoppedReason ?? 'embed_budget_exhausted';
-          idx += 1;
-          continue;
-        }
-
-        embeddingsAttempted += 1;
-        embeddingsInputs.push({ id: created.id, content });
-
+        chunkRows.push({ idx, content });
         idx += 1;
       }
 
-      if (embeddingsInputs.length > 0 && !timeBudget.shouldStop()) {
+      if (chunkRows.length === 0 && chunkSource.trim()) {
+        chunkRows.push({ idx: 0, content: chunkSource.trim() });
+      }
+
+      if (chunkRows.length > 0) {
+        const data = chunkRows.map((chunk) => officialChunkData(page.id, chunk.idx, chunk.content));
+        const tDbCreateMany0 = nowMs();
+        await prisma.docChunk.createMany({
+          data,
+        });
+        msDb += nowMs() - tDbCreateMany0;
+      }
+
+      const vectorUpdates: Array<{ id: string; vectorLiteral: string; model: string; dims: number }> = [];
+
+      for (const chunk of chunkRows) {
+        if (embeddingsAttempted >= maxEmbeddings) {
+          stoppedReason = stoppedReason ?? 'embed_budget_exhausted';
+          break;
+        }
+
+        const oneChunkResult = await prisma.$queryRaw<any[]>`
+          SELECT id, idx
+          FROM "DocChunk"
+          WHERE "pageId" = ${page.id} AND idx = ${chunk.idx}
+          LIMIT 1
+        `;
+        const found = Array.isArray(oneChunkResult) ? oneChunkResult[0] : null;
+        if (!found?.id) continue;
+
+        embeddingsAttempted += 1;
         try {
           const tEmb0 = nowMs();
-          const emb = await embedTexts(embeddingsInputs.map((x) => x.content));
+          const emb = await embedText(chunk.content);
           msEmbed += nowMs() - tEmb0;
 
           embeddingBatches += 1;
-          embeddingBatchSize = emb.vectors.length;
+          embeddingBatchSize = 1;
 
-          for (let i = 0; i < emb.vectors.length; i += 1) {
-            vectorUpdates.push({
-              id: embeddingsInputs[i]!.id,
-              vectorLiteral: embeddingToSqlVectorLiteral(emb.vectors[i]!),
-              model: emb.model,
-              dims: emb.dims,
-            });
-            chunksUpserted += 1;
-          }
+          vectorUpdates.push({
+            id: found.id,
+            vectorLiteral: embeddingToSqlVectorLiteral(emb.vector),
+            model: emb.model,
+            dims: emb.dims,
+          });
+          chunksUpserted += 1;
         } catch (e: any) {
-          embedFailures += embeddingsInputs.length;
+          embedFailures += 1;
           lastEmbedErrorName = e?.name ?? 'Error';
           lastEmbedError = e?.message ?? String(e);
         }
@@ -693,34 +868,32 @@ export async function ingestDevWixArticles(
       if (vectorUpdates.length > 0 && !timeBudget.shouldStop()) {
         const tDbVec0 = nowMs();
         const { sql, values } = buildVectorUpdateSql({ updates: vectorUpdates });
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         await prisma.$executeRawUnsafe(sql, ...values);
         msDb += nowMs() - tDbVec0;
       }
 
-      if (stoppedReason && stoppedReason !== 'embed_budget_exhausted') break;
-    } catch {
+      if (stoppedReason && stoppedReason !== 'embed_budget_exhausted' && stoppedReason !== 'budget_warning_mode') break;
+    } catch (e: any) {
       const tDbUpd0 = nowMs();
-      await prisma.docPage
-        .update({
-          where: { url },
-          data: { nextFetchAt: addMinutes(runStartedAt, 60) },
-        })
-        .catch(() => undefined);
+      await prisma.docPage.update({ where: { url }, data: { nextFetchAt: addMinutes(runStartedAt, 60) } }).catch(() => undefined);
       msDb += nowMs() - tDbUpd0;
       continue;
     }
   }
 
-  const budgetHit = stoppedReason === 'time_budget_exhausted' || stoppedReason === 'embed_budget_exhausted';
+  const budgetHit =
+    stoppedReason === 'time_budget_exhausted' ||
+    stoppedReason === 'embed_budget_exhausted' ||
+    stoppedReason === 'budget_warning_mode' ||
+    stoppedReason === 'budget_aggressive_mode';
   const budgetHitType: 'time' | 'embeddings' | null =
     stoppedReason === 'time_budget_exhausted'
       ? 'time'
-      : stoppedReason === 'embed_budget_exhausted'
+      : stoppedReason === 'embed_budget_exhausted' || stoppedReason === 'budget_warning_mode' || stoppedReason === 'budget_aggressive_mode'
         ? 'embeddings'
         : null;
 
-  const result: IngestResult = {
+  return {
     ok: true,
     startUrl,
     limitPages,
@@ -729,6 +902,11 @@ export async function ingestDevWixArticles(
     skippedUnchanged,
     chunksUpserted,
     discoveredQueued,
+    stoppedReason,
+    budgetMode,
+    officialPages: pressure.officialPages,
+    officialChunks: pressure.officialChunks,
+    embeddingPressureRatio: pressure.ratio,
     startFetched,
     startStatus,
     startHtmlBytes,
@@ -757,6 +935,4 @@ export async function ingestDevWixArticles(
     embeddingBatches,
     embeddingBatchSize,
   };
-  if (stoppedReason) result.stoppedReason = stoppedReason;
-  return result;
 }

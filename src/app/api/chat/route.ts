@@ -1,309 +1,118 @@
 import { randomUUID } from 'crypto';
 
 import { NextResponse } from 'next/server';
-import { runAssistant } from '../../../backend/assistant';
-import { logEvent } from '../../../backend/log';
-import { chooseModel } from '../../../backend/modelRouter';
-import {
-  formatDevWixContext,
-  retrieveDevWixContext,
-} from '../../../backend/devWixDocs/retrieve';
-import { extractResponseText } from '../../../backend/responses';
-import {
-  getConversationState,
-  saveConversationState,
-} from '../../../backend/conversationState';
 
-function getSessionId(req: Request): string {
-  const headerValue = req.headers.get('x-botcow-session-id')?.trim();
-  return headerValue || randomUUID();
+import { runAssistant } from '../../../backend/assistant';
+import type { ChatRequestBody } from '../../../backend/contracts/chat';
+import { buildCoreInstructions } from '../../../backend/prompt/buildCoreInstructions';
+import { chooseModel } from '../../../backend/modelRouter';
+import { normalizePublicChatError, normalizePublicChatSuccess } from '../../../backend/responses';
+import { logEvent } from '../../../backend/log';
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeSessionId(req: Request): string {
+  const fromHeader = req.headers.get('x-botcow-session-id')?.trim();
+  return fromHeader || randomUUID();
+}
+
+function validateBody(body: unknown): body is ChatRequestBody {
+  if (!isPlainObject(body)) return false;
+  if (!Array.isArray(body.messages)) return false;
+  return true;
 }
 
 export async function POST(req: Request) {
   const startedAt = Date.now();
-  const { messages } = await req.json();
-
-  if (!messages || !Array.isArray(messages)) {
-    return NextResponse.json({ error: 'Invalid messages' }, { status: 400 });
-  }
-
-  const sessionId = getSessionId(req);
-
-  const systemMessage = {
-    role: 'system' as const,
-    content: `
-Ты работаешь не с одним проектом, а со всеми приватными репозиториями владельца.
-Если пользователь явно указал репозиторий — работаешь с ним.
-Если нет — просишь пользователя уточнить репозиторий.
-Если пользователь явно указал ветку репозитория:
-— работаешь ТОЛЬКО в указанной ветке;
-— не создаешь новых веток;
-— не спрашиваешь у пользователя разрешения на создание новых веток.
-
-ТЫ НИКОГДА НЕ ОБМАНЫВАЕШЬ, И НЕ ВЫДУМЫВАЕШЬ ДАННЫЕ:
-— не выдумываешь файлы, директории, содержимое, конфигурации;
-— не выдумываешь структуру репозитория;
-— не выдумываешь результаты CI или деплоя.
-Любая фактическая информация о коде и инфраструктуре всегда получается ТОЛЬКО через tools.
-
-ТЫ НИКОГДА НЕ ОБЕЩАЕШЬ ПОЛЬЗОВАТЕЛЮ ТОГО, ЧТО СДЕЛАТЬ НЕ МОЖЕШЬ:
-— если тебе не хватает данных или информации, ты прямо и четко говоришь об этом;
-— если tools не позволяют сделать то, что запланировано ты прямо говоришь об этом.
-
-Ты НИКОГДА НЕ стремишься угодить пользователю ценой сокрытия информации.
-
-Ты НИКОГДА НЕ ставишь костыли:
-— работаешь только по ТЗ и указаниям пользователя;
-— ТЗ (docs/spec.md) - приоритет;
-— если указания пользователя противоречат ТЗ, информируешь его об этом.
-
-ТЫ ВСЕГДА СТРЕМИШЬСЯ:
-— коротко, но четко информировать пользователя о реальной ситуации;
-— делать предложения по решению проблем и оптимизации проекта;
-— обсуждать с ним возникшие проблемы или противоречия;
-— находить оптимальные и взвешенные решения.
-
-Примерный образец сценария выполнения задачи, поставленной пользователем
-Анализируешь поставленную задачу:
-— не просишь пользователя дать какие-либо дополнительные разрешения;
-— сразу находишь названный репозиторий;
-— через GitHub-tools смотришь структуру и читаешь содержимое релевантных файлов;
-— сверяешь их с требованиями ТЗ (docs/spec.md) и задачей пользователя;
-— если необходимо, запрашиваешь уточнения или дополнительную информацию.
-— на основании выполненного анализа формируешь краткий план выполнения задачи (шаги);
-— предлагаешь его пользователю;
-— получаешь одобрение или дополнительные инструкции;
-— при необходимости корректируешь план до окончательного варианта;
-— ТОЛЬКО ТЕПЕРЬ просишь пользователя разрешить выполнение плана.
-Выполняешь шаги последовательно через tools (GitHub, Vercel, при необходимости — другие).
-Если нужны тесты/CI — запускаешь их через workflow и проверяешь статус.
-Создаёшь или обновляешь Pull Request:
-   — даёшь summary;
-   — перечисляешь изменения;
-   — перечисляешь затронутых файлы;
-   — описываешь, как проверить изменения;
-   — добавляешь статус CI;
-   — добавляешь ссылку на preview-деплой, если она доступна через Vercel-tools.
-Докладываешь пользователю об окончании выполнения работ:
-— НЕ описываешь подробно, что было сделано (только по запросу);
-— НЕ перечисляешь затронутых файлов (только по запросу);
-— докладываешь, что план выполнен (полностью или частично);
-— даешь кратко только ту информацию, которой не было в плане (если такая есть).
-При существенных изменениях в проекте предлагаешь создать/обновить документацию:
-   — README.md;
-   — ARCHITECTURE.md;
-   — CHANGELOG.md;
-   — TODO.md;
-   — docs/spec.md;
-   — и другие файлы по запросу пользователя.
-
-Правила использования tools:
-— если тебе нужна любая информация о коде, структуре, конфигурации или истории — сначала пробуешь получить её через GitHub-tools;
-— не просишь пользователя вручную распечатывать код или структуру репозитория, если это можно сделать через tools;
-— если tool возвращает ошибку (404, 401, 422 и т.п.) — честно сообщаешь об этом, кратко поясняешь и предлагаешь следующий шаг;
-— не вызываешь неизвестные или неописанные tools;
-— не выполняешь бессмысленные вызовы tools (например, повторный полный обход репозитория без необходимости).
-
-Работа с GitHub:
-— перед любыми изменениями читаешь реальный код и сверяешься с ТЗ:
-  • get_repo_structure / list_files — чтобы увидеть дерево;
-  • get_file — чтобы получить содержимое файлов;
-  • search_in_repo — чтобы найти нужный код;
-  • get_recent_commits — чтобы понять историю изменений;
-— любые правки делаешь только в указанной тебе ветке:
-  • create_branch — создаёшь feature-ветку от main (только по команде пользователя);
-  • commit_file / delete_file — изменяешь файлы в своей ветке;
-  • create_pull_request — оформляешь PR;
-  • comment_on_pr — оставляешь план, статус, ссылки;
-  • merge_pull_request — по запросу пользователя мержишь PR (merge/squash/rebase);
-— управлением задачами занимаешься через:
-  • create_issue / update_issue / list_issues.
-
-Работа с Vercel:
-— для деплоев и CI используешь только Vercel-tools:
-  • run_workflow / get_workflow_status — для CI;
-  • vercel_trigger_deploy / vercel_get_latest_deployments / vercel_get_deployment_status / vercel_redeploy (если доступны);
-— никогда не придумываешь URL деплоя: всегда берёшь его из Vercel-tools.
-
-Модели:
-— выбор конкретной модели делает backend (chooseModel);
-— ты не обсуждаешь выбор модели с пользователем и не комментируешь его.
-
-Ограничения и безопасность:
-— НЕ выполняешь продакшн-деплой и мерж в основную ветку без запроса подтверждения пользователя;
-— если данных недостаточно — получаешь их через tools;
-— если tools не достаточно, запрашиваешь у пользователя;
-— если задача противоречит ТЗ или небезопасна — объясняешь причину и предлагаешь безопасную альтернативу.
-
-Стиль ответов пользователю:
-— отвечаешь кратко, структурированно, по сути;
-— используешь простые слова, без лишней «воды».
-
-Дополнение про базу знаний (RAG контекст):
-— Если в запросе присутствует блок CONTEXT/SOURCES, воспринимай его как актуальную базу знаний.
-— Если ответ можно вывести из контекста — опирайся на него; не выдумывай API/поведение.
-— Если контекст недостаточен — прямо скажи, что в базе знаний нет ответа, и предложи уточнить вопрос.
-— При ссылках на документацию предпочитай указывать Source URLs when referencing docs.
-
-Дополнение про использование примеров из контекста при написании кода:
-— Если in CONTEXT/SOURCES есть релевантные фрагменты кода или примеры API, используй их как первичный источник истины (имена, сигнатуры, порядок вызовов).
-— Не задавай уточняющие вопросы, если ответ уже однозначно следует из контекста (например, обязательные параметры or правильный flow).
-— Если контекст предлагает несколько вариантов, выбери наиболее типовой и явно укажи, что это выбор; уточняющий вопрос задавай только если выбор критичен.
-`,
-  };
-
-  const lastUser = [...messages].reverse().find((m: any) => m?.role === 'user');
-  const userQuery = typeof lastUser?.content === 'string' ? lastUser.content : null;
-
-  let ragMessage: { role: 'system'; content: string } | null = null;
-  if (userQuery) {
-    try {
-      const retrieved = await retrieveDevWixContext({
-        query: userQuery,
-        topK: 6,
-        maxChars: 6000,
-      });
-      const ctx = formatDevWixContext(retrieved.chunks);
-      if (ctx) {
-        ragMessage = {
-          role: 'system',
-          content:
-            ctx +
-            '\n\nUse this context only when relevant. Prefer citing the Source URLs when referencing docs.',
-        };
-      }
-    } catch {
-      ragMessage = null;
-    }
-  }
-
-  const fullMessages = ragMessage
-    ? [systemMessage, ragMessage, ...messages]
-    : [systemMessage, ...messages];
-
-  const routing = chooseModel(fullMessages);
-  const routingDebug =
-    process.env.NODE_ENV !== 'production' && 'debug' in routing ? routing.debug : undefined;
-  const instructions = fullMessages
-    .filter((message) => message.role === 'system' && typeof message.content === 'string')
-    .map((message) => message.content.trim())
-    .filter(Boolean)
-    .join('\n\n');
-
-  if (!userQuery) {
-    return NextResponse.json({ error: 'Invalid messages' }, { status: 400 });
-  }
-
-  const persistedState = await getConversationState(sessionId);
-  const state = persistedState?.conversationId
-    ? { conversationId: persistedState.conversationId }
-    : {};
+  const sessionId = normalizeSessionId(req);
 
   try {
+    const rawBody = await req.json();
+
+    if (!validateBody(rawBody)) {
+      return NextResponse.json(
+        normalizePublicChatError({
+          sessionId,
+          code: 'invalid_messages',
+          message: 'Invalid messages.',
+        }),
+        { status: 400 },
+      );
+    }
+
+    const messages = rawBody.messages;
+    const routing = chooseModel(messages, rawBody.hints ?? {});
+    const instructions = buildCoreInstructions({
+      routing,
+      hints: rawBody.hints,
+    });
+
     const result = await runAssistant({
       instructions,
-      userInput: userQuery,
-      routing,
-      state,
-    });
-    const ms = Date.now() - startedAt;
-    const response = result.response;
-    const responseText = extractResponseText(response);
-    const responsePhase = 'final_answer';
-
-    await saveConversationState({
-      sessionId,
-      conversationId: result.state.conversationId,
-      latestResponseId: result.state.latestResponseId,
+      messages,
+      routing: {
+        model: routing.model,
+        reasoning: routing.reasoning,
+        reason: routing.reason,
+        text: { verbosity: routing.model === 'gpt-5.4' ? 'medium' : 'low' },
+        maxOutputTokens: routing.model === 'gpt-5.4' ? 8000 : 4000,
+      },
+      state: rawBody.state ?? {},
     });
 
     await logEvent('chat_request_completed', {
       sessionId,
-      messages,
-      toolCalls: result.toolCalls,
-      hasCompletion: !!response,
-      durationMs: ms,
       model: routing.model,
       modelReason: routing.reason,
       reasoningEffort: routing.reasoning?.effort ?? null,
-      requestedReasoningEffort: result.reasoningDecision.requestedReasoningEffort,
-      sentReasoningEffort: result.reasoningDecision.sentReasoningEffort,
-      reasoningSuppressedReason: result.reasoningDecision.reasoningSuppressedReason,
+      durationMs: Date.now() - startedAt,
+      ok: !result.error,
+      responseId: result.response?.id ?? null,
       conversationId: result.state.conversationId,
-      auxiliaryLatestResponseId: persistedState?.latestResponseId ?? null,
-      responseId: response?.id ?? null,
-      internal_code: result.error?.internalCode ?? null,
-      ...(routingDebug !== undefined ? { routingDebug } : {}),
+      latestResponseId: result.state.latestResponseId,
+      toolCalls: result.toolCalls.length,
     });
 
-    if (result.error) {
+    if (result.error || !result.response) {
       return NextResponse.json(
-        {
-          ok: false,
+        normalizePublicChatError({
           sessionId,
-          response: null,
-          error: {
-            code: result.error.publicCode,
-            message: result.error.publicMessage,
-          },
-        },
+          code: result.error?.publicCode ?? 'assistant_run_failed',
+          message: result.error?.publicMessage ?? 'Chat request failed.',
+        }),
         { status: 500 },
       );
     }
 
-    if (!response || !responseText) {
-      return NextResponse.json(
-        {
-          ok: false,
-          sessionId,
-          response: null,
-          error: {
-            code: 'assistant_run_failed',
-            message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
-          },
+    return NextResponse.json(
+      normalizePublicChatSuccess({
+        sessionId,
+        response: result.response,
+        routing,
+        state: {
+          conversationId: result.state.conversationId,
+          previousResponseId: result.state.latestResponseId,
         },
-        { status: 500 },
-      );
-    }
-
-    return NextResponse.json({
-      ok: true,
-      sessionId,
-      response: {
-        id: response.id,
-        model: response.model,
-        phase: responsePhase,
-        outputText: responseText,
-      },
-      error: null,
-    });
+      }),
+    );
   } catch (error: any) {
-    const ms = Date.now() - startedAt;
-
     await logEvent('chat_request_failed', {
       sessionId,
-      messages,
-      conversationId: persistedState?.conversationId ?? null,
-      auxiliaryLatestResponseId: persistedState?.latestResponseId ?? null,
+      durationMs: Date.now() - startedAt,
       error: {
-        message: error?.message,
-        name: error?.name,
-        status: error?.status,
+        name: error?.name ?? null,
+        message: error?.message ?? 'Unknown error',
       },
-      durationMs: ms,
-      internal_code: 'assistant_run_failed',
     });
 
     return NextResponse.json(
-      {
-        ok: false,
+      normalizePublicChatError({
         sessionId,
-        response: null,
-        error: {
-          code: 'assistant_run_failed',
-          message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
-        },
-      },
+        code: 'chat_request_failed',
+        message: 'Chat request failed.',
+      }),
       { status: 500 },
     );
   }

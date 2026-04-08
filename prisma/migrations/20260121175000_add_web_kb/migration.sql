@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS "WebChunk" (
   "pageId" TEXT NOT NULL,
   "idx" INTEGER NOT NULL,
   "content" TEXT NOT NULL,
-  "embedding" vector(3072),
+  "embedding" vector(1536),
   "embeddingModel" TEXT,
   "dims" INTEGER,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

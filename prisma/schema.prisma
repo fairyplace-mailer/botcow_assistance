@@ -95,7 +95,7 @@ model DocChunk {
   retentionUntil DateTime?
   lastAccessedAt DateTime?
 
-  embedding      Unsupported("vector(3072)")?
+  embedding      Unsupported("vector(1536)")?
   embeddingModel String?
   dims           Int?
 

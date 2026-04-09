@@ -30,3 +30,4 @@ export async function handleToolCall(name: string, args: any) {
     throw new Error(`Unknown tool: ${name}`);
   }
   return handler(args);
+}

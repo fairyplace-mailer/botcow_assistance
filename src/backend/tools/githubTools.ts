@@ -31,24 +31,21 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_repo_structure',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Get repository structure. Optionally scope to a ref and path prefix.',
       parameters: {
         type: 'object',
         properties: {
           repo: {
             type: 'string',
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name.',
           },
           ref: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Git ref: branch, tag, or commit SHA.',
           },
           pathPrefix: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Only include files and directories under this path prefix.',
           },
         },
       },
@@ -58,19 +55,21 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_files',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'List files in a repository directory. Optionally scope to a ref.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          path: {
+            type: 'string',
+            description: 'Directory path relative to repository root.',
+          },
           repo: {
             type: 'string',
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name.',
           },
           ref: {
             type: 'string',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Git ref: branch, tag, or commit SHA.',
           },
         },
       },
@@ -80,19 +79,21 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_file',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Get file contents from a repository path. Optionally scope to a ref.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          path: {
+            type: 'string',
+            description: 'File path relative to repository root.',
+          },
           repo: {
             type: 'string',
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name.',
           },
           ref: {
             type: 'string',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Git ref: branch, tag, or commit SHA.',
           },
         },
         required: ['path'],
@@ -103,24 +104,29 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_search_in_repo',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Search within a repository using a query, with optional path filter and pagination.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          query: {
+            type: 'string',
+            description: 'Search query.',
+          },
+          path: {
+            type: 'string',
+            description: 'Optional path filter relative to repository root.',
+          },
           repo: {
             type: 'string',
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name.',
           },
           per_page: {
             type: 'number',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Number of results per page.',
           },
           page: {
             type: 'number',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Page number for paginated results.',
           },
         },
         required: ['query'],
@@ -143,7 +149,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_pull_request',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Create a GitHub pull request.',
       parameters: {
         type: 'object',
         properties: {
@@ -161,7 +167,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_merge_pull_request',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Merge a GitHub pull request.',
       parameters: {
         type: 'object',
         properties: {
@@ -177,7 +183,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_issue',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Create a GitHub issue.',
       parameters: {
         type: 'object',
         properties: {
@@ -195,7 +201,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_update_issue',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Update a GitHub issue.',
       parameters: {
         type: 'object',
         properties: {
@@ -215,7 +221,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_issues',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'List GitHub issues.',
       parameters: {
         type: 'object',
         properties: {
@@ -232,19 +238,21 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_branch',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Create a Git branch.',
       parameters: {
         type: 'object',
         properties: {
-          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          branch: {
+            type: 'string',
+            description: 'New branch name.',
+          },
           base: {
             type: 'string',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Base branch or commit SHA to branch from.',
           },
           repo: {
             type: 'string',
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name.',
           },
         },
         required: ['branch'],
@@ -255,21 +263,26 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_commit_file',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Create or update a file in a repository and commit the change.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          path: {
+            type: 'string',
+            description: 'File path relative to repository root.',
+          },
           content: {
             type: 'string',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Full file content to write.',
           },
           message: { type: 'string', description: 'Commit message.' },
-          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          branch: {
+            type: 'string',
+            description: 'Branch name to commit to.',
+          },
           repo: {
             type: 'string',
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name.',
           },
         },
         required: ['path', 'content', 'message', 'branch'],
@@ -280,17 +293,22 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_delete_file',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Delete a file from a repository and commit the change.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          path: {
+            type: 'string',
+            description: 'File path relative to repository root.',
+          },
           message: { type: 'string', description: 'Commit message.' },
-          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          branch: {
+            type: 'string',
+            description: 'Branch name to commit to.',
+          },
           repo: {
             type: 'string',
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name.',
           },
         },
         required: ['path', 'message', 'branch'],
@@ -303,7 +321,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_runs',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'List GitHub Actions workflow runs.',
       parameters: {
         type: 'object',
         properties: {
@@ -319,7 +337,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_run_jobs',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'List jobs for a GitHub Actions workflow run.',
       parameters: {
         type: 'object',
         properties: {
@@ -334,7 +352,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_download_workflow_run_logs',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Download logs for a GitHub Actions workflow run.',
       parameters: {
         type: 'object',
         properties: {
@@ -351,8 +369,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_workflow_run_logs_text',
-      description:
-        '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Get workflow run logs as text.',
       parameters: {
         type: 'object',
         properties: {
@@ -368,7 +385,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_diagnose_workflow_run',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Diagnose a GitHub Actions workflow run.',
       parameters: {
         type: 'object',
         properties: {
@@ -384,8 +401,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_diagnose_latest_workflow_run',
-      description:
-        '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Diagnose the latest GitHub Actions workflow run.',
       parameters: {
         type: 'object',
         properties: {
@@ -404,7 +420,7 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_diagnose_actions_setup',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Diagnose GitHub Actions setup for a repository.',
       parameters: {
         type: 'object',
         properties: {

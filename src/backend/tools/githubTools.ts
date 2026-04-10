@@ -34,6 +34,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: {
             type: 'string',
@@ -61,6 +62,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           repo: {
@@ -83,6 +85,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           repo: {
@@ -106,6 +109,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           query: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
@@ -135,6 +139,7 @@ export const githubToolsSchemas = [
         'Self-check: GitHub GraphQL introspection for SearchType enum values. Helps verify whether CODE is supported in schema.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {},
       },
     },
@@ -146,6 +151,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           title: { type: 'string' },
           head: { type: 'string' },
@@ -164,6 +170,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           pull_number: { type: 'number' },
           method: { type: 'string', enum: ['merge', 'squash', 'rebase'] },
@@ -180,6 +187,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           title: { type: 'string' },
           body: { type: 'string' },
@@ -198,6 +206,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           issue_number: { type: 'number' },
           title: { type: 'string' },
@@ -218,6 +227,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           state: { type: 'string', enum: ['open', 'closed', 'all'] },
           labels: { type: 'array', items: { type: 'string' } },
@@ -235,6 +245,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           base: {
@@ -258,6 +269,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           content: {
@@ -283,6 +295,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
           message: { type: 'string', description: 'Commit message.' },
@@ -306,6 +319,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           workflow_id: { type: 'string' },
           repo: { type: 'string' },
@@ -322,6 +336,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           run_id: { type: 'number' },
           repo: { type: 'string' },
@@ -337,6 +352,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           run_id: { type: 'number' },
           repo: { type: 'string' },
@@ -355,6 +371,7 @@ export const githubToolsSchemas = [
         '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           run_id: { type: 'number' },
           repo: { type: 'string' },
@@ -371,6 +388,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           run_id: { type: 'number' },
           repo: { type: 'string' },
@@ -388,6 +406,7 @@ export const githubToolsSchemas = [
         '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: { type: 'string' },
           workflow_id: { type: 'string' },
@@ -407,6 +426,7 @@ export const githubToolsSchemas = [
       description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: { type: 'string' },
           ref: { type: 'string' },

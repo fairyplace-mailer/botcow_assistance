@@ -4,8 +4,19 @@ export type GithubCacheGetOptions = {
   now?: Date;
 };
 
-function hasGithubCacheModel(client: any): boolean {
-  return !!client && typeof client === 'object' && !!(client as any).githubCache;
+function isGithubCacheUsable(client: any): boolean {
+  if (!client || typeof client !== 'object') return false;
+
+  if (process.env.NODE_ENV === 'test') return false;
+  if (process.env.BOTCOW_DISABLE_GITHUB_CACHE === '1') return false;
+
+  const delegate = (client as any).githubCache;
+  return (
+    !!delegate &&
+    typeof delegate.findUnique === 'function' &&
+    typeof delegate.upsert === 'function' &&
+    typeof delegate.delete === 'function'
+  );
 }
 
 export async function githubCacheGet<T>(
@@ -14,9 +25,9 @@ export async function githubCacheGet<T>(
 ): Promise<T | null> {
   const now = opts.now ?? new Date();
 
-  // In unit tests or environments without DB, prisma model may be absent.
-  // Treat cache as a best-effort optimization and fail open.
-  if (!hasGithubCacheModel(prisma)) return null;
+  // Cache is best-effort only.
+  // In tests and DB-less environments it must stay completely disabled.
+  if (!isGithubCacheUsable(prisma)) return null;
 
   try {
     const row = await (prisma as any).githubCache.findUnique({
@@ -27,7 +38,6 @@ export async function githubCacheGet<T>(
     if (!row) return null;
 
     if (row.expiresAt <= now) {
-      // Best-effort cleanup
       await (prisma as any).githubCache.delete({ where: { key } }).catch(() => undefined);
       return null;
     }
@@ -47,8 +57,9 @@ export async function githubCacheSet<T>(
   const now = opts.now ?? new Date();
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
 
-  // Best-effort; see note in githubCacheGet.
-  if (!hasGithubCacheModel(prisma)) return;
+  // Cache is best-effort only.
+  // In tests and DB-less environments it must stay completely disabled.
+  if (!isGithubCacheUsable(prisma)) return;
 
   try {
     await (prisma as any).githubCache.upsert({

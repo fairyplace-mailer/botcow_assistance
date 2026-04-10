@@ -298,43 +298,43 @@ export const previewToolHandlers = {
     return result;
   },
 
-async preview_http_request(args: any) {
-  const headers =
-    Array.isArray(args?.headers)
-      ? Object.fromEntries(
-          args.headers
-            .filter(
-              (h: any) =>
-                h &&
-                typeof h.name === 'string' &&
-                typeof h.value === 'string',
-            )
-            .map((h: any) => [h.name, h.value]),
-        )
-      : undefined;
+  async preview_http_request(args: any) {
+    const headers =
+      Array.isArray(args?.headers)
+        ? Object.fromEntries(
+            args.headers
+              .filter(
+                (h: any) =>
+                  h &&
+                  typeof h.name === 'string' &&
+                  typeof h.value === 'string',
+              )
+              .map((h: any) => [h.name, h.value]),
+          )
+        : undefined;
 
-  const res = await previewHttpRequest({
-    baseUrl: args.baseUrl,
-    path: args.path,
-    ...(args.method ? { method: args.method } : {}),
-    ...(headers ? { headers } : {}),
-    ...(args.body !== undefined ? { body: args.body } : {}),
-    ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
-    ...(args.maxResponseChars !== undefined
-      ? { maxResponseChars: args.maxResponseChars }
-      : {}),
-  });
+    const res = await previewHttpRequest({
+      baseUrl: args.baseUrl,
+      path: args.path,
+      ...(args.method ? { method: args.method } : {}),
+      ...(headers ? { headers } : {}),
+      ...(args.body !== undefined ? { body: args.body } : {}),
+      ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+      ...(args.maxResponseChars !== undefined
+        ? { maxResponseChars: args.maxResponseChars }
+        : {}),
+    });
 
-  logEvent('preview_http_request', {
-    baseUrl: args.baseUrl,
-    path: args.path,
-    method: args.method ?? 'GET',
-    status: res.status,
-    ok: res.ok,
-  });
+    logEvent('preview_http_request', {
+      baseUrl: args.baseUrl,
+      path: args.path,
+      method: args.method ?? 'GET',
+      status: res.status,
+      ok: res.ok,
+    });
 
-  return res;
-}
+    return res;
+  }
 
   async preview_smoke_check(args: PreviewSmokeCheckArgs): Promise<PreviewSmokeCheckResult> {
     const preview = await findPreviewUrl({

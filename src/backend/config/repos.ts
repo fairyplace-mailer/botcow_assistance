@@ -117,9 +117,6 @@ function coerceScalar(v: string): any {
 }
 
 export function loadReposConfig(): ReposConfig {
-  console.log('REPOS_DEBUG cwd=', process.cwd());
-  console.log('REPOS_DEBUG configPath=', CONFIG_PATH);
-  console.log('REPOS_DEBUG exists=', fs.existsSync(CONFIG_PATH));
 
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(`Repos config not found: ${CONFIG_PATH}`);

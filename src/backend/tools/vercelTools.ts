@@ -100,6 +100,7 @@ export const vercelToolsSchemas = [
       description: 'Get latest deployments from Vercel (preview only).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           target: {
             type: 'string',
@@ -127,6 +128,7 @@ export const vercelToolsSchemas = [
       description: 'List Vercel preview deployments with optional filters by repo, branch, git sha, and time window.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: { type: 'string' },
           branch: { type: 'string' },
@@ -146,6 +148,7 @@ export const vercelToolsSchemas = [
       description: 'Get Vercel runtime logs for a deploymentId with time range and pagination.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: { type: 'string' },
           deploymentId: { type: 'string' },
@@ -165,6 +168,7 @@ export const vercelToolsSchemas = [
       description: 'Search Vercel runtime logs by text, level, route, or function name.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: { type: 'string' },
           deploymentId: { type: 'string' },
@@ -188,6 +192,7 @@ export const vercelToolsSchemas = [
       description: 'Get Vercel deployment status by deployment_id.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           deployment_id: {
             type: 'string',
@@ -211,6 +216,7 @@ export const vercelToolsSchemas = [
         'Trigger a Vercel deployment (preview only). Optionally specify git sha and/or project_id.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           project_id: {
             type: 'string',
@@ -242,6 +248,7 @@ export const vercelToolsSchemas = [
       description: 'Redeploy a Vercel deployment (preview only) by deployment_id.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           deployment_id: {
             type: 'string',
@@ -269,6 +276,7 @@ export const vercelToolsSchemas = [
       description: 'Diagnose Vercel deployment for a given git sha (preview only).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: {
             type: 'string',

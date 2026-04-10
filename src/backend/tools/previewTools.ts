@@ -334,7 +334,7 @@ export const previewToolHandlers = {
     });
 
     return res;
-  }
+  },
 
   async preview_smoke_check(args: PreviewSmokeCheckArgs): Promise<PreviewSmokeCheckResult> {
     const preview = await findPreviewUrl({

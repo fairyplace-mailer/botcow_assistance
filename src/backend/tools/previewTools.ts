@@ -224,6 +224,7 @@ export const previewToolsSchemas = [
       description: 'Get Vercel preview URL for a given repo/sha/branch (preview only).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: { type: 'string' },
           git_sha: { type: 'string' },
@@ -241,13 +242,22 @@ export const previewToolsSchemas = [
       description: 'Perform a safe HTTP request to a Vercel preview deployment URL (SSRF-protected).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           baseUrl: { type: 'string' },
           path: { type: 'string' },
           method: { type: 'string', enum: ['GET', 'POST'] },
           headers: {
-            type: 'object',
-            additionalProperties: { type: 'string' },
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                name: { type: 'string' },
+                value: { type: 'string' },
+              },
+              required: ['name', 'value'],
+            },
           },
           body: {},
           timeoutMs: { type: 'number' },
@@ -264,6 +274,7 @@ export const previewToolsSchemas = [
       description: 'Find latest Vercel preview URL and run a small set of HTTP/tool checks against it.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: { type: 'string' },
           git_sha: { type: 'string' },
@@ -287,17 +298,43 @@ export const previewToolHandlers = {
     return result;
   },
 
-  async preview_http_request(args: PreviewHttpRequestArgs) {
-    const res = await previewHttpRequest(args);
-    logEvent('preview_http_request', {
-      baseUrl: args.baseUrl,
-      path: args.path,
-      method: args.method ?? 'GET',
-      status: res.status,
-      ok: res.ok,
-    });
-    return res;
-  },
+async preview_http_request(args: any) {
+  const headers =
+    Array.isArray(args?.headers)
+      ? Object.fromEntries(
+          args.headers
+            .filter(
+              (h: any) =>
+                h &&
+                typeof h.name === 'string' &&
+                typeof h.value === 'string',
+            )
+            .map((h: any) => [h.name, h.value]),
+        )
+      : undefined;
+
+  const res = await previewHttpRequest({
+    baseUrl: args.baseUrl,
+    path: args.path,
+    ...(args.method ? { method: args.method } : {}),
+    ...(headers ? { headers } : {}),
+    ...(args.body !== undefined ? { body: args.body } : {}),
+    ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+    ...(args.maxResponseChars !== undefined
+      ? { maxResponseChars: args.maxResponseChars }
+      : {}),
+  });
+
+  logEvent('preview_http_request', {
+    baseUrl: args.baseUrl,
+    path: args.path,
+    method: args.method ?? 'GET',
+    status: res.status,
+    ok: res.ok,
+  });
+
+  return res;
+}
 
   async preview_smoke_check(args: PreviewSmokeCheckArgs): Promise<PreviewSmokeCheckResult> {
     const preview = await findPreviewUrl({

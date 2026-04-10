@@ -81,6 +81,7 @@ export const deploymentToolsSchemas = [
         'Wait for a Vercel preview deployment for the given git commit SHA and comment on the Pull Request with the URL and status (preview only).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           pull_number: {
             type: 'number',

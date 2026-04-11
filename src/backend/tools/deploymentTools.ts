@@ -93,27 +93,34 @@ export const deploymentToolsSchemas = [
               'SHA of the git commit for which we should find the Vercel deployment.',
           },
           target: {
-            type: 'string',
-            enum: ['preview'],
+            type: ['string', 'null'],
+            enum: ['preview', null],
             description: 'Target environment. Only preview is allowed.',
           },
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'Repository owner/repo (optional; defaults to BOTCOW_DEFAULT_REPO).',
           },
           timeout_seconds: {
-            type: 'number',
+            type: ['number', 'null'],
             description:
               'Maximum waiting time in seconds (default 600).',
           },
           poll_interval_seconds: {
-            type: 'number',
+            type: ['number', 'null'],
             description:
               'Polling interval in seconds (default 15).',
           },
         },
-        required: ['pull_number', 'git_commit_sha'],
+        required: [
+          'pull_number',
+          'git_commit_sha',
+          'target',
+          'repo',
+          'timeout_seconds',
+          'poll_interval_seconds',
+        ],
       },
     },
   },

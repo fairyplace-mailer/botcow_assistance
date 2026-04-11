@@ -37,21 +37,22 @@ export const githubToolsSchemas = [
         additionalProperties: false,
         properties: {
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           ref: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           pathPrefix: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
+        required: ['repo', 'ref', 'pathPrefix'],
       },
     },
   },
@@ -64,17 +65,23 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          path: {
+            type: ['string', 'null'],
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           ref: {
-            type: 'string',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            type: ['string', 'null'],
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
+        required: ['path', 'repo', 'ref'],
       },
     },
   },
@@ -87,18 +94,23 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
-          repo: {
+          path: {
             type: 'string',
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
+          repo: {
+            type: ['string', 'null'],
             description:
               'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           ref: {
-            type: 'string',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            type: ['string', 'null'],
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
-        required: ['path'],
+        required: ['path', 'repo', 'ref'],
       },
     },
   },
@@ -111,23 +123,33 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          query: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
-          repo: {
+          query: {
             type: 'string',
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
+          path: {
+            type: ['string', 'null'],
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
+          repo: {
+            type: ['string', 'null'],
             description:
               'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           per_page: {
-            type: 'number',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            type: ['number', 'null'],
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           page: {
-            type: 'number',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            type: ['number', 'null'],
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
-        required: ['query'],
+        required: ['query', 'path', 'repo', 'per_page', 'page'],
       },
     },
   },
@@ -141,6 +163,7 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {},
+        required: [],
       },
     },
   },
@@ -155,11 +178,11 @@ export const githubToolsSchemas = [
         properties: {
           title: { type: 'string' },
           head: { type: 'string' },
-          base: { type: 'string' },
-          body: { type: 'string' },
-          repo: { type: 'string' },
+          base: { type: ['string', 'null'] },
+          body: { type: ['string', 'null'] },
+          repo: { type: ['string', 'null'] },
         },
-        required: ['title', 'head'],
+        required: ['title', 'head', 'base', 'body', 'repo'],
       },
     },
   },
@@ -173,10 +196,10 @@ export const githubToolsSchemas = [
         additionalProperties: false,
         properties: {
           pull_number: { type: 'number' },
-          method: { type: 'string', enum: ['merge', 'squash', 'rebase'] },
-          repo: { type: 'string' },
+          method: { type: ['string', 'null'], enum: ['merge', 'squash', 'rebase', null] },
+          repo: { type: ['string', 'null'] },
         },
-        required: ['pull_number'],
+        required: ['pull_number', 'method', 'repo'],
       },
     },
   },
@@ -190,12 +213,12 @@ export const githubToolsSchemas = [
         additionalProperties: false,
         properties: {
           title: { type: 'string' },
-          body: { type: 'string' },
-          labels: { type: 'array', items: { type: 'string' } },
-          assignees: { type: 'array', items: { type: 'string' } },
-          repo: { type: 'string' },
+          body: { type: ['string', 'null'] },
+          labels: { type: ['array', 'null'], items: { type: 'string' } },
+          assignees: { type: ['array', 'null'], items: { type: 'string' } },
+          repo: { type: ['string', 'null'] },
         },
-        required: ['title'],
+        required: ['title', 'body', 'labels', 'assignees', 'repo'],
       },
     },
   },
@@ -209,14 +232,14 @@ export const githubToolsSchemas = [
         additionalProperties: false,
         properties: {
           issue_number: { type: 'number' },
-          title: { type: 'string' },
-          body: { type: 'string' },
-          state: { type: 'string', enum: ['open', 'closed'] },
-          labels: { type: 'array', items: { type: 'string' } },
-          assignees: { type: 'array', items: { type: 'string' } },
-          repo: { type: 'string' },
+          title: { type: ['string', 'null'] },
+          body: { type: ['string', 'null'] },
+          state: { type: ['string', 'null'], enum: ['open', 'closed', null] },
+          labels: { type: ['array', 'null'], items: { type: 'string' } },
+          assignees: { type: ['array', 'null'], items: { type: 'string' } },
+          repo: { type: ['string', 'null'] },
         },
-        required: ['issue_number'],
+        required: ['issue_number', 'title', 'body', 'state', 'labels', 'assignees', 'repo'],
       },
     },
   },
@@ -229,10 +252,11 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          state: { type: 'string', enum: ['open', 'closed', 'all'] },
-          labels: { type: 'array', items: { type: 'string' } },
-          repo: { type: 'string' },
+          state: { type: ['string', 'null'], enum: ['open', 'closed', 'all', null] },
+          labels: { type: ['array', 'null'], items: { type: 'string' } },
+          repo: { type: ['string', 'null'] },
         },
+        required: ['state', 'labels', 'repo'],
       },
     },
   },
@@ -247,18 +271,23 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
-          base: {
+          branch: {
             type: 'string',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
+          base: {
+            type: ['string', 'null'],
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
-        required: ['branch'],
+        required: ['branch', 'base', 'repo'],
       },
     },
   },
@@ -271,20 +300,29 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
+          path: {
+            type: 'string',
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
           content: {
             type: 'string',
-            description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
           message: { type: 'string', description: 'Commit message.' },
-          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
-          repo: {
+          branch: {
             type: 'string',
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
+          repo: {
+            type: ['string', 'null'],
             description:
               'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
-        required: ['path', 'content', 'message', 'branch'],
+        required: ['path', 'content', 'message', 'branch', 'repo'],
       },
     },
   },
@@ -297,16 +335,24 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          path: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
-          message: { type: 'string', description: 'Commit message.' },
-          branch: { type: 'string', description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000' },
-          repo: {
+          path: {
             type: 'string',
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
+          message: { type: 'string', description: 'Commit message.' },
+          branch: {
+            type: 'string',
+            description:
+              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+          },
+          repo: {
+            type: ['string', 'null'],
             description:
               'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
           },
         },
-        required: ['path', 'message', 'branch'],
+        required: ['path', 'message', 'branch', 'repo'],
       },
     },
   },
@@ -321,11 +367,12 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          workflow_id: { type: 'string' },
-          repo: { type: 'string' },
-          ref: { type: 'string' },
-          per_page: { type: 'number' },
+          workflow_id: { type: ['string', 'null'] },
+          repo: { type: ['string', 'null'] },
+          ref: { type: ['string', 'null'] },
+          per_page: { type: ['number', 'null'] },
         },
+        required: ['workflow_id', 'repo', 'ref', 'per_page'],
       },
     },
   },
@@ -339,9 +386,9 @@ export const githubToolsSchemas = [
         additionalProperties: false,
         properties: {
           run_id: { type: 'number' },
-          repo: { type: 'string' },
+          repo: { type: ['string', 'null'] },
         },
-        required: ['run_id'],
+        required: ['run_id', 'repo'],
       },
     },
   },
@@ -355,9 +402,9 @@ export const githubToolsSchemas = [
         additionalProperties: false,
         properties: {
           run_id: { type: 'number' },
-          repo: { type: 'string' },
+          repo: { type: ['string', 'null'] },
         },
-        required: ['run_id'],
+        required: ['run_id', 'repo'],
       },
     },
   },
@@ -374,10 +421,10 @@ export const githubToolsSchemas = [
         additionalProperties: false,
         properties: {
           run_id: { type: 'number' },
-          repo: { type: 'string' },
-          maxChars: { type: 'number' },
+          repo: { type: ['string', 'null'] },
+          maxChars: { type: ['number', 'null'] },
         },
-        required: ['run_id'],
+        required: ['run_id', 'repo', 'maxChars'],
       },
     },
   },
@@ -391,10 +438,10 @@ export const githubToolsSchemas = [
         additionalProperties: false,
         properties: {
           run_id: { type: 'number' },
-          repo: { type: 'string' },
-          maxChars: { type: 'number' },
+          repo: { type: ['string', 'null'] },
+          maxChars: { type: ['number', 'null'] },
         },
-        required: ['run_id'],
+        required: ['run_id', 'repo', 'maxChars'],
       },
     },
   },
@@ -408,12 +455,13 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          repo: { type: 'string' },
-          workflow_id: { type: 'string' },
-          ref: { type: 'string' },
-          per_page: { type: 'number' },
-          maxChars: { type: 'number' },
+          repo: { type: ['string', 'null'] },
+          workflow_id: { type: ['string', 'null'] },
+          ref: { type: ['string', 'null'] },
+          per_page: { type: ['number', 'null'] },
+          maxChars: { type: ['number', 'null'] },
         },
+        required: ['repo', 'workflow_id', 'ref', 'per_page', 'maxChars'],
       },
     },
   },
@@ -428,10 +476,11 @@ export const githubToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          repo: { type: 'string' },
-          ref: { type: 'string' },
-          workflow_id: { type: 'string' },
+          repo: { type: ['string', 'null'] },
+          ref: { type: ['string', 'null'] },
+          workflow_id: { type: ['string', 'null'] },
         },
+        required: ['repo', 'ref', 'workflow_id'],
       },
     },
   },

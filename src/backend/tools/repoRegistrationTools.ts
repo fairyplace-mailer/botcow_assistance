@@ -75,12 +75,12 @@ export const repoRegistrationToolSchema = {
                 'Name of env var containing Vercel projectId for this repo.',
             },
             teamIdEnv: {
-              type: 'string',
+              type: ['string', 'null'],
               description:
                 'Name of env var containing Vercel teamId for this repo (optional).',
             },
           },
-          required: ['projectIdEnv'],
+          required: ['projectIdEnv', 'teamIdEnv'],
         },
       },
       required: ['repo', 'defaultBranch', 'vercel'],

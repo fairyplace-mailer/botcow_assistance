@@ -31,25 +31,22 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_repo_structure',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Get repository structure as a tree, optionally limited by ref and path prefix.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           repo: {
             type: ['string', 'null'],
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
           },
           ref: {
             type: ['string', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Git ref to inspect: branch, tag, or commit SHA. If null, default branch is used.',
           },
           pathPrefix: {
             type: ['string', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Optional path prefix to limit the returned tree to a specific directory.',
           },
         },
         required: ['repo', 'ref', 'pathPrefix'],
@@ -60,25 +57,22 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_files',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'List files in a repository directory, optionally for a specific ref.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           path: {
             type: ['string', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Directory path to list. If null, list from repository root.',
           },
           repo: {
             type: ['string', 'null'],
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
           },
           ref: {
             type: ['string', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Git ref to inspect: branch, tag, or commit SHA. If null, default branch is used.',
           },
         },
         required: ['path', 'repo', 'ref'],
@@ -89,25 +83,22 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_file',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Get file contents from a repository path, optionally for a specific ref.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           path: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Path to the file inside the repository.',
           },
           repo: {
             type: ['string', 'null'],
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
           },
           ref: {
             type: ['string', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Git ref to inspect: branch, tag, or commit SHA. If null, default branch is used.',
           },
         },
         required: ['path', 'repo', 'ref'],
@@ -118,35 +109,30 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_search_in_repo',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Search code or text in a repository, optionally limited by path and pagination.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           query: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Search query text.',
           },
           path: {
             type: ['string', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Optional path prefix to limit search to a directory.',
           },
           repo: {
             type: ['string', 'null'],
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
           },
           per_page: {
             type: ['number', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Number of results per page.',
           },
           page: {
             type: ['number', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Page number for paginated results.',
           },
         },
         required: ['query', 'path', 'repo', 'per_page', 'page'],
@@ -158,7 +144,7 @@ export const githubToolsSchemas = [
     function: {
       name: 'github_self_check_search_schema',
       description:
-        'Self-check: GitHub GraphQL introspection for SearchType enum values. Helps verify whether CODE is supported in schema.',
+        'Self-check: inspect GitHub GraphQL SearchType enum values to verify whether CODE search is supported.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -171,16 +157,19 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_pull_request',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Create a GitHub pull request.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          title: { type: 'string' },
-          head: { type: 'string' },
-          base: { type: ['string', 'null'] },
-          body: { type: ['string', 'null'] },
-          repo: { type: ['string', 'null'] },
+          title: { type: 'string', description: 'Pull request title.' },
+          head: { type: 'string', description: 'Source branch name.' },
+          base: { type: ['string', 'null'], description: 'Target branch name. If null, repository default is used.' },
+          body: { type: ['string', 'null'], description: 'Pull request body in markdown.' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
         },
         required: ['title', 'head', 'base', 'body', 'repo'],
       },
@@ -190,14 +179,21 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_merge_pull_request',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Merge a GitHub pull request.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          pull_number: { type: 'number' },
-          method: { type: ['string', 'null'], enum: ['merge', 'squash', 'rebase', null] },
-          repo: { type: ['string', 'null'] },
+          pull_number: { type: 'number', description: 'Pull request number.' },
+          method: {
+            type: ['string', 'null'],
+            enum: ['merge', 'squash', 'rebase', null],
+            description: 'Merge method. If null, server-side default is used.',
+          },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
         },
         required: ['pull_number', 'method', 'repo'],
       },
@@ -207,16 +203,23 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_issue',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Create a GitHub issue.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          title: { type: 'string' },
-          body: { type: ['string', 'null'] },
-          labels: { type: ['array', 'null'], items: { type: 'string' } },
-          assignees: { type: ['array', 'null'], items: { type: 'string' } },
-          repo: { type: ['string', 'null'] },
+          title: { type: 'string', description: 'Issue title.' },
+          body: { type: ['string', 'null'], description: 'Issue body in markdown.' },
+          labels: { type: ['array', 'null'], items: { type: 'string' }, description: 'List of labels to apply.' },
+          assignees: {
+            type: ['array', 'null'],
+            items: { type: 'string' },
+            description: 'List of GitHub usernames to assign.',
+          },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
         },
         required: ['title', 'body', 'labels', 'assignees', 'repo'],
       },
@@ -226,18 +229,29 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_update_issue',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Update an existing GitHub issue.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          issue_number: { type: 'number' },
-          title: { type: ['string', 'null'] },
-          body: { type: ['string', 'null'] },
-          state: { type: ['string', 'null'], enum: ['open', 'closed', null] },
-          labels: { type: ['array', 'null'], items: { type: 'string' } },
-          assignees: { type: ['array', 'null'], items: { type: 'string' } },
-          repo: { type: ['string', 'null'] },
+          issue_number: { type: 'number', description: 'Issue number.' },
+          title: { type: ['string', 'null'], description: 'New issue title.' },
+          body: { type: ['string', 'null'], description: 'New issue body in markdown.' },
+          state: {
+            type: ['string', 'null'],
+            enum: ['open', 'closed', null],
+            description: 'Issue state. If null, state is not changed.',
+          },
+          labels: { type: ['array', 'null'], items: { type: 'string' }, description: 'Full replacement label list.' },
+          assignees: {
+            type: ['array', 'null'],
+            items: { type: 'string' },
+            description: 'Full replacement assignee list.',
+          },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
         },
         required: ['issue_number', 'title', 'body', 'state', 'labels', 'assignees', 'repo'],
       },
@@ -247,14 +261,21 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_issues',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'List GitHub issues with optional state and label filters.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          state: { type: ['string', 'null'], enum: ['open', 'closed', 'all', null] },
-          labels: { type: ['array', 'null'], items: { type: 'string' } },
-          repo: { type: ['string', 'null'] },
+          state: {
+            type: ['string', 'null'],
+            enum: ['open', 'closed', 'all', null],
+            description: 'Issue state filter.',
+          },
+          labels: { type: ['array', 'null'], items: { type: 'string' }, description: 'Labels that issues must match.' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
         },
         required: ['state', 'labels', 'repo'],
       },
@@ -266,25 +287,22 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_create_branch',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Create a new branch in a GitHub repository.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           branch: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Name of the new branch to create.',
           },
           base: {
             type: ['string', 'null'],
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Base branch or ref to create the new branch from. If null, handler default is used.',
           },
           repo: {
             type: ['string', 'null'],
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
           },
         },
         required: ['branch', 'base', 'repo'],
@@ -295,31 +313,27 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_commit_file',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Create or update a file in a GitHub repository and commit the change.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           path: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Path to the file inside the repository.',
           },
           content: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Full file content to write.',
           },
           message: { type: 'string', description: 'Commit message.' },
           branch: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Branch name where the commit will be created.',
           },
           repo: {
             type: ['string', 'null'],
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
           },
         },
         required: ['path', 'content', 'message', 'branch', 'repo'],
@@ -330,26 +344,23 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_delete_file',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Delete a file from a GitHub repository and commit the deletion.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           path: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Path to the file inside the repository.',
           },
           message: { type: 'string', description: 'Commit message.' },
           branch: {
             type: 'string',
-            description:
-              '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'Branch name where the deletion commit will be created.',
           },
           repo: {
             type: ['string', 'null'],
-            description:
-              'owner/name. \u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
           },
         },
         required: ['path', 'message', 'branch', 'repo'],
@@ -362,15 +373,18 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_runs',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'List GitHub Actions workflow runs.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          workflow_id: { type: ['string', 'null'] },
-          repo: { type: ['string', 'null'] },
-          ref: { type: ['string', 'null'] },
-          per_page: { type: ['number', 'null'] },
+          workflow_id: { type: ['string', 'null'], description: 'Workflow file name or workflow id.' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          ref: { type: ['string', 'null'], description: 'Optional git ref filter.' },
+          per_page: { type: ['number', 'null'], description: 'Number of runs to return.' },
         },
         required: ['workflow_id', 'repo', 'ref', 'per_page'],
       },
@@ -380,13 +394,16 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_list_workflow_run_jobs',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'List jobs for a GitHub Actions workflow run.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          run_id: { type: 'number' },
-          repo: { type: ['string', 'null'] },
+          run_id: { type: 'number', description: 'Workflow run id.' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
         },
         required: ['run_id', 'repo'],
       },
@@ -396,13 +413,16 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_download_workflow_run_logs',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Download raw logs archive for a GitHub Actions workflow run.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          run_id: { type: 'number' },
-          repo: { type: ['string', 'null'] },
+          run_id: { type: 'number', description: 'Workflow run id.' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
         },
         required: ['run_id', 'repo'],
       },
@@ -414,15 +434,17 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_get_workflow_run_logs_text',
-      description:
-        '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Get workflow run logs converted to text, optionally truncated.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          run_id: { type: 'number' },
-          repo: { type: ['string', 'null'] },
-          maxChars: { type: ['number', 'null'] },
+          run_id: { type: 'number', description: 'Workflow run id.' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          maxChars: { type: ['number', 'null'], description: 'Maximum number of characters to return.' },
         },
         required: ['run_id', 'repo', 'maxChars'],
       },
@@ -432,14 +454,17 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_diagnose_workflow_run',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Diagnose a specific GitHub Actions workflow run.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          run_id: { type: 'number' },
-          repo: { type: ['string', 'null'] },
-          maxChars: { type: ['number', 'null'] },
+          run_id: { type: 'number', description: 'Workflow run id.' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          maxChars: { type: ['number', 'null'], description: 'Maximum log text length to use in diagnosis.' },
         },
         required: ['run_id', 'repo', 'maxChars'],
       },
@@ -449,17 +474,19 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_diagnose_latest_workflow_run',
-      description:
-        '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Diagnose the latest GitHub Actions workflow run that matches filters.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          repo: { type: ['string', 'null'] },
-          workflow_id: { type: ['string', 'null'] },
-          ref: { type: ['string', 'null'] },
-          per_page: { type: ['number', 'null'] },
-          maxChars: { type: ['number', 'null'] },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          workflow_id: { type: ['string', 'null'], description: 'Workflow file name or workflow id.' },
+          ref: { type: ['string', 'null'], description: 'Optional git ref filter.' },
+          per_page: { type: ['number', 'null'], description: 'How many recent runs to inspect.' },
+          maxChars: { type: ['number', 'null'], description: 'Maximum log text length to use in diagnosis.' },
         },
         required: ['repo', 'workflow_id', 'ref', 'per_page', 'maxChars'],
       },
@@ -471,14 +498,17 @@ export const githubToolsSchemas = [
     type: 'function',
     function: {
       name: 'github_diagnose_actions_setup',
-      description: '\u000f\u0000\u000b\u0000\u0003\u0000\u0003\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000',
+      description: 'Diagnose GitHub Actions setup problems in a repository.',
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          repo: { type: ['string', 'null'] },
-          ref: { type: ['string', 'null'] },
-          workflow_id: { type: ['string', 'null'] },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          ref: { type: ['string', 'null'], description: 'Git ref to inspect: branch, tag, or commit SHA.' },
+          workflow_id: { type: ['string', 'null'], description: 'Workflow file name or workflow id to inspect.' },
         },
         required: ['repo', 'ref', 'workflow_id'],
       },

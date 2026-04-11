@@ -228,48 +228,62 @@ async function githubSearchCodeWithRetry(params: {
 }) {
   const github = getGithubClient() as any;
 
-  if (typeof github.graphql === 'function') {
-    await github.graphql(
-      'query { __type(name: "SearchType") { enumValues { name } } }',
-    );
+  if (typeof github.graphql === 'function' && params.page === 1) {
+    try {
+      const introspectionRes = await github.graphql(
+        'query { __type(name: "SearchType") { enumValues { name } } }',
+      );
 
-    const first = (params.page - 1) * params.per_page;
-    const graphqlRes = await github.graphql(
-      `query SearchCode($query: String!, $first: Int!) {
-        search(type: CODE, query: $query, first: $first) {
-          edges {
-            node {
-              ... on RepositoryFile {
-                path
-                repository {
-                  nameWithOwner
+      const enumValues = introspectionRes?.__type?.enumValues ?? [];
+      const supportsCodeSearch = enumValues.some((value: any) => value?.name === 'CODE');
+
+      if (supportsCodeSearch) {
+        const first = Math.max(1, params.per_page);
+        const graphqlRes = await github.graphql(
+          `query SearchCode($query: String!, $first: Int!) {
+            search(type: CODE, query: $query, first: $first) {
+              edges {
+                node {
+                  ... on RepositoryFile {
+                    path
+                    repository {
+                      nameWithOwner
+                    }
+                  }
                 }
               }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              repositoryCount
+              codeCount
             }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          repositoryCount
-          codeCount
-        }
-      }`,
-      { query: params.q, first },
-    );
+          }`,
+          { query: params.q, first },
+        );
 
-    const edges = graphqlRes?.search?.edges ?? [];
-    const sliced = edges.slice(0, params.per_page);
-    return {
-      data: {
-        items: sliced.map((edge: any) => ({
-          path: edge?.node?.path,
-          repository: {
-            full_name: edge?.node?.repository?.nameWithOwner,
+        const edges = graphqlRes?.search?.edges ?? [];
+        const sliced = edges.slice(0, params.per_page);
+        return {
+          data: {
+            items: sliced.map((edge: any) => ({
+              path: edge?.node?.path,
+              repository: {
+                full_name: edge?.node?.repository?.nameWithOwner,
+              },
+            })),
           },
-        })),
-      },
-    };
+        };
+      }
+    } catch (error: any) {
+      await logEvent('github_search_graphql_fallback', {
+        status: error?.status ?? error?.response?.status ?? null,
+        message: String(error?.message ?? ''),
+        page: params.page,
+        per_page: params.per_page,
+      }).catch(() => undefined);
+    }
   }
 
   const githubRest = getGithubClient();

@@ -226,11 +226,27 @@ export const previewToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          repo: { type: ['string', 'null'] },
-          git_sha: { type: ['string', 'null'] },
-          branch: { type: ['string', 'null'] },
-          target: { type: ['string', 'null'], enum: ['preview', null] },
-          timeWindowMinutes: { type: ['number', 'null'] },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          git_sha: {
+            type: ['string', 'null'],
+            description: 'Git commit SHA to match preview deployment by metadata.',
+          },
+          branch: {
+            type: ['string', 'null'],
+            description: 'Fallback branch name to match preview deployment.',
+          },
+          target: {
+            type: ['string', 'null'],
+            enum: ['preview', null],
+            description: 'Target environment. Only preview is allowed.',
+          },
+          timeWindowMinutes: {
+            type: ['number', 'null'],
+            description: 'Fallback time window in minutes when matching by branch.',
+          },
         },
         required: ['repo', 'git_sha', 'branch', 'target', 'timeWindowMinutes'],
       },
@@ -245,11 +261,22 @@ export const previewToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          baseUrl: { type: 'string' },
-          path: { type: 'string' },
-          method: { type: ['string', 'null'], enum: ['GET', 'POST', null] },
+          baseUrl: {
+            type: 'string',
+            description: 'Base preview URL, must be an allowed https://*.vercel.app host.',
+          },
+          path: {
+            type: 'string',
+            description: 'Request path, for example / or /tools.',
+          },
+          method: {
+            type: ['string', 'null'],
+            enum: ['GET', 'POST', null],
+            description: 'HTTP method. If null, GET is used.',
+          },
           headers: {
             type: ['array', 'null'],
+            description: 'Optional request headers as name/value pairs.',
             items: {
               type: 'object',
               additionalProperties: false,
@@ -260,9 +287,21 @@ export const previewToolsSchemas = [
               required: ['name', 'value'],
             },
           },
-          body: {},
-          timeoutMs: { type: ['number', 'null'] },
-          maxResponseChars: { type: ['number', 'null'] },
+          body: {
+            type: ['object', 'string', 'null'],
+            additionalProperties: false,
+            description: 'Optional request body. Can be a JSON object, raw string, or null.',
+            properties: {},
+            required: [],
+          },
+          timeoutMs: {
+            type: ['number', 'null'],
+            description: 'Request timeout in milliseconds.',
+          },
+          maxResponseChars: {
+            type: ['number', 'null'],
+            description: 'Maximum number of response characters to keep.',
+          },
         },
         required: ['baseUrl', 'path', 'method', 'headers', 'body', 'timeoutMs', 'maxResponseChars'],
       },
@@ -277,9 +316,18 @@ export const previewToolsSchemas = [
         type: 'object',
         additionalProperties: false,
         properties: {
-          repo: { type: ['string', 'null'] },
-          git_sha: { type: ['string', 'null'] },
-          branch: { type: ['string', 'null'] },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          git_sha: {
+            type: ['string', 'null'],
+            description: 'Git commit SHA to match preview deployment by metadata.',
+          },
+          branch: {
+            type: ['string', 'null'],
+            description: 'Fallback branch name to match preview deployment.',
+          },
         },
         required: ['repo', 'git_sha', 'branch'],
       },

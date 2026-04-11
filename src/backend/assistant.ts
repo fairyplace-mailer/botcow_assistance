@@ -267,6 +267,7 @@ function validateToolArgsAgainstSchema(
       }
     }
 
+    }
   return issues.length ? { ok: false, issues } : { ok: true };
 }
 

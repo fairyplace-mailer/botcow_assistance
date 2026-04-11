@@ -255,10 +255,17 @@ function validateToolArgsAgainstSchema(
 
     const expectedType = propSchema.type;
     if (typeof expectedType === 'string') {
-      const actualType = Array.isArray(item) ? 'array' : item === null ? 'null' : typeof item;
+      const actualType = jsonSchemaTypeOf(item);
       if (expectedType !== actualType) issues.push(`field ${key} must be ${expectedType}`);
+      continue;
     }
-  }
+
+    if (Array.isArray(expectedType) && expectedType.every((t): t is string => typeof t === 'string')) {
+      const actualType = jsonSchemaTypeOf(item);
+      if (!expectedType.includes(actualType)) {
+        issues.push(`field ${key} must be one of: ${expectedType.join(', ')}`);
+      }
+    }
 
   return issues.length ? { ok: false, issues } : { ok: true };
 }
@@ -686,11 +693,15 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         };
       }
 
-      const argsHash = hashArgs(parsed.value);
-      const schemaValidation = validateToolArgsAgainstSchema(
+            const schemaValidation = validateToolArgsAgainstSchema(
         (tool.parameters as Record<string, unknown> | null | undefined) ?? null,
         parsed.value,
       );
+
+      const normalizedArgs =
+        (normalizeStrictToolArgs(parsed.value) as Record<string, unknown> | undefined) ?? {};
+      const argsHash = hashArgs(normalizedArgs);
+
       if (!schemaValidation.ok) {
         toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'invalid_tool_args_schema' });
         const error = abort('invalid_tool_args_schema', response.id);
@@ -721,7 +732,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         };
       }
 
-      const fingerprint = makeToolFingerprint(call.name, parsed.value);
+      const fingerprint = makeToolFingerprint(call.name, normalizedArgs);
       roundFingerprints.push(fingerprint);
 
       if (fingerprint === lastFingerprint) sameFingerprintInRow += 1;
@@ -757,7 +768,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       }
 
       const startedToolAt = Date.now();
-      const result = await runToolWithTimeout(call.name, parsed.value, TOOL_TIMEOUT_MS);
+      const result = await runToolWithTimeout(call.name, normalizedArgs, TOOL_TIMEOUT_MS);
       const toolLatencyMs = Date.now() - startedToolAt;
 
       if (result.ok === false) {

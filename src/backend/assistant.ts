@@ -179,6 +179,33 @@ function safeParseToolArgs(raw: string): { ok: true; value: unknown } | { ok: fa
   }
 }
 
+function normalizeStrictToolArgs(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeStrictToolArgs(item))
+      .filter((item) => item !== undefined);
+  }
+
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const normalized = normalizeStrictToolArgs(item);
+      if (normalized !== undefined) out[key] = normalized;
+    }
+    return out;
+  }
+
+  return value;
+}
+
+function jsonSchemaTypeOf(value: unknown): string {
+  if (Array.isArray(value)) return 'array';
+  if (value === null) return 'null';
+  return typeof value;
+}
+
 function abort(code: AssistantInternalCode, responseId?: string) {
   return {
     publicCode: 'assistant_run_failed' as const,

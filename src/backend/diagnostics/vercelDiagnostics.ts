@@ -68,7 +68,7 @@ export async function diagnoseVercelDeployment(args: {
   target?: VercelTarget;
   timeWindowMinutes?: number;
 }): Promise<VercelDeploymentDiagnosis> {
-  // Per docs/spec.md: all Vercel tools operate in preview only.
+  // Per docs/strong_spec.md and current runtime policy: all Vercel tools operate in preview only.
   const target: VercelTarget = 'preview';
   const ctx = getVercelContextFromRepo(args.repo);
 

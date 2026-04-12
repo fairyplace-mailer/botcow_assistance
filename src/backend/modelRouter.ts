@@ -35,6 +35,24 @@ const GOLDEN_CORE_FILES = new Set([
   'src/backend/responses.ts',
 ]);
 
+
+function looksLikeRepoAuditRequest(text: string): boolean {
+  if (!text) return false;
+
+  const hasAuditIntent =
+    /\b(full audit|audit code|audit the code|audit codebase|repo audit|spec audit|strict mode|responses api|compliance)\b/i.test(
+      text,
+    ) || /полный аудит|сделать аудит|аудит кода|соответствие|строгий режим|strong_spec/i.test(text);
+
+  const hasRepoScope =
+    /docs\/strong_spec\.md|strong_spec|repo|repository|branch|ветк|репо|codebase|кодовая база/i.test(text);
+
+  const hasReadOnlyAuditConstraint =
+    /do not change|do not modify|read-only|не меняй|не изменяй|ничего не меняй/i.test(text);
+
+  return (hasAuditIntent && hasRepoScope) || (hasAuditIntent && hasReadOnlyAuditConstraint);
+}
+
 export function chooseModel(
   messages: Array<{ role: string; content: unknown }>,
   hints: ChatRoutingHints = {},
@@ -44,6 +62,8 @@ export function chooseModel(
 
   const messageCount = Array.isArray(messages) ? messages.length : 0;
   const touchedFiles = hints.touchedFiles ?? [];
+  const normalized = normalizeAllMessagesToText(messages);
+  const repoAuditText = `${lastUserText ?? ''}\n${normalized.concatenatedText}`;
 
   if (touchedFiles.some((file) => GOLDEN_CORE_FILES.has(file))) {
     return withOptionalDebug(
@@ -94,7 +114,34 @@ export function chooseModel(
     );
   }
 
-  const normalized = normalizeAllMessagesToText(messages);
+  if (looksLikeRepoAuditRequest(repoAuditText)) {
+    const forcedEffort: ReasoningEffort =
+      hints.previousAttemptFailed || normalized.totalTextLength > 5000 ? 'xhigh' : 'high';
+
+    return withOptionalDebug(
+      {
+        model: 'gpt-5.4',
+        reasoning: { effort: forcedEffort },
+        reason: 'repo-audit-or-spec-compliance',
+      },
+      {
+        textLength: lastUserText.length,
+        messageCount,
+        flags: { repoAuditRequest: true },
+        scores: {
+          nanoScore: 0,
+          miniScore: 0,
+          fullScore: 10,
+          noneScore: 0,
+          lowScore: 0,
+          mediumScore: 0,
+          highScore: 9,
+          xhighScore: forcedEffort === 'xhigh' ? 10 : 0,
+        },
+      },
+    );
+  }
+
   const lastUserTextLength = lastUserText.length;
   const estimatedTotalTextLength = normalized.totalTextLength;
 

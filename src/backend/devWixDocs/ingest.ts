@@ -1,16 +1,30 @@
 import { prisma } from '../db';
+import { createKnowledgeJob, finishKnowledgeJob } from '../knowledgeJobs';
 import { embedText } from '../openai';
+import { applyDevWixIngestDegradation, computeDevWixBudgetSnapshot } from './budgetPolicy';
 import { hashText } from './hash';
 import { htmlToMarkdown } from './markdown';
-import { chunkTextByTokens } from './tokenChunker';
+import {
+  httpStatusClass,
+  logDevWixDocumentStatusTransition,
+  logDevWixInfo,
+  logDevWixWarn,
+} from './observability';
 import { canonicalizeDocsUrl, isAllowedDocsUrl } from './sitemapSeed';
+import { chunkTextByTokens } from './tokenChunker';
 import { DEV_WIX_SOURCE_KEY } from './seedManifest';
 
-export type IngestStopReason = 'embed_budget_exhausted' | 'time_budget_exhausted' | 'source_missing';
+export type IngestStopReason =
+  | 'embed_budget_exhausted'
+  | 'time_budget_exhausted'
+  | 'source_missing'
+  | 'budget_aggressive_stop';
+
 export type IngestBudgetMode = 'normal' | 'warning' | 'aggressive';
 
 export type IngestResult = {
   ok: true;
+  jobId: string | null;
   startUrl: string;
   limitPages: number;
   fetched: number;
@@ -23,6 +37,7 @@ export type IngestResult = {
   officialPages: number;
   officialChunks: number;
   embeddingPressureRatio: number;
+  dbPressureRatio: number;
   startFetched: boolean;
   startStatus: number | null;
   startHtmlBytes: number | null;
@@ -50,6 +65,13 @@ export type IngestResult = {
   msDiscover: number;
   embeddingBatches: number;
   embeddingBatchSize: number;
+};
+
+type MutableDoc = {
+  id: string;
+  canonicalUrl: string;
+  documentStatus: 'pending' | 'fetched' | 'extracted' | 'embedded' | 'ready' | 'failed' | 'deleted';
+  contentHash: string | null;
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
@@ -135,9 +157,37 @@ async function ensureStartDocument(startUrl: string, sourceId: string): Promise<
       sourceId,
       originalUrl: canonical,
       canonicalUrl: canonical,
-      sourceSection: 'dev_wix_docs',
+      sourceSection: DEV_WIX_SOURCE_KEY,
       documentStatus: 'pending',
     },
+  });
+}
+
+async function transitionDocument(params: {
+  jobId: string | null;
+  doc: MutableDoc;
+  nextStatus: MutableDoc['documentStatus'];
+  lastHttpStatus?: number | null;
+  data: Record<string, unknown>;
+}) {
+  const previousStatus = params.doc.documentStatus;
+
+  await prisma.knowledgeDocument.update({
+    where: { id: params.doc.id },
+    data: {
+      ...params.data,
+      documentStatus: params.nextStatus,
+    },
+  });
+
+  params.doc.documentStatus = params.nextStatus;
+
+  await logDevWixDocumentStatusTransition({
+    jobId: params.jobId,
+    canonicalUrl: params.doc.canonicalUrl,
+    fromStatus: previousStatus,
+    toStatus: params.nextStatus,
+    lastHttpStatus: params.lastHttpStatus ?? null,
   });
 }
 
@@ -156,14 +206,15 @@ export async function ingestDevWixArticles(
     overlapTokens?: number;
   },
 ): Promise<IngestResult> {
+  const runStartedAt = nowMs();
   const startUrl = opts?.startUrl ?? DEFAULT_START_URL;
   const limitPages = Math.max(1, Math.min(50, Number(opts?.limitPages ?? 10)));
   const maxDurationMs = Math.max(500, Math.min(30000, Number(opts?.maxDurationMs ?? 15000)));
-  const maxEmbeddings = Math.max(0, Math.min(200, Number(opts?.maxEmbeddings ?? 32)));
-  const maxChunksPerPage = Math.max(1, Math.min(50, Number(opts?.maxChunksPerPage ?? 12)));
-  const chunkTokens = Math.max(500, Math.min(1000, Number(opts?.chunkTokens ?? 800)));
-  const overlapTokens = Math.max(0, Math.min(200, Number(opts?.overlapTokens ?? 80)));
-  const deadline = nowMs() + maxDurationMs;
+
+  const requestedMaxEmbeddings = Math.max(0, Math.min(200, Number(opts?.maxEmbeddings ?? 32)));
+  const requestedMaxChunksPerPage = Math.max(1, Math.min(50, Number(opts?.maxChunksPerPage ?? 12)));
+  const requestedChunkTokens = Math.max(500, Math.min(1000, Number(opts?.chunkTokens ?? 800)));
+  const requestedOverlapTokens = Math.max(0, Math.min(200, Number(opts?.overlapTokens ?? 80)));
 
   let fetched = 0;
   let stored = 0;
@@ -184,6 +235,7 @@ export async function ingestDevWixArticles(
   let msEmbed = 0;
   let msDb = 0;
   let stoppedReason: IngestStopReason | undefined;
+  let jobId: string | null = null;
 
   const tDb0 = nowMs();
   const source = await prisma.knowledgeSource.findUnique({ where: { sourceKey: DEV_WIX_SOURCE_KEY } });
@@ -195,271 +247,23 @@ export async function ingestDevWixArticles(
     : [0, 0];
   msDb += nowMs() - tDb0;
 
-  if (!source) {
-    return {
-      ok: true,
-      startUrl,
-      limitPages,
-      fetched,
-      stored,
-      skippedUnchanged,
-      chunksUpserted,
-      discoveredQueued: 0,
-      stoppedReason: 'source_missing',
-      budgetMode: 'normal',
-      officialPages,
-      officialChunks,
-      embeddingPressureRatio: 0,
-      startFetched,
-      startStatus,
-      startHtmlBytes,
-      startFetchErrorName,
-      startFetchError,
-      linksFoundTotal: 0,
-      linksMatchedAllowed: 0,
-      sampleLinks: [],
-      embedFailures,
-      lastEmbedErrorName,
-      lastEmbedError,
-      maxDurationMs,
-      maxEmbeddings,
-      embeddingsAttempted,
-      budgetHit: false,
-      budgetHitType: null,
-      maxChunksPerPage,
-      chunkTokens,
-      overlapTokens,
-      msFetch,
-      msTransform,
-      msChunk,
-      msEmbed,
-      msDb,
-      msDiscover: 0,
-      embeddingBatches: 0,
-      embeddingBatchSize: 1,
-    };
-  }
-
-  await ensureStartDocument(startUrl, source.id);
-
-  const targets = await prisma.knowledgeDocument.findMany({
-    where: {
-      sourceId: source.id,
-      ...(opts?.force
-        ? {}
-        : {
-            documentStatus: { in: ['pending', 'failed', 'fetched', 'extracted', 'embedded', 'ready'] },
-          }),
-    },
-    orderBy: [{ fetchedAt: 'asc' }, { createdAt: 'asc' }],
-    take: limitPages,
+  const budgetSnapshot = computeDevWixBudgetSnapshot({ officialChunks });
+  const degradedIngest = applyDevWixIngestDegradation(budgetSnapshot.budgetMode, {
+    maxEmbeddings: requestedMaxEmbeddings,
+    maxChunksPerPage: requestedMaxChunksPerPage,
+    chunkTokens: requestedChunkTokens,
+    overlapTokens: requestedOverlapTokens,
   });
 
-  for (const doc of targets) {
-    if (nowMs() > deadline) {
-      stoppedReason = 'time_budget_exhausted';
-      break;
-    }
+  const maxEmbeddings = degradedIngest.maxEmbeddings;
+  const maxChunksPerPage = degradedIngest.maxChunksPerPage;
+  const chunkTokens = degradedIngest.chunkTokens;
+  const overlapTokens = degradedIngest.overlapTokens;
+  const deadline = nowMs() + maxDurationMs;
 
-    try {
-      const fetchStarted = nowMs();
-      const response = await fetch(doc.canonicalUrl, {
-        headers: {
-          'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
-          Accept: 'text/html,application/xhtml+xml',
-        },
-      });
-      msFetch += nowMs() - fetchStarted;
-
-      fetched += 1;
-      if (!startFetched) {
-        startFetched = true;
-        startStatus = response.status;
-      }
-
-      if (isDefinitivelyGone(response.status)) {
-        const started = nowMs();
-        await prisma.knowledgeChunk.deleteMany({ where: { documentId: doc.id } });
-        await prisma.knowledgeDocument.update({
-          where: { id: doc.id },
-          data: {
-            lastHttpStatus: response.status,
-            documentStatus: 'deleted',
-            lastError: `http_${response.status}`,
-          },
-        });
-        msDb += nowMs() - started;
-        continue;
-      }
-
-      if (!response.ok || !acceptableContentType(response.headers.get('content-type'))) {
-        const started = nowMs();
-        await prisma.knowledgeDocument.update({
-          where: { id: doc.id },
-          data: {
-            lastHttpStatus: response.status,
-            documentStatus: 'failed',
-            lastError: !response.ok ? `http_${response.status}` : 'invalid_content_type',
-          },
-        });
-        msDb += nowMs() - started;
-        continue;
-      }
-
-      const htmlRaw = await response.text();
-      if (!startHtmlBytes) startHtmlBytes = htmlRaw.length;
-      const html = stripHeavyHtml(htmlRaw);
-
-      const transformStarted = nowMs();
-      const { title, markdown } = htmlToMarkdown(html);
-      msTransform += nowMs() - transformStarted;
-
-      if (!markdown.trim()) {
-        const started = nowMs();
-        await prisma.knowledgeDocument.update({
-          where: { id: doc.id },
-          data: {
-            lastHttpStatus: response.status,
-            documentStatus: 'failed',
-            lastError: 'empty_markdown',
-          },
-        });
-        msDb += nowMs() - started;
-        continue;
-      }
-
-      const contentHash = hashText(markdown);
-      if (doc.contentHash && doc.contentHash === contentHash && doc.documentStatus === 'ready') {
-        const started = nowMs();
-        await prisma.knowledgeDocument.update({
-          where: { id: doc.id },
-          data: {
-            title,
-            lastHttpStatus: response.status,
-            fetchedAt: new Date(),
-            documentStatus: 'ready',
-            lastError: null,
-          },
-        });
-        msDb += nowMs() - started;
-        skippedUnchanged += 1;
-        continue;
-      }
-
-      const fetchedAt = new Date();
-      const extractedStarted = nowMs();
-      await prisma.knowledgeDocument.update({
-        where: { id: doc.id },
-        data: {
-          title,
-          normalizedMarkdown: markdown,
-          contentHash,
-          lastHttpStatus: response.status,
-          fetchedAt,
-          documentStatus: 'extracted',
-          lastError: null,
-        },
-      });
-      msDb += nowMs() - extractedStarted;
-
-      const chunkStarted = nowMs();
-      const chunks = chunkTextByTokens(markdown, { chunkTokens, overlapTokens }).slice(0, maxChunksPerPage);
-      msChunk += nowMs() - chunkStarted;
-      const finalChunks = chunks.length ? chunks : [{ text: markdown.trim(), tokenCount: Math.max(1, Math.ceil(markdown.length / 4)) }];
-
-      const rebuildStarted = nowMs();
-      await prisma.knowledgeChunk.deleteMany({ where: { documentId: doc.id } });
-      await prisma.knowledgeChunk.createMany({
-        data: finalChunks.map((chunk, index) => ({
-          documentId: doc.id,
-          chunkIndex: index,
-          chunkText: chunk.text,
-          tokenCount: chunk.tokenCount,
-          textHash: hashText(chunk.text),
-        })),
-      });
-      msDb += nowMs() - rebuildStarted;
-
-      const chunkRows = await prisma.knowledgeChunk.findMany({
-        where: { documentId: doc.id },
-        orderBy: { chunkIndex: 'asc' },
-        select: { id: true, chunkText: true },
-      });
-
-      const updates: Array<{ id: string; vectorLiteral: string }> = [];
-      for (const chunk of chunkRows) {
-        if (embeddingsAttempted >= maxEmbeddings) {
-          stoppedReason = 'embed_budget_exhausted';
-          break;
-        }
-        embeddingsAttempted += 1;
-        try {
-          const embedStarted = nowMs();
-          const embedded = await embedText(chunk.chunkText);
-          msEmbed += nowMs() - embedStarted;
-          if (embedded.vector.length) {
-            updates.push({
-              id: chunk.id,
-              vectorLiteral: embeddingToSqlVectorLiteral(embedded.vector),
-            });
-            chunksUpserted += 1;
-          }
-        } catch (error: any) {
-          embedFailures += 1;
-          lastEmbedErrorName = error?.name ?? 'Error';
-          lastEmbedError = error?.message ?? String(error);
-        }
-      }
-
-      if (updates.length !== chunkRows.length) {
-        const started = nowMs();
-        await prisma.knowledgeDocument.update({
-          where: { id: doc.id },
-          data: {
-            documentStatus: 'failed',
-            lastError: lastEmbedError ?? stoppedReason ?? 'embedding_incomplete',
-          },
-        });
-        msDb += nowMs() - started;
-        if (stoppedReason === 'embed_budget_exhausted') break;
-        continue;
-      }
-
-      if (updates.length > 0) {
-        const started = nowMs();
-        const sql = buildVectorUpdateSql({ updates });
-        await prisma.$executeRawUnsafe(sql.sql, ...sql.values);
-        await prisma.knowledgeDocument.update({
-          where: { id: doc.id },
-          data: {
-            embeddedAt: new Date(),
-            documentStatus: 'ready',
-            lastError: null,
-          },
-        });
-        msDb += nowMs() - started;
-      }
-
-      stored += 1;
-    } catch (error: any) {
-      if (!startFetchError) {
-        startFetchErrorName = error?.name ?? 'Error';
-        startFetchError = error?.message ?? String(error);
-      }
-      const started = nowMs();
-      await prisma.knowledgeDocument.update({
-        where: { id: doc.id },
-        data: {
-          documentStatus: 'failed',
-          lastError: error?.message ?? String(error),
-        },
-      }).catch(() => undefined);
-      msDb += nowMs() - started;
-    }
-  }
-
-  return {
+  const buildResult = (overrides: Partial<IngestResult> = {}): IngestResult => ({
     ok: true,
+    jobId,
     startUrl,
     limitPages,
     fetched,
@@ -468,10 +272,11 @@ export async function ingestDevWixArticles(
     chunksUpserted,
     discoveredQueued: 0,
     stoppedReason,
-    budgetMode: 'normal',
+    budgetMode: budgetSnapshot.budgetMode,
     officialPages,
     officialChunks,
-    embeddingPressureRatio: 0,
+    embeddingPressureRatio: budgetSnapshot.embeddingPressureRatio,
+    dbPressureRatio: budgetSnapshot.dbPressureRatio,
     startFetched,
     startStatus,
     startHtmlBytes,
@@ -486,11 +291,14 @@ export async function ingestDevWixArticles(
     maxDurationMs,
     maxEmbeddings,
     embeddingsAttempted,
-    budgetHit: stoppedReason === 'time_budget_exhausted' || stoppedReason === 'embed_budget_exhausted',
+    budgetHit:
+      stoppedReason === 'time_budget_exhausted' ||
+      stoppedReason === 'embed_budget_exhausted' ||
+      stoppedReason === 'budget_aggressive_stop',
     budgetHitType:
       stoppedReason === 'time_budget_exhausted'
         ? 'time'
-        : stoppedReason === 'embed_budget_exhausted'
+        : stoppedReason === 'embed_budget_exhausted' || stoppedReason === 'budget_aggressive_stop'
           ? 'embeddings'
           : null,
     maxChunksPerPage,
@@ -504,5 +312,410 @@ export async function ingestDevWixArticles(
     msDiscover: 0,
     embeddingBatches: embeddingsAttempted > 0 ? embeddingsAttempted : 0,
     embeddingBatchSize: 1,
-  };
+    ...overrides,
+  });
+
+  if (!source) {
+    return buildResult({
+      stoppedReason: 'source_missing',
+    });
+  }
+
+  const job = await createKnowledgeJob({
+    sourceKey: DEV_WIX_SOURCE_KEY,
+    jobKind: 'ingest',
+    batchLimit: limitPages,
+    cursor: startUrl,
+  });
+  jobId = job.id;
+
+  await logDevWixInfo('dev_wix_ingest_started', {
+    jobId,
+    startUrl,
+    limitPages,
+    budgetMode: budgetSnapshot.budgetMode,
+    embeddingPressureRatio: budgetSnapshot.embeddingPressureRatio,
+    dbPressureRatio: budgetSnapshot.dbPressureRatio,
+    maxEmbeddings,
+    maxChunksPerPage,
+    chunkTokens,
+    overlapTokens,
+  });
+
+  try {
+    if (budgetSnapshot.budgetMode === 'aggressive') {
+      stoppedReason = 'budget_aggressive_stop';
+
+      const aggressiveResult = buildResult();
+      await finishKnowledgeJob(jobId, {
+        status: 'done',
+        processed: 0,
+        inserted: 0,
+        updated: 0,
+        skipped: 0,
+        errorCount: 0,
+        lastError: null,
+        cursor: startUrl,
+      });
+
+      await logDevWixInfo('dev_wix_ingest_completed', {
+        jobId,
+        fetched: aggressiveResult.fetched,
+        stored: aggressiveResult.stored,
+        skippedUnchanged: aggressiveResult.skippedUnchanged,
+        chunksUpserted: aggressiveResult.chunksUpserted,
+        stoppedReason: aggressiveResult.stoppedReason ?? null,
+        budgetMode: aggressiveResult.budgetMode,
+        officialPages: aggressiveResult.officialPages,
+        officialChunks: aggressiveResult.officialChunks,
+        embeddingPressureRatio: aggressiveResult.embeddingPressureRatio,
+        dbPressureRatio: aggressiveResult.dbPressureRatio,
+        duration: nowMs() - runStartedAt,
+      });
+
+      return aggressiveResult;
+    }
+
+    await ensureStartDocument(startUrl, source.id);
+
+    const targets = (await prisma.knowledgeDocument.findMany({
+      where: {
+        sourceId: source.id,
+        ...(opts?.force
+          ? {}
+          : {
+              documentStatus: { in: ['pending', 'failed', 'fetched', 'extracted', 'embedded', 'ready'] },
+            }),
+      },
+      orderBy: [{ fetchedAt: 'asc' }, { createdAt: 'asc' }],
+      take: limitPages,
+    })) as MutableDoc[];
+
+    for (const doc of targets) {
+      if (nowMs() > deadline) {
+        stoppedReason = 'time_budget_exhausted';
+        break;
+      }
+
+      const embedMsBeforeDoc = msEmbed;
+
+      try {
+        const fetchStartedAt = nowMs();
+        const response = await fetch(doc.canonicalUrl, {
+          headers: {
+            'User-Agent': 'botcow_assistance/1.0 (+https://botcow-assistance.vercel.app)',
+            Accept: 'text/html,application/xhtml+xml',
+          },
+        });
+        const fetchDurationMs = nowMs() - fetchStartedAt;
+        msFetch += fetchDurationMs;
+
+        fetched += 1;
+        if (!startFetched) {
+          startFetched = true;
+          startStatus = response.status;
+        }
+
+        await logDevWixInfo('dev_wix_document_fetch_completed', {
+          jobId,
+          canonicalUrl: doc.canonicalUrl,
+          lastHttpStatus: response.status,
+          httpStatusClass: httpStatusClass(response.status),
+          fetchDurationMs,
+        });
+
+        if (isDefinitivelyGone(response.status)) {
+          const started = nowMs();
+          await prisma.knowledgeChunk.deleteMany({ where: { documentId: doc.id } });
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'deleted',
+            lastHttpStatus: response.status,
+            data: {
+              lastHttpStatus: response.status,
+              lastError: `http_${response.status}`,
+            },
+          });
+          msDb += nowMs() - started;
+          continue;
+        }
+
+        if (!response.ok || !acceptableContentType(response.headers.get('content-type'))) {
+          const started = nowMs();
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'failed',
+            lastHttpStatus: response.status,
+            data: {
+              lastHttpStatus: response.status,
+              lastError: !response.ok ? `http_${response.status}` : 'invalid_content_type',
+            },
+          });
+          msDb += nowMs() - started;
+          continue;
+        }
+
+        const htmlRaw = await response.text();
+        if (!startHtmlBytes) startHtmlBytes = htmlRaw.length;
+        const html = stripHeavyHtml(htmlRaw);
+
+        const transformStartedAt = nowMs();
+        const { title, markdown } = htmlToMarkdown(html);
+        msTransform += nowMs() - transformStartedAt;
+
+        if (!markdown.trim()) {
+          const started = nowMs();
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'failed',
+            lastHttpStatus: response.status,
+            data: {
+              lastHttpStatus: response.status,
+              lastError: 'empty_markdown',
+            },
+          });
+          msDb += nowMs() - started;
+          continue;
+        }
+
+        const contentHash = hashText(markdown);
+
+        await logDevWixInfo('dev_wix_document_hash_computed', {
+          jobId,
+          canonicalUrl: doc.canonicalUrl,
+          normalizedContentHash: contentHash,
+        });
+
+        if (doc.contentHash && doc.contentHash === contentHash && doc.documentStatus === 'ready') {
+          const started = nowMs();
+          await prisma.knowledgeDocument.update({
+            where: { id: doc.id },
+            data: {
+              title,
+              lastHttpStatus: response.status,
+              fetchedAt: new Date(),
+              documentStatus: 'ready',
+              lastError: null,
+            },
+          });
+          msDb += nowMs() - started;
+          skippedUnchanged += 1;
+
+          await logDevWixInfo('dev_wix_document_unchanged', {
+            jobId,
+            canonicalUrl: doc.canonicalUrl,
+            normalizedContentHash: contentHash,
+            lastHttpStatus: response.status,
+            httpStatusClass: httpStatusClass(response.status),
+            fetchDurationMs,
+          });
+          continue;
+        }
+
+        const fetchedAt = new Date();
+        const extractedStartedAt = nowMs();
+        await transitionDocument({
+          jobId,
+          doc,
+          nextStatus: 'extracted',
+          lastHttpStatus: response.status,
+          data: {
+            title,
+            normalizedMarkdown: markdown,
+            contentHash,
+            lastHttpStatus: response.status,
+            fetchedAt,
+            lastError: null,
+          },
+        });
+        doc.contentHash = contentHash;
+        msDb += nowMs() - extractedStartedAt;
+
+        const chunkStartedAt = nowMs();
+        const chunks = chunkTextByTokens(markdown, { chunkTokens, overlapTokens }).slice(0, maxChunksPerPage);
+        msChunk += nowMs() - chunkStartedAt;
+        const finalChunks = chunks.length
+          ? chunks
+          : [{ text: markdown.trim(), tokenCount: Math.max(1, Math.ceil(markdown.length / 4)) }];
+
+        await logDevWixInfo('dev_wix_document_chunked', {
+          jobId,
+          canonicalUrl: doc.canonicalUrl,
+          chunkCountProduced: finalChunks.length,
+        });
+
+        const rebuildStartedAt = nowMs();
+        await prisma.knowledgeChunk.deleteMany({ where: { documentId: doc.id } });
+        await prisma.knowledgeChunk.createMany({
+          data: finalChunks.map((chunk, index) => ({
+            documentId: doc.id,
+            chunkIndex: index,
+            chunkText: chunk.text,
+            tokenCount: chunk.tokenCount,
+            textHash: hashText(chunk.text),
+          })),
+        });
+        msDb += nowMs() - rebuildStartedAt;
+
+        const chunkRows = await prisma.knowledgeChunk.findMany({
+          where: { documentId: doc.id },
+          orderBy: { chunkIndex: 'asc' },
+          select: { id: true, chunkText: true },
+        });
+
+        const updates: Array<{ id: string; vectorLiteral: string }> = [];
+
+        for (const chunk of chunkRows) {
+          if (embeddingsAttempted >= maxEmbeddings) {
+            stoppedReason = 'embed_budget_exhausted';
+            break;
+          }
+
+          embeddingsAttempted += 1;
+
+          try {
+            const embedStartedAt = nowMs();
+            const embedded = await embedText(chunk.chunkText);
+            msEmbed += nowMs() - embedStartedAt;
+
+            if (embedded.vector.length) {
+              updates.push({
+                id: chunk.id,
+                vectorLiteral: embeddingToSqlVectorLiteral(embedded.vector),
+              });
+              chunksUpserted += 1;
+            }
+          } catch (error: any) {
+            embedFailures += 1;
+            lastEmbedErrorName = error?.name ?? 'Error';
+            lastEmbedError = error?.message ?? String(error);
+          }
+        }
+
+        const embedDurationMs = msEmbed - embedMsBeforeDoc;
+
+        await logDevWixInfo('dev_wix_document_embedded', {
+          jobId,
+          canonicalUrl: doc.canonicalUrl,
+          embeddingCountProduced: updates.length,
+          embedDurationMs,
+        });
+
+        if (updates.length !== chunkRows.length) {
+          const started = nowMs();
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'failed',
+            data: {
+              lastError: lastEmbedError ?? stoppedReason ?? 'embedding_incomplete',
+            },
+          });
+          msDb += nowMs() - started;
+
+          if (stoppedReason === 'embed_budget_exhausted') break;
+          continue;
+        }
+
+        if (updates.length > 0) {
+          const started = nowMs();
+          const sql = buildVectorUpdateSql({ updates });
+          await prisma.$executeRawUnsafe(sql.sql, ...sql.values);
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'ready',
+            data: {
+              embeddedAt: new Date(),
+              lastError: null,
+            },
+          });
+          msDb += nowMs() - started;
+        }
+
+        stored += 1;
+      } catch (error: any) {
+        if (!startFetchError) {
+          startFetchErrorName = error?.name ?? 'Error';
+          startFetchError = error?.message ?? String(error);
+        }
+
+        const started = nowMs();
+        await transitionDocument({
+          jobId,
+          doc,
+          nextStatus: 'failed',
+          data: {
+            lastError: error?.message ?? String(error),
+          },
+        }).catch(() => undefined);
+        msDb += nowMs() - started;
+
+        await logDevWixWarn('dev_wix_document_processing_failed', {
+          jobId,
+          canonicalUrl: doc.canonicalUrl,
+          error: error?.message ?? String(error),
+        });
+      }
+    }
+
+    const result = buildResult();
+
+    await finishKnowledgeJob(jobId, {
+      status: 'done',
+      processed: fetched,
+      inserted: stored,
+      updated: chunksUpserted,
+      skipped: skippedUnchanged,
+      errorCount: embedFailures,
+      lastError: lastEmbedError ?? startFetchError ?? null,
+      cursor: startUrl,
+    });
+
+    await logDevWixInfo('dev_wix_ingest_completed', {
+      jobId,
+      fetched: result.fetched,
+      stored: result.stored,
+      skippedUnchanged: result.skippedUnchanged,
+      chunksUpserted: result.chunksUpserted,
+      stoppedReason: result.stoppedReason ?? null,
+      budgetMode: result.budgetMode,
+      officialPages: result.officialPages,
+      officialChunks: result.officialChunks,
+      embeddingPressureRatio: result.embeddingPressureRatio,
+      dbPressureRatio: result.dbPressureRatio,
+      duration: nowMs() - runStartedAt,
+      msFetch: result.msFetch,
+      msEmbed: result.msEmbed,
+    });
+
+    return result;
+  } catch (error: any) {
+    await finishKnowledgeJob(jobId, {
+      status: 'failed',
+      processed: fetched,
+      inserted: stored,
+      updated: chunksUpserted,
+      skipped: skippedUnchanged,
+      errorCount: Math.max(1, embedFailures),
+      lastError: error?.message ?? String(error),
+      cursor: startUrl,
+    }).catch(() => undefined);
+
+    await logDevWixWarn('dev_wix_ingest_failed', {
+      jobId,
+      fetched,
+      stored,
+      skippedUnchanged,
+      chunksUpserted,
+      embedFailures,
+      error: error?.message ?? String(error),
+      duration: nowMs() - runStartedAt,
+    });
+
+    throw error;
+  }
 }

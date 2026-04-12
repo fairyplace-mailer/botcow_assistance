@@ -431,8 +431,13 @@ function buildExecutionProfile(params: Pick<RunAssistantTurnParams, 'instruction
 Repository audit mode:
 - This is a repo-wide read-only audit task.
 - Do not modify files, do not commit, do not deploy.
+- First read docs/strong_spec.md before judging compliance.
+- Treat docs/strong_spec.md as the primary spec.
+- If golden core files are present, treat golden core as higher priority than legacy docs.
+- Ignore removed legacy paths such as docs/spec.md.
 - Prefer broad repo inspection before conclusions.
 - Prefer reading files in batches with github_get_files_batch when available.
+- Before any strict-mode conclusion, inspect the Responses runtime and strict tool schema builder directly.
 - Focus on exact compliance against docs/strong_spec.md.
 - In the final answer, report only mismatches, partial mismatches, and whether Responses API strict mode is configured.
 - Keep the answer short, direct, and in simple language.

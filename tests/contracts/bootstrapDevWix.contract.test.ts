@@ -6,6 +6,14 @@ const knowledgeJobUpdate = jest.fn();
 const knowledgeDocumentFindFirst = jest.fn();
 const knowledgeDocumentCreate = jest.fn();
 const knowledgeDocumentUpdate = jest.fn();
+const logInfo = jest.fn();
+const logWarn = jest.fn();
+
+jest.mock('../../src/backend/log', () => ({
+  logEvent: jest.fn().mockResolvedValue(undefined),
+  logInfo: (...args: any[]) => logInfo(...args),
+  logWarn: (...args: any[]) => logWarn(...args),
+}));
 
 jest.mock('../../src/backend/db', () => ({
   prisma: {
@@ -27,7 +35,7 @@ const loadDevWixSeedManifest = jest.fn();
 jest.mock('../../src/backend/devWixDocs/seedManifest', () => ({
   DEV_WIX_SCOPE_ALLOWLIST: 'https://dev.wix.com/docs/*',
   DEV_WIX_SEED_MANIFEST_PATH: 'docs/rag/dev_wix.seed.txt',
-  DEV_WIX_SOURCE_KEY: 'dev_wix_docs',
+  DEV_WIX_SOURCE_KEY: 'wix_docs_public',
   DEV_WIX_SOURCE_KIND: 'public_http_docs',
   loadDevWixSeedManifest: (...args: any[]) => loadDevWixSeedManifest(...args),
 }));
@@ -35,6 +43,8 @@ jest.mock('../../src/backend/devWixDocs/seedManifest', () => ({
 describe('bootstrapDevWixKnowledge contract', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    logInfo.mockResolvedValue(undefined);
+    logWarn.mockResolvedValue(undefined);
     knowledgeSourceUpsert.mockResolvedValue({ id: 'source-1' });
     knowledgeJobCreate.mockResolvedValue({ id: 'job-1' });
     knowledgeJobUpdate.mockResolvedValue({ id: 'job-1' });
@@ -62,13 +72,15 @@ describe('bootstrapDevWixKnowledge contract', () => {
       data: expect.objectContaining({
         canonicalUrl: 'https://dev.wix.com/docs/sdk',
         originalUrl: 'https://dev.wix.com/docs/sdk',
+        sourceSection: 'wix_docs_public',
         documentStatus: 'pending',
       }),
     });
   });
 
   test('rerun is idempotent for existing canonical url', async () => {
-    knowledgeDocumentFindFirst.mockResolvedValueOnce({ id: 'doc-1' });
+    knowledgeDocumentFindFirst.mockResolvedValueOnce({ id: 'doc-1', documentStatus: 'ready' });
+
     const { bootstrapDevWixKnowledge } = await import('../../src/backend/devWixDocs/bootstrap');
     const result = await bootstrapDevWixKnowledge({ batchLimit: 1, cursor: 0 });
 
@@ -81,5 +93,35 @@ describe('bootstrapDevWixKnowledge contract', () => {
         originalUrl: 'https://dev.wix.com/docs/sdk',
       }),
     });
+  });
+
+  test('logs bootstrap job and canonical urls', async () => {
+    const { bootstrapDevWixKnowledge } = await import('../../src/backend/devWixDocs/bootstrap');
+    await bootstrapDevWixKnowledge({ batchLimit: 1, cursor: 0 });
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_bootstrap_started',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+      }),
+    );
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_bootstrap_document_registered',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+        canonicalUrl: 'https://dev.wix.com/docs/sdk',
+      }),
+    );
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_bootstrap_completed',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+      }),
+    );
   });
 });

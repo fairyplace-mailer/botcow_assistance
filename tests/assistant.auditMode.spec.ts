@@ -119,6 +119,8 @@ describe('assistant audit mode', () => {
     expect(create).toHaveBeenCalledTimes(14);
     expect(create.mock.calls[0][0].instructions).toContain('Repository audit mode:');
     expect(create.mock.calls[0][0].instructions).toContain('Do not modify files, do not commit, do not deploy.');
+    expect(create.mock.calls[0][0].instructions).toContain('First read docs/strong_spec.md before judging compliance.');
+    expect(create.mock.calls[0][0].instructions).toContain('Ignore removed legacy paths such as docs/spec.md.');
     expect(create.mock.calls[0][0].instructions).toContain('github_get_files_batch');
   });
 });

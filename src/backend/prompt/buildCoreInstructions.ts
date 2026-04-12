@@ -16,7 +16,7 @@ export function buildCoreInstructions({ routing, hints }: BuildCoreInstructionsP
     'Any factual claim about code or infrastructure must come from available tools or from the user-provided source text.',
     'Do not promise work you cannot actually complete.',
     'Do not create branches, merge PRs, or run production deployment unless the owner explicitly asked for that exact action.',
-    'If docs/spec.md exists and is relevant, treat it as the primary project spec.',
+    'Treat docs/strong_spec.md as the primary project spec.',
     'Do not add temporary hacks in core runtime logic.',
     'If the task is underspecified, say what is missing clearly and briefly.',
     'Keep user-facing answers short and structured.',
@@ -26,6 +26,7 @@ export function buildCoreInstructions({ routing, hints }: BuildCoreInstructionsP
   const selfRewriteRules = [
     'Self-rewrite safety is strict.',
     'If the task touches BotCow core runtime files, do not simplify, bypass, or weaken core rules.',
+    'If golden core is present, treat it as higher priority than any legacy project doc.',
     'Do not mutate golden-core behavior through prompt tricks, shadow adapters, or hidden compatibility shims.',
     'When core and surrounding code conflict, surrounding code must adapt to core.',
   ];

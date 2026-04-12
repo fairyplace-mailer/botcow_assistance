@@ -28,6 +28,10 @@ type Chunk = {
 };
 
 const embedText = jest.fn();
+const createKnowledgeJob = jest.fn();
+const finishKnowledgeJob = jest.fn();
+const logInfo = jest.fn();
+const logWarn = jest.fn();
 
 let docsState: Doc[] = [];
 let chunksState: Chunk[] = [];
@@ -45,8 +49,19 @@ const knowledgeChunkCreateMany = jest.fn();
 const knowledgeChunkFindMany = jest.fn();
 const executeRawUnsafe = jest.fn();
 
+jest.mock('../src/backend/log', () => ({
+  logEvent: jest.fn().mockResolvedValue(undefined),
+  logInfo: (...args: any[]) => logInfo(...args),
+  logWarn: (...args: any[]) => logWarn(...args),
+}));
+
 jest.mock('../src/backend/openai', () => ({
   embedText: (...args: any[]) => embedText(...args),
+}));
+
+jest.mock('../src/backend/knowledgeJobs', () => ({
+  createKnowledgeJob: (...args: any[]) => createKnowledgeJob(...args),
+  finishKnowledgeJob: (...args: any[]) => finishKnowledgeJob(...args),
 }));
 
 jest.mock('../src/backend/db', () => ({
@@ -76,6 +91,8 @@ function makeHtml(body: string): string {
 describe('ingestDevWixArticles knowledge contract', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.BOTCOW_DEV_WIX_EMBEDDING_BUDGET_LIMIT;
+    delete process.env.BOTCOW_DEV_WIX_DB_BUDGET_LIMIT;
 
     chunkSeq = 1;
     chunksState = [];
@@ -97,8 +114,13 @@ describe('ingestDevWixArticles knowledge contract', () => {
       },
     ];
 
+    logInfo.mockResolvedValue(undefined);
+    logWarn.mockResolvedValue(undefined);
+    createKnowledgeJob.mockResolvedValue({ id: 'job-1' });
+    finishKnowledgeJob.mockResolvedValue({ id: 'job-1' });
+
     embedText.mockResolvedValue({ vector: [0.1, 0.2], dims: 2, model: 'text-embedding-3-small' });
-    knowledgeSourceFindUnique.mockResolvedValue({ id: 'source-1', sourceKey: 'dev_wix_docs' });
+    knowledgeSourceFindUnique.mockResolvedValue({ id: 'source-1', sourceKey: 'wix_docs_public' });
     knowledgeDocumentCount.mockImplementation(async () => docsState.filter((x) => x.documentStatus === 'ready').length);
     knowledgeChunkCount.mockImplementation(async () => chunksState.length);
     knowledgeDocumentFindMany.mockImplementation(async () => docsState);
@@ -245,5 +267,129 @@ describe('ingestDevWixArticles knowledge contract', () => {
     expect(knowledgeChunkDeleteMany).toHaveBeenCalled();
     expect(docsState[0]?.documentStatus).toBe('deleted');
     expect(docsState[0]?.lastError).toBe('http_404');
+  });
+
+  test('warning mode reduces ingest intensity at >=70% pressure', async () => {
+    process.env.BOTCOW_DEV_WIX_EMBEDDING_BUDGET_LIMIT = '10';
+    process.env.BOTCOW_DEV_WIX_DB_BUDGET_LIMIT = '10';
+    chunksState = Array.from({ length: 7 }, (_, index) => ({
+      id: `seed-${index}`,
+      documentId: 'seed-doc',
+      chunkIndex: index,
+      chunkText: `seed-${index}`,
+      tokenCount: 10,
+      textHash: `seed-${index}`,
+    }));
+
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    const result = await ingestDevWixArticles({
+      startUrl: 'https://dev.wix.com/docs/sdk',
+      limitPages: 1,
+      force: true,
+      maxEmbeddings: 20,
+      maxChunksPerPage: 12,
+      chunkTokens: 800,
+      overlapTokens: 80,
+    });
+
+    expect(result.budgetMode).toBe('warning');
+    expect(result.embeddingPressureRatio).toBe(0.7);
+    expect(result.dbPressureRatio).toBe(0.7);
+    expect(result.maxEmbeddings).toBe(10);
+    expect(result.maxChunksPerPage).toBe(6);
+    expect(result.chunkTokens).toBe(600);
+    expect(result.overlapTokens).toBe(40);
+  });
+
+  test('aggressive mode stops new ingest at >=90% pressure', async () => {
+    process.env.BOTCOW_DEV_WIX_EMBEDDING_BUDGET_LIMIT = '10';
+    process.env.BOTCOW_DEV_WIX_DB_BUDGET_LIMIT = '10';
+    chunksState = Array.from({ length: 9 }, (_, index) => ({
+      id: `seed-${index}`,
+      documentId: 'seed-doc',
+      chunkIndex: index,
+      chunkText: `seed-${index}`,
+      tokenCount: 10,
+      textHash: `seed-${index}`,
+    }));
+
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    const result = await ingestDevWixArticles({ startUrl: 'https://dev.wix.com/docs/sdk', limitPages: 1, force: true });
+
+    expect(result.budgetMode).toBe('aggressive');
+    expect(result.stoppedReason).toBe('budget_aggressive_stop');
+    expect(result.budgetHit).toBe(true);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(embedText).not.toHaveBeenCalled();
+  });
+
+  test('logs required ingest fields for processed document', async () => {
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    const result = await ingestDevWixArticles({ startUrl: 'https://dev.wix.com/docs/sdk', limitPages: 1, force: true });
+
+    expect(result.jobId).toBe('job-1');
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_ingest_started',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+      }),
+    );
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_document_fetch_completed',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+        canonicalUrl: 'https://dev.wix.com/docs/sdk',
+        lastHttpStatus: 200,
+        httpStatusClass: '2xx',
+      }),
+    );
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_document_hash_computed',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+        canonicalUrl: 'https://dev.wix.com/docs/sdk',
+      }),
+    );
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_document_chunked',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+        canonicalUrl: 'https://dev.wix.com/docs/sdk',
+      }),
+    );
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_document_embedded',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+        canonicalUrl: 'https://dev.wix.com/docs/sdk',
+      }),
+    );
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_document_status_transition',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+        canonicalUrl: 'https://dev.wix.com/docs/sdk',
+      }),
+    );
+
+    expect(logInfo).toHaveBeenCalledWith(
+      'dev_wix_ingest_completed',
+      expect.objectContaining({
+        sourceKey: 'wix_docs_public',
+        jobId: 'job-1',
+      }),
+    );
   });
 });

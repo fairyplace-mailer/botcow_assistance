@@ -347,16 +347,18 @@ export async function ingestDevWixArticles(
       stoppedReason = 'budget_aggressive_stop';
 
       const aggressiveResult = buildResult();
-      await finishKnowledgeJob(jobId, {
-        status: 'done',
-        processed: 0,
-        inserted: 0,
-        updated: 0,
-        skipped: 0,
-        errorCount: 0,
-        lastError: null,
-        cursor: startUrl,
-      });
+      if (jobId) {
+        await finishKnowledgeJob(jobId, {
+          status: 'done',
+          processed: 0,
+          inserted: 0,
+          updated: 0,
+          skipped: 0,
+          errorCount: 0,
+          lastError: null,
+          cursor: startUrl,
+        });
+      }
 
       await logDevWixInfo('dev_wix_ingest_completed', {
         jobId,
@@ -664,16 +666,18 @@ export async function ingestDevWixArticles(
 
     const result = buildResult();
 
-    await finishKnowledgeJob(jobId, {
-      status: 'done',
-      processed: fetched,
-      inserted: stored,
-      updated: chunksUpserted,
-      skipped: skippedUnchanged,
-      errorCount: embedFailures,
-      lastError: lastEmbedError ?? startFetchError ?? null,
-      cursor: startUrl,
-    });
+    if (jobId) {
+      await finishKnowledgeJob(jobId, {
+        status: 'done',
+        processed: fetched,
+        inserted: stored,
+        updated: chunksUpserted,
+        skipped: skippedUnchanged,
+        errorCount: embedFailures,
+        lastError: lastEmbedError ?? startFetchError ?? null,
+        cursor: startUrl,
+      });
+    }
 
     await logDevWixInfo('dev_wix_ingest_completed', {
       jobId,
@@ -694,16 +698,18 @@ export async function ingestDevWixArticles(
 
     return result;
   } catch (error: any) {
-    await finishKnowledgeJob(jobId, {
-      status: 'failed',
-      processed: fetched,
-      inserted: stored,
-      updated: chunksUpserted,
-      skipped: skippedUnchanged,
-      errorCount: Math.max(1, embedFailures),
-      lastError: error?.message ?? String(error),
-      cursor: startUrl,
-    }).catch(() => undefined);
+    if (jobId) {
+      await finishKnowledgeJob(jobId, {
+        status: 'failed',
+        processed: fetched,
+        inserted: stored,
+        updated: chunksUpserted,
+        skipped: skippedUnchanged,
+        errorCount: Math.max(1, embedFailures),
+        lastError: error?.message ?? String(error),
+        cursor: startUrl,
+      }).catch(() => undefined);
+    }
 
     await logDevWixWarn('dev_wix_ingest_failed', {
       jobId,

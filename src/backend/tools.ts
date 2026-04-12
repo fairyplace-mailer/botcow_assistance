@@ -1,5 +1,4 @@
 import type OpenAI from 'openai';
-
 import { toolsHandlers, toolsSchemas } from './tools/index';
 
 export const toolSchemas = toolsSchemas;

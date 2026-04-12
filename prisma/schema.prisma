@@ -6,9 +6,27 @@ datasource db {
   provider = "postgresql"
 }
 
-enum KnowledgeLayer {
-  OFFICIAL
-  TEMPORARY
+enum KnowledgeSourceStatus {
+  active
+  disabled
+}
+
+enum KnowledgeJobStatus {
+  queued
+  running
+  paused
+  done
+  failed
+}
+
+enum KnowledgeDocumentStatus {
+  pending
+  fetched
+  extracted
+  embedded
+  ready
+  failed
+  deleted
 }
 
 model KvItem {
@@ -28,27 +46,6 @@ model GithubCache {
   @@index([expiresAt])
 }
 
-model CrawlJob {
-  id            String    @id @default(cuid())
-  kind          String
-  startedAt     DateTime
-  finishedAt    DateTime?
-  status        String
-  batchLimit    Int?
-  processed     Int?
-  inserted      Int?
-  updated       Int?
-  deleted       Int?
-  skipped       Int?
-  errorsJson    Json?
-  metaJson      Json?
-
-  createdAt     DateTime  @default(now())
-
-  @@index([kind, startedAt])
-  @@index([status])
-}
-
 model CronLock {
   name         String   @id
   lockedAt     DateTime
@@ -56,54 +53,87 @@ model CronLock {
   metaJson     Json?
 }
 
-model DocPage {
-  id          String         @id @default(cuid())
-  url         String         @unique
-  title       String?
-  text        String
-  contentHash String
-  knowledgeLayer KnowledgeLayer @default(OFFICIAL)
-  retentionUntil DateTime?
-  lastAccessedAt DateTime?
-  retentionReason String?
+model KnowledgeSource {
+  id               String                @id @default(cuid())
+  sourceKey        String                @unique @map("source_key")
+  sourceKind       String                @map("source_kind")
+  seedManifestPath String                @map("seed_manifest_path")
+  scopeAllowlist   String                @map("scope_allowlist")
+  status           KnowledgeSourceStatus @default(active)
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
 
-  httpStatus  Int?
+  jobs      KnowledgeJob[]
+  documents KnowledgeDocument[]
 
-  fetchedAt   DateTime
-  lastSeenAt  DateTime
-
-  refreshIntervalHours Int      @default(24)
-  nextFetchAt          DateTime?
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  chunks DocChunk[]
-
-  @@index([fetchedAt])
-  @@index([lastSeenAt])
-  @@index([nextFetchAt])
-  @@index([knowledgeLayer, retentionUntil])
+  @@map("knowledge_sources")
 }
 
-model DocChunk {
-  id             String         @id @default(cuid())
-  pageId         String
-  idx            Int
-  content        String
-  knowledgeLayer KnowledgeLayer @default(OFFICIAL)
-  retentionUntil DateTime?
-  lastAccessedAt DateTime?
+model KnowledgeJob {
+  id           String             @id @default(cuid())
+  sourceId     String             @map("source_id")
+  jobKind      String             @map("job_kind")
+  jobStatus    KnowledgeJobStatus @default(queued) @map("job_status")
+  batchLimit   Int?               @map("batch_limit")
+  cursor       String?            @map("cursor")
+  processed    Int                @default(0)
+  inserted     Int                @default(0)
+  updated      Int                @default(0)
+  skipped      Int                @default(0)
+  errorCount   Int                @default(0) @map("error_count")
+  lastError    String?            @db.Text @map("last_error")
+  startedAt    DateTime           @default(now()) @map("started_at")
+  finishedAt   DateTime?          @map("finished_at")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
 
-  embedding      Unsupported("vector(1536)")?
-  embeddingModel String?
-  dims           Int?
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
 
-  createdAt      DateTime @default(now())
+  @@index([sourceId, jobKind, createdAt])
+  @@index([jobStatus])
+  @@map("knowledge_jobs")
+}
 
-  page DocPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+model KnowledgeDocument {
+  id                 String                  @id @default(cuid())
+  sourceId           String                  @map("source_id")
+  originalUrl        String                  @map("original_url")
+  canonicalUrl       String                  @map("canonical_url")
+  sourceSection      String?                 @map("source_section")
+  title              String?
+  normalizedMarkdown String?                 @db.Text @map("normalized_markdown")
+  contentHash        String?                 @map("content_hash")
+  lastHttpStatus     Int?                    @map("last_http_status")
+  documentStatus     KnowledgeDocumentStatus @default(pending) @map("document_status")
+  fetchedAt          DateTime?               @map("fetched_at")
+  embeddedAt         DateTime?               @map("embedded_at")
+  lastError          String?                 @db.Text @map("last_error")
+  createdAt          DateTime                @default(now()) @map("created_at")
+  updatedAt          DateTime                @updatedAt @map("updated_at")
 
-  @@unique([pageId, idx])
-  @@index([pageId])
-  @@index([knowledgeLayer, retentionUntil])
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  chunks KnowledgeChunk[]
+
+  @@index([sourceId, documentStatus])
+  @@unique([sourceId, canonicalUrl])
+  @@index([canonicalUrl])
+  @@map("knowledge_documents")
+}
+
+model KnowledgeChunk {
+  id         String            @id @default(cuid())
+  documentId String            @map("document_id")
+  chunkIndex Int               @map("chunk_index")
+  chunkText  String            @db.Text @map("chunk_text")
+  tokenCount Int               @map("token_count")
+  textHash   String            @map("text_hash")
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime          @default(now()) @map("created_at")
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+
+  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+  @@map("knowledge_chunks")
 }

@@ -1,5 +1,6 @@
 import { prisma } from '../db';
 import { embedText } from '../openai';
+import { DEV_WIX_SOURCE_KEY } from './seedManifest';
 
 export type RetrievedDocChunk = {
   url: string;
@@ -10,10 +11,10 @@ export type RetrievedDocChunk = {
 
 type RetrievedRow = {
   id: string;
-  pageId: string;
-  url: string;
+  documentId: string;
+  canonicalUrl: string;
   title: string | null;
-  content: string;
+  chunkText: string;
   distance: number;
 };
 
@@ -32,59 +33,42 @@ export async function retrieveDevWixContext(opts: {
   const emb = await embedText(opts.query);
   if (!emb.vector.length) return { chunks: [], queryEmbeddingDims: emb.dims };
 
-  const nowIso = new Date().toISOString();
   const rows = (await prisma.$queryRawUnsafe(
-    `SELECT c.id, c."pageId", p.url, p.title, c.content, (c.embedding <-> '${vectorLiteral(emb.vector)}'::vector) AS distance
-     FROM "DocChunk" c
-     JOIN "DocPage" p ON p.id = c."pageId"
+    `SELECT c.id,
+            c.document_id AS "documentId",
+            d.canonical_url AS "canonicalUrl",
+            d.title,
+            c.chunk_text AS "chunkText",
+            (c.embedding <-> '${vectorLiteral(emb.vector)}'::vector) AS distance
+     FROM knowledge_chunks c
+     JOIN knowledge_documents d ON d.id = c.document_id
+     JOIN knowledge_sources s ON s.id = d.source_id
      WHERE c.embedding IS NOT NULL
-       AND (
-         (c."knowledgeLayer" = 'OFFICIAL' AND p."knowledgeLayer" = 'OFFICIAL')
-         OR (
-           c."knowledgeLayer" = 'TEMPORARY'
-           AND p."knowledgeLayer" = 'TEMPORARY'
-           AND c."retentionUntil" IS NOT NULL
-           AND p."retentionUntil" IS NOT NULL
-           AND c."retentionUntil" > '${nowIso}'::timestamp
-           AND p."retentionUntil" > '${nowIso}'::timestamp
-         )
-       )
-     ORDER BY
-       CASE WHEN p."knowledgeLayer" = 'OFFICIAL' THEN 0 ELSE 1 END ASC,
-       c.embedding <-> '${vectorLiteral(emb.vector)}'::vector
+       AND s.source_key = '${DEV_WIX_SOURCE_KEY}'
+       AND s.status = 'active'
+       AND d.document_status = 'ready'
+     ORDER BY c.embedding <-> '${vectorLiteral(emb.vector)}'::vector
      LIMIT ${Math.max(1, Math.min(20, topK * 3))};`,
   )) as RetrievedRow[];
 
   const scored = rows.map((r) => ({
     id: r.id,
-    pageId: r.pageId,
-    url: r.url,
+    documentId: r.documentId,
+    url: r.canonicalUrl,
     title: r.title,
-    content: r.content,
+    content: r.chunkText,
     score: 1 / (1 + (r.distance ?? 0)),
   }));
 
   const out: RetrievedDocChunk[] = [];
-  const usedChunkIds: string[] = [];
-  const usedPageIds = new Set<string>();
   let used = 0;
   for (const s of scored) {
     const snippet = s.content.trim();
     if (!snippet) continue;
     if (used + snippet.length > maxChars) break;
     out.push({ url: s.url, title: s.title, content: s.content, score: s.score });
-    usedChunkIds.push(s.id);
-    usedPageIds.add(s.pageId);
     used += snippet.length;
     if (out.length >= topK) break;
-  }
-
-  if (usedChunkIds.length > 0) {
-    const now = new Date();
-    await prisma.$transaction([
-      prisma.docChunk.updateMany({ where: { id: { in: usedChunkIds } }, data: { lastAccessedAt: now } }),
-      prisma.docPage.updateMany({ where: { id: { in: Array.from(usedPageIds) } }, data: { lastAccessedAt: now } }),
-    ]);
   }
 
   return { chunks: out, queryEmbeddingDims: emb.dims };
@@ -96,7 +80,7 @@ export function formatDevWixContext(chunks: RetrievedDocChunk[]): string {
   const lines: string[] = [];
   lines.push('Wix developer docs context (dev.wix.com/docs):');
   for (const c of chunks) {
-    const title = c.title ? ` \u0015 \u0015 ${c.title}` : '';
+    const title = c.title ? ` | ${c.title}` : '';
     lines.push(`- Source: ${c.url}${title}`);
     lines.push(c.content.trim());
     lines.push('');

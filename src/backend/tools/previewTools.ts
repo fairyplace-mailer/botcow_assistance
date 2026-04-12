@@ -224,13 +224,31 @@ export const previewToolsSchemas = [
       description: 'Get Vercel preview URL for a given repo/sha/branch (preview only).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
-          repo: { type: 'string' },
-          git_sha: { type: 'string' },
-          branch: { type: 'string' },
-          target: { type: 'string', enum: ['preview'] },
-          timeWindowMinutes: { type: 'number' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          git_sha: {
+            type: ['string', 'null'],
+            description: 'Git commit SHA to match preview deployment by metadata.',
+          },
+          branch: {
+            type: ['string', 'null'],
+            description: 'Fallback branch name to match preview deployment.',
+          },
+          target: {
+            type: ['string', 'null'],
+            enum: ['preview', null],
+            description: 'Target environment. Only preview is allowed.',
+          },
+          timeWindowMinutes: {
+            type: ['number', 'null'],
+            description: 'Fallback time window in minutes when matching by branch.',
+          },
         },
+        required: ['repo', 'git_sha', 'branch', 'target', 'timeWindowMinutes'],
       },
     },
   },
@@ -241,19 +259,51 @@ export const previewToolsSchemas = [
       description: 'Perform a safe HTTP request to a Vercel preview deployment URL (SSRF-protected).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
-          baseUrl: { type: 'string' },
-          path: { type: 'string' },
-          method: { type: 'string', enum: ['GET', 'POST'] },
-          headers: {
-            type: 'object',
-            additionalProperties: { type: 'string' },
+          baseUrl: {
+            type: 'string',
+            description: 'Base preview URL, must be an allowed https://*.vercel.app host.',
           },
-          body: {},
-          timeoutMs: { type: 'number' },
-          maxResponseChars: { type: 'number' },
+          path: {
+            type: 'string',
+            description: 'Request path, for example / or /tools.',
+          },
+          method: {
+            type: ['string', 'null'],
+            enum: ['GET', 'POST', null],
+            description: 'HTTP method. If null, GET is used.',
+          },
+          headers: {
+            type: ['array', 'null'],
+            description: 'Optional request headers as name/value pairs.',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                name: { type: 'string' },
+                value: { type: 'string' },
+              },
+              required: ['name', 'value'],
+            },
+          },
+          body: {
+            type: ['object', 'string', 'null'],
+            additionalProperties: false,
+            description: 'Optional request body. Can be a JSON object, raw string, or null.',
+            properties: {},
+            required: [],
+          },
+          timeoutMs: {
+            type: ['number', 'null'],
+            description: 'Request timeout in milliseconds.',
+          },
+          maxResponseChars: {
+            type: ['number', 'null'],
+            description: 'Maximum number of response characters to keep.',
+          },
         },
-        required: ['baseUrl', 'path'],
+        required: ['baseUrl', 'path', 'method', 'headers', 'body', 'timeoutMs', 'maxResponseChars'],
       },
     },
   },
@@ -264,11 +314,22 @@ export const previewToolsSchemas = [
       description: 'Find latest Vercel preview URL and run a small set of HTTP/tool checks against it.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
-          repo: { type: 'string' },
-          git_sha: { type: 'string' },
-          branch: { type: 'string' },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          git_sha: {
+            type: ['string', 'null'],
+            description: 'Git commit SHA to match preview deployment by metadata.',
+          },
+          branch: {
+            type: ['string', 'null'],
+            description: 'Fallback branch name to match preview deployment.',
+          },
         },
+        required: ['repo', 'git_sha', 'branch'],
       },
     },
   },
@@ -287,8 +348,33 @@ export const previewToolHandlers = {
     return result;
   },
 
-  async preview_http_request(args: PreviewHttpRequestArgs) {
-    const res = await previewHttpRequest(args);
+  async preview_http_request(args: any) {
+    const headers =
+      Array.isArray(args?.headers)
+        ? Object.fromEntries(
+            args.headers
+              .filter(
+                (h: any) =>
+                  h &&
+                  typeof h.name === 'string' &&
+                  typeof h.value === 'string',
+              )
+              .map((h: any) => [h.name, h.value]),
+          )
+        : undefined;
+
+    const res = await previewHttpRequest({
+      baseUrl: args.baseUrl,
+      path: args.path,
+      ...(args.method ? { method: args.method } : {}),
+      ...(headers ? { headers } : {}),
+      ...(args.body !== undefined ? { body: args.body } : {}),
+      ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+      ...(args.maxResponseChars !== undefined
+        ? { maxResponseChars: args.maxResponseChars }
+        : {}),
+    });
+
     logEvent('preview_http_request', {
       baseUrl: args.baseUrl,
       path: args.path,
@@ -296,6 +382,7 @@ export const previewToolHandlers = {
       status: res.status,
       ok: res.ok,
     });
+
     return res;
   },
 

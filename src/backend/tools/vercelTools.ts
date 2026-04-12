@@ -100,23 +100,24 @@ export const vercelToolsSchemas = [
       description: 'Get latest deployments from Vercel (preview only).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           target: {
-            type: 'string',
-            enum: ['preview'],
+            type: ['string', 'null'],
+            enum: ['preview', null],
             description: 'Target environment. Only preview is allowed.',
           },
           limit: {
-            type: 'number',
+            type: ['number', 'null'],
             description: 'How many deployments to return (default 5).',
           },
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'owner/name. If set — use Vercel project/team from config/repos.yml.',
           },
         },
-        required: [],
+        required: ['target', 'limit', 'repo'],
       },
     },
   },
@@ -124,18 +125,21 @@ export const vercelToolsSchemas = [
     type: 'function',
     function: {
       name: 'vercel_list_deployments',
-      description: 'List Vercel preview deployments with optional filters by repo, branch, git sha, and time window.',
+      description:
+        'List Vercel preview deployments with optional filters by repo, branch, git sha, and time window.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
-          repo: { type: 'string' },
-          branch: { type: 'string' },
-          gitSha: { type: 'string' },
-          since: { type: 'string', description: 'ISO timestamp lower bound.' },
-          until: { type: 'string', description: 'ISO timestamp upper bound.' },
-          limit: { type: 'number' },
-          target: { type: 'string', enum: ['preview'] },
+          repo: { type: ['string', 'null'] },
+          branch: { type: ['string', 'null'] },
+          gitSha: { type: ['string', 'null'] },
+          since: { type: ['string', 'null'], description: 'ISO timestamp lower bound.' },
+          until: { type: ['string', 'null'], description: 'ISO timestamp upper bound.' },
+          limit: { type: ['number', 'null'] },
+          target: { type: ['string', 'null'], enum: ['preview', null] },
         },
+        required: ['repo', 'branch', 'gitSha', 'since', 'until', 'limit', 'target'],
       },
     },
   },
@@ -146,15 +150,16 @@ export const vercelToolsSchemas = [
       description: 'Get Vercel runtime logs for a deploymentId with time range and pagination.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
-          repo: { type: 'string' },
+          repo: { type: ['string', 'null'] },
           deploymentId: { type: 'string' },
-          since: { type: 'string', description: 'ISO timestamp lower bound.' },
-          until: { type: 'string', description: 'ISO timestamp upper bound.' },
-          limit: { type: 'number' },
-          cursor: { type: 'string' },
+          since: { type: ['string', 'null'], description: 'ISO timestamp lower bound.' },
+          until: { type: ['string', 'null'], description: 'ISO timestamp upper bound.' },
+          limit: { type: ['number', 'null'] },
+          cursor: { type: ['string', 'null'] },
         },
-        required: ['deploymentId'],
+        required: ['repo', 'deploymentId', 'since', 'until', 'limit', 'cursor'],
       },
     },
   },
@@ -165,19 +170,31 @@ export const vercelToolsSchemas = [
       description: 'Search Vercel runtime logs by text, level, route, or function name.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
-          repo: { type: 'string' },
+          repo: { type: ['string', 'null'] },
           deploymentId: { type: 'string' },
-          query: { type: 'string' },
-          level: { type: 'string', enum: ['info', 'warn', 'error'] },
-          route: { type: 'string' },
-          functionName: { type: 'string' },
-          since: { type: 'string', description: 'ISO timestamp lower bound.' },
-          until: { type: 'string', description: 'ISO timestamp upper bound.' },
-          limit: { type: 'number' },
-          cursor: { type: 'string' },
+          query: { type: ['string', 'null'] },
+          level: { type: ['string', 'null'], enum: ['info', 'warn', 'error', null] },
+          route: { type: ['string', 'null'] },
+          functionName: { type: ['string', 'null'] },
+          since: { type: ['string', 'null'], description: 'ISO timestamp lower bound.' },
+          until: { type: ['string', 'null'], description: 'ISO timestamp upper bound.' },
+          limit: { type: ['number', 'null'] },
+          cursor: { type: ['string', 'null'] },
         },
-        required: ['deploymentId'],
+        required: [
+          'repo',
+          'deploymentId',
+          'query',
+          'level',
+          'route',
+          'functionName',
+          'since',
+          'until',
+          'limit',
+          'cursor',
+        ],
       },
     },
   },
@@ -188,18 +205,19 @@ export const vercelToolsSchemas = [
       description: 'Get Vercel deployment status by deployment_id.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           deployment_id: {
             type: 'string',
             description: 'Vercel deployment id.',
           },
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'owner/name. If set — use Vercel team/project from config/repos.yml.',
           },
         },
-        required: ['deployment_id'],
+        required: ['deployment_id', 'repo'],
       },
     },
   },
@@ -211,27 +229,29 @@ export const vercelToolsSchemas = [
         'Trigger a Vercel deployment (preview only). Optionally specify git sha and/or project_id.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           project_id: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'Vercel projectId (override). If omitted — resolved from repo config/env.',
           },
           git_commit_sha: {
-            type: 'string',
+            type: ['string', 'null'],
             description: 'Git commit SHA (for matching/diagnostics).',
           },
           target: {
-            type: 'string',
-            enum: ['preview'],
+            type: ['string', 'null'],
+            enum: ['preview', null],
             description: 'Target environment. Only preview is allowed.',
           },
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'owner/name. If set — use Vercel project/team from config/repos.yml.',
           },
         },
+        required: ['project_id', 'git_commit_sha', 'target', 'repo'],
       },
     },
   },
@@ -242,23 +262,24 @@ export const vercelToolsSchemas = [
       description: 'Redeploy a Vercel deployment (preview only) by deployment_id.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           deployment_id: {
             type: 'string',
             description: 'Vercel deployment id.',
           },
           target: {
-            type: 'string',
-            enum: ['preview'],
+            type: ['string', 'null'],
+            enum: ['preview', null],
             description: 'Target environment. Only preview is allowed.',
           },
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'owner/name. If set — use Vercel team/project from config/repos.yml.',
           },
         },
-        required: ['deployment_id'],
+        required: ['deployment_id', 'target', 'repo'],
       },
     },
   },
@@ -269,30 +290,32 @@ export const vercelToolsSchemas = [
       description: 'Diagnose Vercel deployment for a given git sha (preview only).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           repo: {
-            type: 'string',
+            type: ['string', 'null'],
             description: 'owner/name; used to resolve Vercel project/team from config.',
           },
           git_sha: {
-            type: 'string',
+            type: ['string', 'null'],
             description: 'Git commit SHA to match deployment by metadata.',
           },
           branch: {
-            type: 'string',
+            type: ['string', 'null'],
             description: 'Fallback branch name to match deployments in a time window.',
           },
           target: {
-            type: 'string',
-            enum: ['preview'],
+            type: ['string', 'null'],
+            enum: ['preview', null],
             description: 'Target environment. Only preview is allowed.',
           },
           timeWindowMinutes: {
-            type: 'number',
+            type: ['number', 'null'],
             description:
               'Fallback time window (minutes) when matching by branch. Default 180.',
           },
         },
+        required: ['repo', 'git_sha', 'branch', 'target', 'timeWindowMinutes'],
       },
     },
   },

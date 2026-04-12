@@ -55,6 +55,7 @@ export const repoRegistrationToolSchema = {
       'Owner-only: register or update a repository in config/repos.yml allowlist (including Vercel env mapping).',
     parameters: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         repo: {
           type: 'string',
@@ -66,6 +67,7 @@ export const repoRegistrationToolSchema = {
         },
         vercel: {
           type: 'object',
+          additionalProperties: false,
           properties: {
             projectIdEnv: {
               type: 'string',
@@ -73,12 +75,12 @@ export const repoRegistrationToolSchema = {
                 'Name of env var containing Vercel projectId for this repo.',
             },
             teamIdEnv: {
-              type: 'string',
+              type: ['string', 'null'],
               description:
                 'Name of env var containing Vercel teamId for this repo (optional).',
             },
           },
-          required: ['projectIdEnv'],
+          required: ['projectIdEnv', 'teamIdEnv'],
         },
       },
       required: ['repo', 'defaultBranch', 'vercel'],

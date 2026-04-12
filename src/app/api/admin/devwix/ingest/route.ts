@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 
 import { requireAdminBearerAuth } from '../../../../../backend/auth/adminAuth';
-import { withCrawlJob } from '../../../../../backend/crawlJobs';
+import { withKnowledgeJob } from '../../../../../backend/knowledgeJobs';
 import { ingestDevWixArticles } from '../../../../../backend/devWixDocs/ingest';
+import { DEV_WIX_SOURCE_KEY } from '../../../../../backend/devWixDocs/seedManifest';
 
 export const runtime = 'nodejs';
 
@@ -21,11 +22,11 @@ export async function POST(req: Request) {
       opts.maxChunksPerRun = maxChunksPerRun;
     }
 
-    const { jobId, result } = await withCrawlJob(
+    const { jobId, result } = await withKnowledgeJob(
       {
-        kind: 'devwix_ingest_admin',
+        sourceKey: DEV_WIX_SOURCE_KEY,
+        jobKind: 'ingest',
         batchLimit: limitPages,
-        ...(typeof maxChunksPerRun === 'number' ? { metaJson: { maxChunksPerRun } } : {}),
       },
       async () => {
         const r = await ingestDevWixArticles(opts);

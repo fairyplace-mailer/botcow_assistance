@@ -228,48 +228,62 @@ async function githubSearchCodeWithRetry(params: {
 }) {
   const github = getGithubClient() as any;
 
-  if (typeof github.graphql === 'function') {
-    await github.graphql(
-      'query { __type(name: "SearchType") { enumValues { name } } }',
-    );
+  if (typeof github.graphql === 'function' && params.page === 1) {
+    try {
+      const introspectionRes = await github.graphql(
+        'query { __type(name: "SearchType") { enumValues { name } } }',
+      );
 
-    const first = (params.page - 1) * params.per_page;
-    const graphqlRes = await github.graphql(
-      `query SearchCode($query: String!, $first: Int!) {
-        search(type: CODE, query: $query, first: $first) {
-          edges {
-            node {
-              ... on RepositoryFile {
-                path
-                repository {
-                  nameWithOwner
+      const enumValues = introspectionRes?.__type?.enumValues ?? [];
+      const supportsCodeSearch = enumValues.some((value: any) => value?.name === 'CODE');
+
+      if (supportsCodeSearch) {
+        const first = Math.max(1, params.per_page);
+        const graphqlRes = await github.graphql(
+          `query SearchCode($query: String!, $first: Int!) {
+            search(type: CODE, query: $query, first: $first) {
+              edges {
+                node {
+                  ... on RepositoryFile {
+                    path
+                    repository {
+                      nameWithOwner
+                    }
+                  }
                 }
               }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              repositoryCount
+              codeCount
             }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          repositoryCount
-          codeCount
-        }
-      }`,
-      { query: params.q, first },
-    );
+          }`,
+          { query: params.q, first },
+        );
 
-    const edges = graphqlRes?.search?.edges ?? [];
-    const sliced = edges.slice(0, params.per_page);
-    return {
-      data: {
-        items: sliced.map((edge: any) => ({
-          path: edge?.node?.path,
-          repository: {
-            full_name: edge?.node?.repository?.nameWithOwner,
+        const edges = graphqlRes?.search?.edges ?? [];
+        const sliced = edges.slice(0, params.per_page);
+        return {
+          data: {
+            items: sliced.map((edge: any) => ({
+              path: edge?.node?.path,
+              repository: {
+                full_name: edge?.node?.repository?.nameWithOwner,
+              },
+            })),
           },
-        })),
-      },
-    };
+        };
+      }
+    } catch (error: any) {
+      await logEvent('github_search_graphql_fallback', {
+        status: error?.status ?? error?.response?.status ?? null,
+        message: String(error?.message ?? ''),
+        page: params.page,
+        per_page: params.per_page,
+      }).catch(() => undefined);
+    }
   }
 
   const githubRest = getGithubClient();
@@ -358,6 +372,74 @@ export async function getFile(path: string, repo?: string, ref?: string) {
 
   const raw = Buffer.from(res.data.content, 'base64').toString('utf8');
   return raw;
+}
+
+export async function getFilesBatch(options: {
+  paths: string[];
+  repo?: string;
+  ref?: string;
+  maxCharsPerFile?: number;
+  maxTotalChars?: number;
+}) {
+  const uniquePaths = Array.from(
+    new Set((options.paths ?? []).map((item) => String(item ?? '').trim()).filter(Boolean)),
+  ).slice(0, 20);
+
+  const maxCharsPerFile =
+    typeof options.maxCharsPerFile === 'number' && options.maxCharsPerFile > 0
+      ? Math.floor(options.maxCharsPerFile)
+      : 12000;
+  const maxTotalChars =
+    typeof options.maxTotalChars === 'number' && options.maxTotalChars > 0
+      ? Math.floor(options.maxTotalChars)
+      : 40000;
+
+  let totalCharsReturned = 0;
+  const files: Array<{
+    path: string;
+    content?: string;
+    truncated?: boolean;
+    originalChars?: number;
+    returnedChars?: number;
+    error?: string;
+  }> = [];
+
+  for (const path of uniquePaths) {
+    try {
+      const raw = await getFile(path, options.repo, options.ref);
+      const remaining = Math.max(maxTotalChars - totalCharsReturned, 0);
+      const allowed = Math.min(maxCharsPerFile, remaining || maxCharsPerFile);
+      const content = allowed > 0 ? raw.slice(0, allowed) : '';
+      const truncated = raw.length > content.length;
+
+      files.push({
+        path,
+        content,
+        truncated,
+        originalChars: raw.length,
+        returnedChars: content.length,
+      });
+
+      totalCharsReturned += content.length;
+      if (totalCharsReturned >= maxTotalChars) break;
+    } catch (error: any) {
+      files.push({
+        path,
+        error: error?.message ? String(error.message) : String(error),
+      });
+    }
+  }
+
+  return {
+    repo: options.repo ?? null,
+    ref: options.ref ?? null,
+    requestedPaths: uniquePaths.length,
+    returnedFiles: files.length,
+    totalCharsReturned,
+    truncated:
+      files.some((item) => item.truncated) || totalCharsReturned >= maxTotalChars || uniquePaths.length > files.length,
+    files,
+  };
 }
 
 export async function getRepoStructure(options?: {

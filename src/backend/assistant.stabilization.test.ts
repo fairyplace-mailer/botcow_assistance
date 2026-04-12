@@ -271,4 +271,123 @@ describe('runAssistant stabilization', () => {
     expect(warnEvent?.payload.finalStatus).toBe('failed');
     expect(warnEvent?.payload.stopReason).toBe('repeated_tool_call');
   });
+  
+  it('accepts nullable union types in tool schema', async () => {
+    mockedGetToolsSchemas.mockReturnValue([
+      {
+        type: 'function',
+        name: 'demo_tool',
+        description: 'demo',
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            value: { type: 'string' },
+            note: { type: ['string', 'null'] },
+          },
+          required: ['value', 'note'],
+        },
+      },
+    ]);
+
+    const create = jest
+      .fn()
+      .mockResolvedValueOnce(
+        makeResponse({
+          id: 'resp-union-1',
+          output: [
+            {
+              type: 'function_call',
+              call_id: 'call-union-1',
+              name: 'demo_tool',
+              arguments: JSON.stringify({ value: 'x', note: null }),
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          id: 'resp-union-2',
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              phase: 'final_answer',
+              content: [{ type: 'output_text', text: 'done' }],
+            },
+          ],
+        }),
+      );
+
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: { create },
+    });
+    mockedHandleToolCall.mockResolvedValue({ ok: true });
+
+    const result = await runAssistant({
+      instructions: 'sys',
+      messages: [{ role: 'user', content: 'hello' }],
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(mockedHandleToolCall).toHaveBeenCalledTimes(1);
+    expect(mockedHandleToolCall).toHaveBeenCalledWith('demo_tool', { value: 'x' });
+  });
+
+  it('fails fast on invalid tool args schema when required nullable field is omitted', async () => {
+    mockedGetToolsSchemas.mockReturnValue([
+      {
+        type: 'function',
+        name: 'demo_tool',
+        description: 'demo',
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            value: { type: 'string' },
+            note: { type: ['string', 'null'] },
+          },
+          required: ['value', 'note'],
+        },
+      },
+    ]);
+
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: {
+        create: jest.fn().mockResolvedValue(
+          makeResponse({
+            id: 'resp-schema-miss',
+            output: [
+              {
+                type: 'function_call',
+                call_id: 'call-schema-miss',
+                name: 'demo_tool',
+                arguments: JSON.stringify({ value: 'x' }),
+              },
+            ],
+          }),
+        ),
+      },
+    });
+
+    const result = await runAssistant({
+      instructions: 'sys',
+      messages: [{ role: 'user', content: 'hello' }],
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
+
+    expect(result.error?.internalCode).toBe('invalid_tool_args_schema');
+    expect(mockedHandleToolCall).not.toHaveBeenCalled();
+
+    const events = getRecentRunEvents();
+    const warnEvent = events.find((event) => event.payload.stopReason === 'invalid_tool_args_schema');
+
+    expect(warnEvent?.payload.finalStatus).toBe('failed');
+    expect(warnEvent?.payload.argsParseOk).toBe(true);
+    expect(warnEvent?.payload.schemaValid).toBe(false);
+    expect(warnEvent?.payload.stopReason).toBe('invalid_tool_args_schema');
+  });
 });

@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { requireAdminBearerAuth } from '../../../../../backend/auth/adminAuth';
-import { seedDevWixByDiscovery } from '../../../../../backend/devWixDocs/sitemapSeed';
-import { withCrawlJob } from '../../../../../backend/crawlJobs';
+import { bootstrapDevWixKnowledge } from '../../../../../backend/devWixDocs/bootstrap';
 
 export const runtime = 'nodejs';
 
@@ -13,44 +12,18 @@ export async function POST(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
 
-    const startUrl = searchParams.get('startUrl') ?? undefined;
-    const maxPagesRaw = searchParams.get('maxPages');
-    const maxPages = maxPagesRaw ? Number(maxPagesRaw) : undefined;
+    const batchLimitRaw = searchParams.get('batchLimit');
+    const batchLimit = batchLimitRaw ? Number(batchLimitRaw) : undefined;
 
-    const maxDurationMsRaw = searchParams.get('maxDurationMs');
-    const maxDurationMs = maxDurationMsRaw ? Number(maxDurationMsRaw) : undefined;
+    const cursorRaw = searchParams.get('cursor');
+    const cursor = cursorRaw ? Number(cursorRaw) : undefined;
 
-    const opts: { startUrl?: string; maxPages?: number; maxDurationMs?: number } = {
-      ...(startUrl ? { startUrl } : {}),
-      ...(maxPages !== undefined && Number.isFinite(maxPages) ? { maxPages } : {}),
-      ...(maxDurationMs !== undefined && Number.isFinite(maxDurationMs) ? { maxDurationMs } : {}),
-    };
+    const result = await bootstrapDevWixKnowledge({
+      ...(Number.isFinite(batchLimit) ? { batchLimit } : {}),
+      ...(Number.isFinite(cursor) ? { cursor } : {}),
+    });
 
-    const batchLimit = Number.isFinite(opts.maxPages) ? (opts.maxPages as number) : null;
-
-    const { jobId, result } = await withCrawlJob(
-      {
-        kind: 'devwix_seed_admin',
-        ...(typeof batchLimit === 'number' ? { batchLimit } : {}),
-        metaJson: {
-          startUrl: opts.startUrl ?? null,
-          maxDurationMs: opts.maxDurationMs ?? null,
-        },
-      },
-      async () => {
-        const result = await seedDevWixByDiscovery(opts);
-        return {
-          result,
-          finish: {
-            processed: result.allowed,
-            inserted: result.inserted,
-            updated: result.updated,
-          },
-        };
-      },
-    );
-
-    return NextResponse.json({ ok: true, jobId, result });
+    return NextResponse.json({ ok: true, jobId: result.jobId, result });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }

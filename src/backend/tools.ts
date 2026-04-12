@@ -5,53 +5,22 @@ export const toolSchemas = toolsSchemas;
 export const toolHandlers = toolsHandlers;
 export type ToolName = keyof typeof toolHandlers;
 
-function cleanText(value: unknown): string {
-  if (typeof value !== 'string') return '';
-  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim();
-}
-
-function cleanJsonSchema(node: any): any {
-  if (Array.isArray(node)) {
-    return node.map(cleanJsonSchema);
+function normalizeResponsesTool(tool: any): OpenAI.Responses.Tool {
+  if (tool?.type === 'function' && tool?.function?.name) {
+    return {
+      type: 'function',
+      name: tool.function.name,
+      ...(tool.function.description ? { description: tool.function.description } : {}),
+      ...(tool.function.parameters ? { parameters: tool.function.parameters } : {}),
+      ...(tool.function.strict !== undefined ? { strict: tool.function.strict } : {}),
+    } as OpenAI.Responses.Tool;
   }
 
-  if (!node || typeof node !== 'object') {
-    return node;
-  }
-
-  const out: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(node)) {
-    if (key === 'description') {
-      out[key] = cleanText(value);
-      continue;
-    }
-
-    out[key] = cleanJsonSchema(value);
-  }
-
-  return out;
+  return tool as OpenAI.Responses.Tool;
 }
 
 export function getToolsSchemas(): OpenAI.Responses.Tool[] {
-  return toolsSchemas.map((tool: any) => {
-    const fn = tool?.function ?? tool;
-
-    return {
-      type: 'function',
-      name: fn.name,
-      description: cleanText(fn.description),
-      parameters: cleanJsonSchema(
-        fn.parameters ?? {
-          type: 'object',
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
-      ),
-      strict: fn.strict ?? false,
-    } as OpenAI.Responses.Tool;
-  });
+  return toolsSchemas.map(normalizeResponsesTool);
 }
 
 export async function handleToolCall(name: string, args: any) {

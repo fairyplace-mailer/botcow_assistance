@@ -117,6 +117,7 @@ function coerceScalar(v: string): any {
 }
 
 export function loadReposConfig(): ReposConfig {
+
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(`Repos config not found: ${CONFIG_PATH}`);
   }

@@ -4,56 +4,43 @@ jest.mock('../src/backend/openai', () => ({
 
 import { embedText } from '../src/backend/openai';
 
-const transactionMock = jest.fn(async (ops: unknown[]) => ops);
-const docChunkUpdateMany = jest.fn(async () => ({ count: 1 }));
-const docPageUpdateMany = jest.fn(async () => ({ count: 1 }));
 const queryRawUnsafe = jest.fn();
 
 jest.mock('../src/backend/db', () => ({
   prisma: {
     $queryRawUnsafe: (...args: unknown[]) => queryRawUnsafe(...args),
-    $transaction: (...args: unknown[]) => transactionMock(...args),
-    docChunk: {
-      updateMany: (...args: unknown[]) => docChunkUpdateMany(...args),
-    },
-    docPage: {
-      updateMany: (...args: unknown[]) => docPageUpdateMany(...args),
-    },
   },
 }));
 
-describe('retrieveDevWixContext retention policy', () => {
+describe('retrieveDevWixContext knowledge contract', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (embedText as jest.Mock).mockResolvedValue({ vector: [0.1, 0.2], dims: 2 });
     queryRawUnsafe.mockResolvedValue([]);
-    transactionMock.mockImplementation(async (ops: unknown[]) => ops);
-    docChunkUpdateMany.mockResolvedValue({ count: 1 });
-    docPageUpdateMany.mockResolvedValue({ count: 1 });
   });
 
-  it('filters by persisted knowledge layers and retention markers in SQL', async () => {
-    queryRawUnsafe.mockResolvedValueOnce([]);
+  it('queries only active ready knowledge documents from the dev wix source', async () => {
     const { retrieveDevWixContext } = await import('../src/backend/devWixDocs/retrieve');
 
     await retrieveDevWixContext({ query: 'wix docs', topK: 2 });
 
     const sql = String(queryRawUnsafe.mock.calls[0]?.[0] ?? '');
-    expect(sql).toContain('c."knowledgeLayer" = \'OFFICIAL\'');
-    expect(sql).toContain('p."knowledgeLayer" = \'OFFICIAL\'');
-    expect(sql).toContain('c."knowledgeLayer" = \'TEMPORARY\'');
-    expect(sql).toContain('c."retentionUntil" >');
-    expect(sql).toContain('p."retentionUntil" >');
+    expect(sql).toContain('FROM knowledge_chunks c');
+    expect(sql).toContain('JOIN knowledge_documents d ON d.id = c.document_id');
+    expect(sql).toContain('JOIN knowledge_sources s ON s.id = d.source_id');
+    expect(sql).toContain("s.source_key = 'dev_wix_docs'");
+    expect(sql).toContain("s.status = 'active'");
+    expect(sql).toContain("d.document_status = 'ready'");
   });
 
-  it('returns official chunks and updates access timestamps', async () => {
+  it('returns knowledge chunks from canonical urls', async () => {
     queryRawUnsafe.mockResolvedValueOnce([
       {
         id: 'chunk-1',
-        pageId: 'page-1',
-        url: 'https://dev.wix.com/docs/sdk',
+        documentId: 'doc-1',
+        canonicalUrl: 'https://dev.wix.com/docs/sdk',
         title: 'SDK Docs',
-        content: 'official content',
+        chunkText: 'official content',
         distance: 0.05,
       },
     ]);
@@ -62,19 +49,22 @@ describe('retrieveDevWixContext retention policy', () => {
     const result = await retrieveDevWixContext({ query: 'sdk docs', topK: 1, maxChars: 1000 });
 
     expect(result.chunks).toHaveLength(1);
-    expect(result.chunks[0]?.url).toBe('https://dev.wix.com/docs/sdk');
-    expect(docChunkUpdateMany).toHaveBeenCalled();
-    expect(docPageUpdateMany).toHaveBeenCalled();
+    expect(result.chunks[0]).toEqual(
+      expect.objectContaining({
+        url: 'https://dev.wix.com/docs/sdk',
+        title: 'SDK Docs',
+        content: 'official content',
+      }),
+    );
   });
 
-  it('skips access timestamp updates when nothing is returned', async () => {
-    queryRawUnsafe.mockResolvedValueOnce([]);
+  it('returns empty chunks when embedding is empty', async () => {
+    (embedText as jest.Mock).mockResolvedValueOnce({ vector: [], dims: 0 });
     const { retrieveDevWixContext } = await import('../src/backend/devWixDocs/retrieve');
 
     const result = await retrieveDevWixContext({ query: 'none', topK: 1 });
 
     expect(result.chunks).toEqual([]);
-    expect(docChunkUpdateMany).not.toHaveBeenCalled();
-    expect(docPageUpdateMany).not.toHaveBeenCalled();
+    expect(queryRawUnsafe).not.toHaveBeenCalled();
   });
 });

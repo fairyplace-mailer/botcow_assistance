@@ -8,10 +8,6 @@ export type TokenChunk = {
   tokenCount: number;
 };
 
-// Approximate tokenization for English:
-// A commonly used heuristic is ~4 characters per token.
-// This avoids WASM/tokenizer bundling issues in Next/Turbopack while keeping
-// chunk sizes aligned with the spec (500–1000 tokens).
 const CHARS_PER_TOKEN = 4;
 
 function clampInt(n: number, min: number, max: number): number {
@@ -19,38 +15,113 @@ function clampInt(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, x));
 }
 
-/**
- * Chunk text into ~token-sized slices using a char-based approximation.
- *
- * Notes:
- * - Designed for EN text (dev.wix.com/docs). For other languages the heuristic
- *   may be off; those pages are ignored elsewhere.
- */
-export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChunk[] {
-  const chunkTokens = clampInt(Number(opts?.chunkTokens ?? 800), 1, 2000);
-  const overlapTokens = clampInt(Number(opts?.overlapTokens ?? 120), 0, chunkTokens - 1);
+function approxTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / CHARS_PER_TOKEN));
+}
 
-  const t = text.trim();
-  if (!t) return [];
+function splitMarkdownBlocks(markdown: string): string[] {
+  const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let inFence = false;
 
-  const chunkChars = Math.max(1, chunkTokens * CHARS_PER_TOKEN);
-  const overlapChars = overlapTokens * CHARS_PER_TOKEN;
+  const pushCurrent = () => {
+    const text = current.join('\n').trim();
+    if (text) blocks.push(text);
+    current = [];
+  };
 
-  const chunks: TokenChunk[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const fence = /^```/.test(trimmed);
 
-  let i = 0;
-  while (i < t.length) {
-    const end = Math.min(t.length, i + chunkChars);
-    const slice = t.slice(i, end).trim();
-    if (slice) {
-      const approxTokens = Math.max(1, Math.ceil(slice.length / CHARS_PER_TOKEN));
-      chunks.push({ text: slice, tokenCount: approxTokens });
+    if (fence) {
+      current.push(line);
+      inFence = !inFence;
+      if (!inFence) {
+        pushCurrent();
+      }
+      continue;
     }
 
-    if (end === t.length) break;
-    i = end - overlapChars;
-    if (i < 0) i = 0;
+    if (inFence) {
+      current.push(line);
+      continue;
+    }
+
+    if (/^#{1,6}\s+/.test(trimmed)) {
+      pushCurrent();
+      current.push(line);
+      continue;
+    }
+
+    if (!trimmed) {
+      pushCurrent();
+      continue;
+    }
+
+    current.push(line);
   }
 
+  pushCurrent();
+  return blocks;
+}
+
+function splitOversizedBlock(block: string, maxChars: number): string[] {
+  if (block.length <= maxChars) return [block.trim()];
+
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < block.length) {
+    let end = Math.min(block.length, cursor + maxChars);
+    if (end < block.length) {
+      const newline = block.lastIndexOf('\n', end);
+      const sentence = block.lastIndexOf('. ', end);
+      const breakAt = Math.max(newline, sentence);
+      if (breakAt > cursor + Math.floor(maxChars * 0.5)) {
+        end = breakAt + (block[breakAt] === '\n' ? 0 : 1);
+      }
+    }
+    const slice = block.slice(cursor, end).trim();
+    if (slice) parts.push(slice);
+    if (end === cursor) break;
+    cursor = end;
+  }
+
+  return parts;
+}
+
+export function chunkTextByTokens(text: string, opts?: TokenChunkOpts): TokenChunk[] {
+  const chunkTokens = clampInt(Number(opts?.chunkTokens ?? 800), 1, 2000);
+  const targetChars = Math.max(1, chunkTokens * CHARS_PER_TOKEN);
+
+  const markdown = text.trim();
+  if (!markdown) return [];
+
+  const blocks = splitMarkdownBlocks(markdown);
+  const chunks: TokenChunk[] = [];
+  let current = '';
+
+  const flush = () => {
+    const normalized = current.trim();
+    if (!normalized) return;
+    chunks.push({ text: normalized, tokenCount: approxTokens(normalized) });
+    current = '';
+  };
+
+  for (const block of blocks) {
+    const pieces = splitOversizedBlock(block, targetChars);
+    for (const piece of pieces) {
+      const candidate = current ? `${current}\n\n${piece}` : piece;
+      if (candidate.length <= targetChars || !current) {
+        current = candidate;
+        continue;
+      }
+      flush();
+      current = piece;
+    }
+  }
+
+  flush();
   return chunks;
 }

@@ -4,6 +4,7 @@ import type OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
 
 import { getOpenAIClient } from './openai';
+import { formatDevWixContext, retrieveDevWixContext } from './devWixDocs/retrieve';
 import {
   buildStrictFunctionTools,
   createModelResponse,
@@ -303,6 +304,49 @@ function normalizeContentToText(content: unknown): string | null {
   return null;
 }
 
+function latestUserText(messages: Array<{ role: string; content: unknown }>): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || message.role !== 'user') continue;
+    const text = normalizeContentToText(message.content);
+    if (text) return text;
+  }
+  return null;
+}
+
+function shouldRetrieveDevWixContext(query: string | null): boolean {
+  if (!query) return false;
+  return /(dev\.wix\.com|wix|velo|wix docs|wix sdk)/i.test(query);
+}
+
+async function buildContextAugmentedInstructions(params: {
+  instructions: string;
+  messages: Array<{ role: string; content: unknown }>;
+}): Promise<string> {
+  const query = latestUserText(params.messages);
+  if (!shouldRetrieveDevWixContext(query)) return params.instructions;
+
+  try {
+    const retrieved = await retrieveDevWixContext({ query, topK: 4, maxChars: 5000 });
+    const contextBlock = formatDevWixContext(retrieved.chunks);
+    if (!contextBlock) return params.instructions;
+
+    return [
+      params.instructions,
+      '',
+      'Use the retrieved Wix docs context below only when it is relevant and sufficient.',
+      'Do not claim the docs support something unless the context below actually supports it.',
+      contextBlock,
+    ].join('\n');
+  } catch (error: any) {
+    await logWarn('assistant_context_retrieval_failed', {
+      error: error?.message ?? String(error),
+      finalStatus: 'failed',
+    });
+    return params.instructions;
+  }
+}
+
 function normalizeMessagesToInput(
   messages: Array<{ role: string; content: unknown }>,
 ): OpenAI.Responses.ResponseInputItem[] {
@@ -439,6 +483,11 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     reasoningSuppressedReason: null,
   };
 
+  const effectiveInstructions = await buildContextAugmentedInstructions({
+    instructions: params.instructions,
+    messages: params.messages,
+  });
+
   let pendingInput = normalizeMessagesToInput(params.messages);
   let previousResponseId: string | undefined = params.state.previousResponseId;
   let currentConversationId: string | null = params.state.conversationId ?? null;
@@ -483,7 +532,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       client: openai,
       model: params.routing.model,
       input: pendingInput,
-      instructions: params.instructions,
+      instructions: effectiveInstructions,
       state: stateMode,
       tools,
       ...(reasoningDecision.sentReasoningEffort

@@ -326,8 +326,11 @@ async function buildContextAugmentedInstructions(params: {
   const query = latestUserText(params.messages);
   if (!shouldRetrieveDevWixContext(query)) return params.instructions;
 
+  const normalizedQuery = (query ?? '').trim();
+  if (!normalizedQuery) return params.instructions;
+
   try {
-    const retrieved = await retrieveDevWixContext({ query, topK: 4, maxChars: 5000 });
+    const retrieved = await retrieveDevWixContext({ query: normalizedQuery, topK: 4, maxChars: 5000 });
     const contextBlock = formatDevWixContext(retrieved.chunks);
     if (!contextBlock) return params.instructions;
 

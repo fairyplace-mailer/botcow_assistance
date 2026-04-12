@@ -6,6 +6,7 @@ import {
   deleteFile,
   downloadWorkflowRunLogs,
   getFile,
+  getFilesBatch,
   getRepoStructure,
   listFiles,
   listIssues,
@@ -102,6 +103,43 @@ export const githubToolsSchemas = [
           },
         },
         required: ['path', 'repo', 'ref'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_get_files_batch',
+      description: 'Read multiple repository files in one call. Prefer this for audits and spec comparisons.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          paths: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            maxItems: 20,
+            description: 'Repository file paths to read.',
+          },
+          repo: {
+            type: ['string', 'null'],
+            description: 'GitHub repository in the form owner/name. If null, default repository is used.',
+          },
+          ref: {
+            type: ['string', 'null'],
+            description: 'Git ref to inspect: branch, tag, or commit SHA. If null, default branch is used.',
+          },
+          maxCharsPerFile: {
+            type: ['number', 'null'],
+            description: 'Maximum number of characters to return per file.',
+          },
+          maxTotalChars: {
+            type: ['number', 'null'],
+            description: 'Maximum total characters to return across all files in the batch.',
+          },
+        },
+        required: ['paths', 'repo', 'ref', 'maxCharsPerFile', 'maxTotalChars'],
       },
     },
   },
@@ -526,6 +564,14 @@ type SearchArgs = {
   page?: number;
 };
 
+type GetFilesBatchArgs = {
+  paths: string[];
+  repo?: string;
+  ref?: string;
+  maxCharsPerFile?: number;
+  maxTotalChars?: number;
+};
+
 function buildOptional<T extends Record<string, unknown>>(obj: T): {
   [K in keyof T as undefined extends T[K] ? never : K]: T[K];
 } & Partial<T> {
@@ -564,6 +610,18 @@ export const githubToolHandlers = {
 
   async github_get_file(args: { path: string; repo?: string; ref?: string }) {
     return getFile(args.path, args.repo, args.ref);
+  },
+
+  async github_get_files_batch(args: GetFilesBatchArgs) {
+    return getFilesBatch(
+      buildOptional({
+        paths: args.paths,
+        repo: args.repo,
+        ref: args.ref,
+        maxCharsPerFile: args.maxCharsPerFile,
+        maxTotalChars: args.maxTotalChars,
+      }),
+    );
   },
 
   async github_search_in_repo(args: SearchArgs) {

@@ -374,6 +374,74 @@ export async function getFile(path: string, repo?: string, ref?: string) {
   return raw;
 }
 
+export async function getFilesBatch(options: {
+  paths: string[];
+  repo?: string;
+  ref?: string;
+  maxCharsPerFile?: number;
+  maxTotalChars?: number;
+}) {
+  const uniquePaths = Array.from(
+    new Set((options.paths ?? []).map((item) => String(item ?? '').trim()).filter(Boolean)),
+  ).slice(0, 20);
+
+  const maxCharsPerFile =
+    typeof options.maxCharsPerFile === 'number' && options.maxCharsPerFile > 0
+      ? Math.floor(options.maxCharsPerFile)
+      : 12000;
+  const maxTotalChars =
+    typeof options.maxTotalChars === 'number' && options.maxTotalChars > 0
+      ? Math.floor(options.maxTotalChars)
+      : 40000;
+
+  let totalCharsReturned = 0;
+  const files: Array<{
+    path: string;
+    content?: string;
+    truncated?: boolean;
+    originalChars?: number;
+    returnedChars?: number;
+    error?: string;
+  }> = [];
+
+  for (const path of uniquePaths) {
+    try {
+      const raw = await getFile(path, options.repo, options.ref);
+      const remaining = Math.max(maxTotalChars - totalCharsReturned, 0);
+      const allowed = Math.min(maxCharsPerFile, remaining || maxCharsPerFile);
+      const content = allowed > 0 ? raw.slice(0, allowed) : '';
+      const truncated = raw.length > content.length;
+
+      files.push({
+        path,
+        content,
+        truncated,
+        originalChars: raw.length,
+        returnedChars: content.length,
+      });
+
+      totalCharsReturned += content.length;
+      if (totalCharsReturned >= maxTotalChars) break;
+    } catch (error: any) {
+      files.push({
+        path,
+        error: error?.message ? String(error.message) : String(error),
+      });
+    }
+  }
+
+  return {
+    repo: options.repo ?? null,
+    ref: options.ref ?? null,
+    requestedPaths: uniquePaths.length,
+    returnedFiles: files.length,
+    totalCharsReturned,
+    truncated:
+      files.some((item) => item.truncated) || totalCharsReturned >= maxTotalChars || uniquePaths.length > files.length,
+    files,
+  };
+}
+
 export async function getRepoStructure(options?: {
   repo?: string;
   ref?: string;

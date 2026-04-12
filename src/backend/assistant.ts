@@ -94,11 +94,17 @@ export type AssistantResult = {
   };
 };
 
-const MAX_TOOL_LOOPS = 12;
-const MAX_TOTAL_TOOL_CALLS = 24;
-const MAX_SAME_FINGERPRINT_IN_ROW = 2;
+const DEFAULT_MAX_TOOL_LOOPS = 12;
+const DEFAULT_MAX_TOTAL_TOOL_CALLS = 24;
+const DEFAULT_MAX_SAME_FINGERPRINT_IN_ROW = 2;
+const DEFAULT_TOOL_TIMEOUT_MS = 20_000;
+
+const AUDIT_MAX_TOOL_LOOPS = 20;
+const AUDIT_MAX_TOTAL_TOOL_CALLS = 80;
+const AUDIT_MAX_SAME_FINGERPRINT_IN_ROW = 3;
+const AUDIT_TOOL_TIMEOUT_MS = 40_000;
+
 const MAX_NO_PROGRESS_ROUNDS = 2;
-const TOOL_TIMEOUT_MS = 20_000;
 const OPENAI_RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
 const OPENAI_MAX_ATTEMPTS = 3;
 
@@ -268,13 +274,14 @@ function validateToolArgsAgainstSchema(
         issues.push(`field ${key} must be one of: ${expectedType.join(', ')}`);
       }
     }
+  }
 
-    }
   return issues.length ? { ok: false, issues } : { ok: true };
 }
 
 function normalizeContentToText(content: unknown): string | null {
   if (!content) return null;
+
   if (typeof content === 'string') {
     const trimmed = content.trim();
     return trimmed ? trimmed : null;
@@ -374,6 +381,71 @@ function normalizeMessagesToInput(
   }
 
   return normalized;
+}
+
+type AssistantExecutionProfile = {
+  mode: 'default' | 'repo_audit';
+  instructions: string;
+  maxToolLoops: number;
+  maxTotalToolCalls: number;
+  maxSameFingerprintInRow: number;
+  toolTimeoutMs: number;
+};
+
+function allMessagesText(messages: Array<{ role: string; content: unknown }>): string {
+  return messages
+    .map((message) => normalizeContentToText(message?.content) ?? '')
+    .filter(Boolean)
+    .join('\n');
+}
+
+function looksLikeRepoAuditRequest(text: string): boolean {
+  if (!text) return false;
+
+  const hasAuditIntent =
+    /\b(full audit|audit code|audit the code|audit codebase|repo audit|spec audit|strict mode|responses api)\b/i.test(
+      text,
+    ) || /полный аудит|сделать аудит|аудит кода|соответствие|строгий режим|репо|ветк|strong_spec/i.test(text);
+
+  const hasRepoScope =
+    /docs\/strong_spec\.md|strong_spec|repo|repository|branch|ветк|репо|strict mode|responses api/i.test(text);
+
+  return hasAuditIntent && hasRepoScope;
+}
+
+function buildExecutionProfile(params: Pick<RunAssistantTurnParams, 'instructions' | 'messages'>): AssistantExecutionProfile {
+  const detectionText = `${params.instructions}\n${allMessagesText(params.messages)}`;
+
+  if (!looksLikeRepoAuditRequest(detectionText)) {
+    return {
+      mode: 'default',
+      instructions: params.instructions,
+      maxToolLoops: DEFAULT_MAX_TOOL_LOOPS,
+      maxTotalToolCalls: DEFAULT_MAX_TOTAL_TOOL_CALLS,
+      maxSameFingerprintInRow: DEFAULT_MAX_SAME_FINGERPRINT_IN_ROW,
+      toolTimeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
+    };
+  }
+
+  const auditSuffix = `
+Repository audit mode:
+- This is a repo-wide read-only audit task.
+- Do not modify files, do not commit, do not deploy.
+- Prefer broad repo inspection before conclusions.
+- Prefer reading files in batches with github_get_files_batch when available.
+- Focus on exact compliance against docs/strong_spec.md.
+- In the final answer, report only mismatches, partial mismatches, and whether Responses API strict mode is configured.
+- Keep the answer short, direct, and in simple language.
+`.trim();
+
+  return {
+    mode: 'repo_audit',
+    instructions: `${params.instructions}\n\n${auditSuffix}`,
+    maxToolLoops: AUDIT_MAX_TOOL_LOOPS,
+    maxTotalToolCalls: AUDIT_MAX_TOTAL_TOOL_CALLS,
+    maxSameFingerprintInRow: AUDIT_MAX_SAME_FINGERPRINT_IN_ROW,
+    toolTimeoutMs: AUDIT_TOOL_TIMEOUT_MS,
+  };
 }
 
 async function runToolWithTimeout(
@@ -503,8 +575,13 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     });
   }
 
-  const effectiveInstructions = await buildContextAugmentedInstructions({
+  const executionProfile = buildExecutionProfile({
     instructions: params.instructions,
+    messages: requestMessages,
+  });
+
+  const effectiveInstructions = await buildContextAugmentedInstructions({
+    instructions: executionProfile.instructions,
     messages: requestMessages,
   });
 
@@ -519,7 +596,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
   const openai = getOpenAIClient();
   const tools = buildStrictFunctionTools(params.tools ?? getToolsSchemas() ?? []);
 
-  for (let round = 1; round <= MAX_TOOL_LOOPS; round += 1) {
+  for (let round = 1; round <= executionProfile.maxToolLoops; round += 1) {
     const runtimeCapabilities = getResponsesRuntimeCapabilities();
     const reasoningDecision = resolveReasoningDecision(params.routing, runtimeCapabilities);
     lastReasoningDecision = reasoningDecision;
@@ -544,6 +621,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       model: params.routing.model,
       modelReason: params.routing.reason,
       reasoningEffort: reasoningDecision.sentReasoningEffort,
+      assistantMode: executionProfile.mode,
       finalStatus: 'in_progress',
       duration: Date.now() - startedAt,
     });
@@ -584,6 +662,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       reasoningEffort: reasoningDecision.sentReasoningEffort,
       toolName: functionCalls[0]?.name ?? null,
       toolCallId: functionCalls[0]?.call_id ?? null,
+      assistantMode: executionProfile.mode,
       assistantPhase: finalMessage?.phase ?? null,
       finalStatus: finalMessage?.text && functionCalls.length === 0 ? 'completed' : 'in_progress',
       duration: Date.now() - startedAt,
@@ -612,6 +691,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       duration: Date.now() - startedAt,
       usage: responseUsage(response),
       toolCount: functionCalls.length,
+      assistantMode: executionProfile.mode,
       assistantPhase: finalMessage?.phase ?? null,
       finalStatus: 'in_progress',
       payloadKeys: [
@@ -638,6 +718,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         model: params.routing.model,
         modelReason: params.routing.reason,
         reasoningEffort: reasoningDecision.sentReasoningEffort,
+        assistantMode: executionProfile.mode,
         assistantPhase: finalMessage.phase ?? null,
         finalStatus: 'completed',
         duration: Date.now() - startedAt,
@@ -664,6 +745,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
+        assistantMode: executionProfile.mode,
         stopReason: error.internalCode,
         duration: Date.now() - startedAt,
         usage: responseUsage(response),
@@ -677,7 +759,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       };
     }
 
-    if (totalToolCalls + functionCalls.length > MAX_TOTAL_TOOL_CALLS) {
+    if (totalToolCalls + functionCalls.length > executionProfile.maxTotalToolCalls) {
       const error = abort('tool_budget_exceeded', response.id);
       await logFatalStop('assistant_run_failed', {
         traceId,
@@ -686,6 +768,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
+        assistantMode: executionProfile.mode,
         stopReason: error.internalCode,
         totalToolCalls,
         requestedCalls: functionCalls.length,
@@ -720,6 +803,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           toolName: call.name,
           toolCallId: call.call_id,
           toolResultClass: 'unknown_tool',
+          assistantMode: executionProfile.mode,
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           duration: Date.now() - startedAt,
@@ -749,6 +833,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           toolCallId: call.call_id,
           argsParseOk: false,
           toolResultClass: 'invalid_tool_args_json',
+          assistantMode: executionProfile.mode,
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           duration: Date.now() - startedAt,
@@ -763,7 +848,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         };
       }
 
-            const schemaValidation = validateToolArgsAgainstSchema(
+      const schemaValidation = validateToolArgsAgainstSchema(
         (tool.parameters as Record<string, unknown> | null | undefined) ?? null,
         parsed.value,
       );
@@ -788,6 +873,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           argsParseOk: true,
           schemaValid: false,
           toolResultClass: 'invalid_tool_args_schema',
+          assistantMode: executionProfile.mode,
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           duration: Date.now() - startedAt,
@@ -808,7 +894,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       if (fingerprint === lastFingerprint) sameFingerprintInRow += 1;
       else sameFingerprintInRow = 1;
 
-      if (sameFingerprintInRow >= MAX_SAME_FINGERPRINT_IN_ROW) {
+      if (sameFingerprintInRow >= executionProfile.maxSameFingerprintInRow) {
         toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'repeated_tool_call' });
         const error = abort('repeated_tool_call', response.id);
         await logFatalStop('assistant_run_failed', {
@@ -823,6 +909,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           argsHash,
           argsParseOk: true,
           schemaValid: true,
+          assistantMode: executionProfile.mode,
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           duration: Date.now() - startedAt,
@@ -838,7 +925,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       }
 
       const startedToolAt = Date.now();
-      const result = await runToolWithTimeout(call.name, normalizedArgs, TOOL_TIMEOUT_MS);
+      const result = await runToolWithTimeout(call.name, normalizedArgs, executionProfile.toolTimeoutMs);
       const toolLatencyMs = Date.now() - startedToolAt;
 
       if (result.ok === false) {
@@ -859,6 +946,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
           schemaValid: true,
           toolLatencyMs,
           toolResultClass: result.code,
+          assistantMode: executionProfile.mode,
           assistantPhase: finalMessage?.phase ?? null,
           stopReason: error.internalCode,
           duration: Date.now() - startedAt,
@@ -901,6 +989,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         schemaValid: true,
         toolLatencyMs,
         toolResultClass: 'ok' as ToolResultClass,
+        assistantMode: executionProfile.mode,
         assistantPhase: finalMessage?.phase ?? null,
         finalStatus: 'in_progress',
         duration: Date.now() - startedAt,
@@ -923,6 +1012,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
+        assistantMode: executionProfile.mode,
         assistantPhase: finalMessage?.phase ?? null,
         stopReason: error.internalCode,
         progressThisRound,
@@ -950,6 +1040,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     conversationId: currentConversationId,
     responseId: lastResponse?.id ?? null,
     previousResponseId: previousResponseId ?? null,
+    assistantMode: executionProfile.mode,
     stopReason: error.internalCode,
     totalToolCalls,
     duration: Date.now() - startedAt,

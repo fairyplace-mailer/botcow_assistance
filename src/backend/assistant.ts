@@ -5,6 +5,7 @@ import type { Response } from 'openai/resources/responses/responses';
 
 import { getOpenAIClient } from './openai';
 import { formatDevWixContext, retrieveDevWixContext } from './devWixDocs/retrieve';
+import { compactAssistantMessages } from './compaction';
 import {
   buildStrictFunctionTools,
   createModelResponse,
@@ -486,12 +487,28 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
     reasoningSuppressedReason: null,
   };
 
+  const compactedMessages = compactAssistantMessages(params.messages);
+  const requestMessages = compactedMessages.messages;
+
+  if (compactedMessages.applied) {
+    await logInfo('assistant_messages_compacted', {
+      traceId,
+      userTurnId,
+      originalMessageCount: compactedMessages.originalCount,
+      compactedMessageCount: compactedMessages.compactedCount,
+      droppedMessageCount: compactedMessages.droppedMessageCount,
+      keptRecentMessageCount: compactedMessages.keptRecentCount,
+      finalStatus: 'in_progress',
+      duration: Date.now() - startedAt,
+    });
+  }
+
   const effectiveInstructions = await buildContextAugmentedInstructions({
     instructions: params.instructions,
-    messages: params.messages,
+    messages: requestMessages,
   });
 
-  let pendingInput = normalizeMessagesToInput(params.messages);
+  let pendingInput = normalizeMessagesToInput(requestMessages);
   let previousResponseId: string | undefined = params.state.previousResponseId;
   let currentConversationId: string | null = params.state.conversationId ?? null;
   let totalToolCalls = 0;

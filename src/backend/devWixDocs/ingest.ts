@@ -1,7 +1,6 @@
 import { prisma } from '../db';
 import { embedText } from '../openai';
 import { hashText } from './hash';
-import { embeddingToSqlVectorLiteral } from './pgvector';
 import { htmlToMarkdown } from './markdown';
 import { chunkTextByTokens } from './tokenChunker';
 import { canonicalizeDocsUrl, isAllowedDocsUrl } from './sitemapSeed';
@@ -54,6 +53,25 @@ export type IngestResult = {
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
+
+function embeddingToSqlVectorLiteral(embedding: number[]): string {
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new Error('embeddingToSqlVectorLiteral: embedding[] required');
+  }
+
+  const body = embedding
+    .map((value) => {
+      if (!Number.isFinite(value)) throw new Error('embedding contains non-finite number');
+      const str = String(value);
+      if (str.includes('Infinity') || str.includes('NaN')) {
+        throw new Error('embedding contains invalid number');
+      }
+      return str;
+    })
+    .join(',');
+
+  return `'[${body}]'::vector`;
+}
 
 function nowMs(): number {
   return Date.now();

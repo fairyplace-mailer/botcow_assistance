@@ -125,4 +125,14 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     expect(['none', 'low']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('classification-or-extraction-or-ranking');
   });
+
+  test('16) repo-wide strong_spec audit -> full high/xhigh / repo-audit-or-spec-compliance', () => {
+    const txt =
+      'Work in repo fairyplace-mailer/botcow_assistance branch provecta. Make a full audit against docs/strong_spec.md. Check strict mode. Do not change anything.';
+    const res = chooseModel(mk(txt));
+    expect(res.model).toBe('gpt-5.4');
+    expect(['high', 'xhigh']).toContain(res.reasoning?.effort);
+    expect(res.reason).toBe('repo-audit-or-spec-compliance');
+  });
+
 });

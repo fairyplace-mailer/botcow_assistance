@@ -465,7 +465,7 @@ export const previewToolHandlers = {
           arguments: {
             repo,
             ref: 'provecta',
-            path: 'docs/spec.md',
+            path: 'docs/strong_spec.md',
           },
         },
       });

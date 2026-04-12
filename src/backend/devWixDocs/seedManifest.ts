@@ -3,7 +3,7 @@ import path from 'path';
 
 import { canonicalizeDocsUrl, isAllowedDocsUrl } from './sitemapSeed';
 
-export const DEV_WIX_SOURCE_KEY = 'dev_wix_docs';
+export const DEV_WIX_SOURCE_KEY = 'wix_docs_public';
 export const DEV_WIX_SOURCE_KIND = 'public_http_docs';
 export const DEV_WIX_SCOPE_ALLOWLIST = 'https://dev.wix.com/docs/*';
 export const DEV_WIX_SEED_MANIFEST_PATH = 'docs/rag/dev_wix.seed.txt';

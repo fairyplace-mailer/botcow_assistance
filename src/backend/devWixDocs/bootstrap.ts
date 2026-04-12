@@ -1,4 +1,5 @@
 import { prisma } from '../db';
+import { logDevWixInfo, logDevWixWarn } from './observability';
 import {
   DEV_WIX_SCOPE_ALLOWLIST,
   DEV_WIX_SEED_MANIFEST_PATH,
@@ -31,7 +32,6 @@ export async function bootstrapDevWixKnowledge(
 ): Promise<BootstrapDevWixKnowledgeResult> {
   const batchLimit = Math.max(1, Math.min(500, Number(opts?.batchLimit ?? 100)));
   const cursor = Math.max(0, Number(opts?.cursor ?? 0));
-
   const manifest = loadDevWixSeedManifest(opts?.repoRoot);
   const batch = manifest.urls.slice(cursor, cursor + batchLimit);
   const nextCursor = cursor + batch.length < manifest.urls.length ? cursor + batch.length : null;
@@ -63,6 +63,15 @@ export async function bootstrapDevWixKnowledge(
     },
   });
 
+  await logDevWixInfo('dev_wix_bootstrap_started', {
+    jobId: job.id,
+    manifestPath: manifest.manifestPath,
+    totalInManifest: manifest.urls.length,
+    rejectedCount: manifest.rejected.length,
+    batchLimit,
+    cursor,
+  });
+
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
@@ -71,7 +80,7 @@ export async function bootstrapDevWixKnowledge(
     for (const url of batch) {
       const existing = await prisma.knowledgeDocument.findFirst({
         where: { sourceId: source.id, canonicalUrl: url },
-        select: { id: true },
+        select: { id: true, documentStatus: true },
       });
 
       if (existing) {
@@ -84,6 +93,13 @@ export async function bootstrapDevWixKnowledge(
           },
         });
         updated += 1;
+
+        await logDevWixInfo('dev_wix_bootstrap_document_registered', {
+          jobId: job.id,
+          canonicalUrl: url,
+          action: 'updated_existing',
+          documentStatusTo: existing.documentStatus ?? null,
+        });
         continue;
       }
 
@@ -92,11 +108,18 @@ export async function bootstrapDevWixKnowledge(
           sourceId: source.id,
           originalUrl: url,
           canonicalUrl: url,
-          sourceSection: 'dev_wix_docs',
+          sourceSection: DEV_WIX_SOURCE_KEY,
           documentStatus: 'pending',
         },
       });
       inserted += 1;
+
+      await logDevWixInfo('dev_wix_bootstrap_document_registered', {
+        jobId: job.id,
+        canonicalUrl: url,
+        action: 'created_pending',
+        documentStatusTo: 'pending',
+      });
     }
 
     await prisma.knowledgeJob.update({
@@ -110,6 +133,15 @@ export async function bootstrapDevWixKnowledge(
         cursor: nextCursor === null ? null : String(nextCursor),
         finishedAt: new Date(),
       },
+    });
+
+    await logDevWixInfo('dev_wix_bootstrap_completed', {
+      jobId: job.id,
+      processed: batch.length,
+      inserted,
+      updated,
+      skipped,
+      nextCursor,
     });
   } catch (error: any) {
     await prisma.knowledgeJob.update({
@@ -126,6 +158,16 @@ export async function bootstrapDevWixKnowledge(
         finishedAt: new Date(),
       },
     });
+
+    await logDevWixWarn('dev_wix_bootstrap_failed', {
+      jobId: job.id,
+      processed: batch.length,
+      inserted,
+      updated,
+      skipped,
+      error: error?.message ?? String(error),
+    });
+
     throw error;
   }
 

@@ -1,12 +1,14 @@
 import type { ChatRoutingHints } from '../contracts/chat';
 import type { ModelRoutingDecision } from '../modelRouter';
+import type { AssistantExecutionContract } from '../orchestrator/contracts';
 
 type BuildCoreInstructionsParams = {
   routing: ModelRoutingDecision;
   hints?: ChatRoutingHints;
+  execution: AssistantExecutionContract;
 };
 
-export function buildCoreInstructions({ routing, hints }: BuildCoreInstructionsParams): string {
+export function buildCoreInstructions({ routing, hints, execution }: BuildCoreInstructionsParams): string {
   const touchedFiles = (hints?.touchedFiles ?? []).slice(0, 20);
 
   const coreRules = [
@@ -31,9 +33,23 @@ export function buildCoreInstructions({ routing, hints }: BuildCoreInstructionsP
     'When core and surrounding code conflict, surrounding code must adapt to core.',
   ];
 
-  const routingFacts = [
-    `Current backend-selected model: ${routing.model}.`,
-    `Current backend-selected reasoning effort: ${routing.reasoning?.effort ?? 'none'}.`,
+  const orchestrationRules = [
+    'Execution contract is backend-owned.',
+    'Do not self-select another model, reasoning level, scope, or tool policy.',
+    'Do not weaken the assigned task merely to make execution easier.',
+    'You only execute the assigned task slice.',
+    'If tool evidence is needed, use tools and stay grounded in tool outputs.',
+    'Do not assume tool success without tool evidence.',
+    'Do not skip needed evidence gathering just to be faster, shorter, or cheaper.',
+    'When evidence is missing, say that directly.',
+  ];
+
+  const executionFacts = [
+    `Backend-owned model: ${execution.model}.`,
+    `Backend-owned reasoning effort: ${execution.reasoningEffort}.`,
+    `Backend-owned response verbosity: ${execution.responseVerbosity}.`,
+    `Backend-owned max output tokens: ${execution.maxOutputTokens}.`,
+    `Backend-owned tool-use policy: ${execution.toolUsePolicy}.`,
     `Current routing reason: ${routing.reason}.`,
   ];
 
@@ -46,7 +62,9 @@ export function buildCoreInstructions({ routing, hints }: BuildCoreInstructionsP
     '',
     ...selfRewriteRules,
     '',
-    ...routingFacts,
+    ...orchestrationRules,
+    '',
+    ...executionFacts,
     '',
     ...touchedFilesBlock,
   ].join('\n');

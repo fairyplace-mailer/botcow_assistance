@@ -4,10 +4,9 @@ import { NextResponse } from 'next/server';
 
 import { runAssistant } from '../../../backend/assistant';
 import type { ChatRequestBody } from '../../../backend/contracts/chat';
-import { buildCoreInstructions } from '../../../backend/prompt/buildCoreInstructions';
-import { chooseModel } from '../../../backend/modelRouter';
-import { normalizePublicChatError, normalizePublicChatSuccess } from '../../../backend/responses';
 import { logEvent } from '../../../backend/log';
+import { planAssistantTurn } from '../../../backend/orchestrator/planAssistantTurn';
+import { normalizePublicChatError, normalizePublicChatSuccess } from '../../../backend/responses';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -43,30 +42,23 @@ export async function POST(req: Request) {
     }
 
     const messages = rawBody.messages;
-    const routing = chooseModel(messages, rawBody.hints ?? {});
-    const instructions = buildCoreInstructions({
-      routing,
-      hints: rawBody.hints,
+    const plan = planAssistantTurn({
+      messages,
+      hints: rawBody.hints ?? {},
     });
 
     const result = await runAssistant({
-      instructions,
+      instructions: plan.instructions,
       messages,
-      routing: {
-        model: routing.model,
-        reasoning: routing.reasoning,
-        reason: routing.reason,
-        text: { verbosity: routing.model === 'gpt-5.4' ? 'medium' : 'low' },
-        maxOutputTokens: routing.model === 'gpt-5.4' ? 8000 : 4000,
-      },
+      routing: plan.run,
       state: rawBody.state ?? {},
     });
 
     await logEvent('chat_request_completed', {
       sessionId,
-      model: routing.model,
-      modelReason: routing.reason,
-      reasoningEffort: routing.reasoning?.effort ?? null,
+      model: plan.routing.model,
+      modelReason: plan.routing.reason,
+      reasoningEffort: plan.routing.reasoning?.effort ?? null,
       durationMs: Date.now() - startedAt,
       ok: !result.error,
       responseId: result.response?.id ?? null,
@@ -90,7 +82,7 @@ export async function POST(req: Request) {
       normalizePublicChatSuccess({
         sessionId,
         response: result.response,
-        routing,
+        routing: plan.routing,
         state: {
           conversationId: result.state.conversationId,
           previousResponseId: result.state.latestResponseId,

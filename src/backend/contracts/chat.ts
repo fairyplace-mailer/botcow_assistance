@@ -18,6 +18,8 @@ export type ChatRoutingHints = {
   ragSourceCount?: number;
   hasSourceConflict?: boolean;
   toolHeavy?: boolean;
+  multiFileIntent?: boolean;
+  longContextSize?: number;
 };
 
 export type ChatStateRef = {

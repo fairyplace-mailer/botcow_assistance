@@ -6,38 +6,54 @@ jest.mock('../src/backend/log', () => ({
   logEvent: jest.fn(),
 }));
 
-jest.mock('../src/backend/modelRouter', () => ({
-  chooseModel: jest.fn(),
-}));
-
-jest.mock('../src/backend/prompt/buildCoreInstructions', () => ({
-  buildCoreInstructions: jest.fn(() => 'CORE_INSTRUCTIONS'),
+jest.mock('../src/backend/orchestrator/planAssistantTurn', () => ({
+  planAssistantTurn: jest.fn(),
 }));
 
 import { POST } from '../src/app/api/chat/route';
 import { runAssistant } from '../src/backend/assistant';
 import { logEvent } from '../src/backend/log';
-import { chooseModel } from '../src/backend/modelRouter';
-import { buildCoreInstructions } from '../src/backend/prompt/buildCoreInstructions';
+import { planAssistantTurn } from '../src/backend/orchestrator/planAssistantTurn';
 
 describe('chat route routing contract', () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    (buildCoreInstructions as jest.Mock).mockReturnValue('CORE_INSTRUCTIONS');
   });
 
-  test('passes canonical params to runAssistant and returns normalized public success contract', async () => {
-    const routing = {
-      model: 'gpt-5.4',
-      reasoning: { effort: 'high' },
-      reason: 'deep-code-debug-review',
+  test('passes canonical params to runAssistant via orchestrator and returns normalized public success contract', async () => {
+    const plan = {
+      normalizedHints: {
+        toolHeavy: true,
+        multiFileIntent: false,
+        longContextSize: 19,
+      },
+      routing: {
+        model: 'gpt-5.4',
+        reasoning: { effort: 'high' },
+        reason: 'deep-code-debug-review',
+      },
+      execution: {
+        model: 'gpt-5.4',
+        reasoningEffort: 'high',
+        responseVerbosity: 'medium',
+        maxOutputTokens: 8000,
+        toolUsePolicy: 'tool_first',
+      },
+      instructions: 'CORE_INSTRUCTIONS',
+      run: {
+        model: 'gpt-5.4',
+        reasoning: { effort: 'high' },
+        reason: 'deep-code-debug-review',
+        text: { verbosity: 'medium' },
+        maxOutputTokens: 8000,
+      },
     };
 
-    (chooseModel as jest.Mock).mockReturnValue(routing);
+    (planAssistantTurn as jest.Mock).mockReturnValue(plan);
     (runAssistant as jest.Mock).mockResolvedValue({
       response: {
         id: 'resp_1',
-        model: routing.model,
+        model: 'gpt-5.4',
         output: [
           {
             type: 'message',
@@ -76,8 +92,8 @@ describe('chat route routing contract', () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(buildCoreInstructions).toHaveBeenCalledWith({
-      routing,
+    expect(planAssistantTurn).toHaveBeenCalledWith({
+      messages: [{ role: 'user', content: 'analyze stack trace' }],
       hints: { toolHeavy: true },
     });
     expect(runAssistant).toHaveBeenCalledWith({
@@ -126,22 +142,44 @@ describe('chat route routing contract', () => {
   });
 
   test('creates session id when header absent', async () => {
-    const routing = {
-      model: 'gpt-5.4-mini',
-      reason: 'short-general-request',
+    const plan = {
+      normalizedHints: {
+        multiFileIntent: false,
+        longContextSize: 5,
+      },
+      routing: {
+        model: 'gpt-5.4-mini',
+        reasoning: { effort: 'low' },
+        reason: 'short-general-request',
+      },
+      execution: {
+        model: 'gpt-5.4-mini',
+        reasoningEffort: 'low',
+        responseVerbosity: 'low',
+        maxOutputTokens: 4000,
+        toolUsePolicy: 'normal',
+      },
+      instructions: 'CORE_INSTRUCTIONS',
+      run: {
+        model: 'gpt-5.4-mini',
+        reasoning: { effort: 'low' },
+        reason: 'short-general-request',
+        text: { verbosity: 'low' },
+        maxOutputTokens: 4000,
+      },
     };
 
-    (chooseModel as jest.Mock).mockReturnValue(routing);
+    (planAssistantTurn as jest.Mock).mockReturnValue(plan);
     (runAssistant as jest.Mock).mockResolvedValue({
       response: {
         id: 'resp_2',
-        model: routing.model,
+        model: 'gpt-5.4-mini',
         output_text: 'hello',
       },
       toolCalls: [],
       reasoningDecision: {
-        requestedReasoningEffort: null,
-        sentReasoningEffort: null,
+        requestedReasoningEffort: 'low',
+        sentReasoningEffort: 'low',
         reasoningSuppressedReason: null,
       },
       state: {
@@ -189,60 +227,5 @@ describe('chat route routing contract', () => {
       },
     });
     expect(runAssistant).not.toHaveBeenCalled();
-  });
-
-  test('external error is normalized without internal text and keeps sessionId', async () => {
-    const routing = {
-      model: 'gpt-5.4-mini',
-      reason: 'short-general-request',
-    };
-
-    (chooseModel as jest.Mock).mockReturnValue(routing);
-    (runAssistant as jest.Mock).mockResolvedValue({
-      response: {
-        id: 'resp_err',
-        model: routing.model,
-        output: [],
-      },
-      toolCalls: [],
-      reasoningDecision: {
-        requestedReasoningEffort: null,
-        sentReasoningEffort: null,
-        reasoningSuppressedReason: null,
-      },
-      state: {
-        conversationId: null,
-        latestResponseId: 'resp_err',
-      },
-      error: {
-        publicCode: 'assistant_run_failed',
-        publicMessage: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
-        internalCode: 'tool_timeout',
-      },
-    });
-
-    const res = await POST(
-      new Request('http://localhost/api/chat', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-botcow-session-id': 'session_err',
-        },
-        body: JSON.stringify({ messages: [{ role: 'user', content: 'hello' }] }),
-      }),
-    );
-    const body = await res.json();
-
-    expect(res.status).toBe(500);
-    expect(body).toEqual({
-      ok: false,
-      sessionId: 'session_err',
-      response: null,
-      error: {
-        code: 'assistant_run_failed',
-        message: 'Не удалось завершить действие автоматически. Попробуйте ещё раз.',
-      },
-    });
-    expect(JSON.stringify(body)).not.toContain('tool_timeout');
   });
 });

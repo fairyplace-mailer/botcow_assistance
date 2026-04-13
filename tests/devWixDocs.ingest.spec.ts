@@ -426,4 +426,18 @@ describe('ingestDevWixArticles knowledge contract', () => {
       }),
     );
   });
+  test('external async queue pressure can stop new ingest even when official docs budget is low', async () => {
+    process.env.BOTCOW_ASYNC_QUEUE_PRESSURE_RATIO = '0.95';
+
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    const result = await ingestDevWixArticles({ startUrl: 'https://dev.wix.com/docs/sdk', limitPages: 1, force: true });
+
+    expect(result.budgetMode).toBe('aggressive');
+    expect(result.stoppedReason).toBe('budget_aggressive_stop');
+    expect(result.budgetHit).toBe(true);
+    expect(embedText).not.toHaveBeenCalled();
+
+    delete process.env.BOTCOW_ASYNC_QUEUE_PRESSURE_RATIO;
+  });
+
 });

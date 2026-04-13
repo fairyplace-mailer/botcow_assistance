@@ -1,10 +1,25 @@
 export type DevWixBudgetMode = 'normal' | 'warning' | 'aggressive';
+export type BudgetPressureFamily =
+  | 'none'
+  | 'tokens'
+  | 'db'
+  | 'storage'
+  | 'embeddings'
+  | 'github'
+  | 'vercel'
+  | 'queue';
 
 export type DevWixBudgetSnapshot = {
   budgetMode: DevWixBudgetMode;
   pressureRatio: number;
+  dominantPressureFamily: BudgetPressureFamily;
   embeddingPressureRatio: number;
   dbPressureRatio: number;
+  tokenPressureRatio: number;
+  storagePressureRatio: number;
+  githubPressureRatio: number;
+  vercelPressureRatio: number;
+  queuePressureRatio: number;
   embeddingBudgetLimit: number;
   dbBudgetLimit: number;
 };
@@ -38,8 +53,59 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   return Math.floor(parsed);
 }
 
+function readOptionalFiniteEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return undefined;
+  return parsed;
+}
+
 function roundRatio(value: number): number {
   return Number(clamp(value, 0, 10).toFixed(4));
+}
+
+function resolvePressureRatio(opts: {
+  ratioEnv?: string;
+  usedEnv?: string;
+  limitEnv?: string;
+  remainingEnv?: string;
+}): number {
+  if (opts.ratioEnv) {
+    const direct = readOptionalFiniteEnv(opts.ratioEnv);
+    if (direct !== undefined) return roundRatio(direct);
+  }
+
+  const limit = opts.limitEnv ? readOptionalFiniteEnv(opts.limitEnv) : undefined;
+  if (limit !== undefined && limit > 0) {
+    if (opts.usedEnv) {
+      const used = readOptionalFiniteEnv(opts.usedEnv);
+      if (used !== undefined) return roundRatio(used / limit);
+    }
+
+    if (opts.remainingEnv) {
+      const remaining = readOptionalFiniteEnv(opts.remainingEnv);
+      if (remaining !== undefined) return roundRatio(1 - remaining / limit);
+    }
+  }
+
+  return 0;
+}
+
+function pickDominantPressureFamily(
+  entries: Array<[BudgetPressureFamily, number]>,
+): { family: BudgetPressureFamily; ratio: number } {
+  let family: BudgetPressureFamily = 'none';
+  let ratio = 0;
+
+  for (const [nextFamily, nextRatio] of entries) {
+    if (nextRatio > ratio) {
+      family = nextFamily;
+      ratio = nextRatio;
+    }
+  }
+
+  return { family, ratio: roundRatio(ratio) };
 }
 
 export function computeDevWixBudgetSnapshot(opts: {
@@ -62,9 +128,72 @@ export function computeDevWixBudgetSnapshot(opts: {
   );
   const officialChunks = Math.max(0, Math.floor(opts.officialChunks));
 
-  const embeddingPressureRatio = roundRatio(officialChunks / embeddingBudgetLimit);
-  const dbPressureRatio = roundRatio(officialChunks / dbBudgetLimit);
-  const pressureRatio = roundRatio(Math.max(embeddingPressureRatio, dbPressureRatio));
+  const localEmbeddingPressureRatio = roundRatio(officialChunks / embeddingBudgetLimit);
+  const localDbPressureRatio = roundRatio(officialChunks / dbBudgetLimit);
+
+  const embeddingPressureRatio = roundRatio(
+    Math.max(
+      localEmbeddingPressureRatio,
+      resolvePressureRatio({
+        ratioEnv: 'BOTCOW_EMBEDDINGS_PRESSURE_RATIO',
+        usedEnv: 'BOTCOW_EMBEDDINGS_USAGE',
+        limitEnv: 'BOTCOW_EMBEDDINGS_LIMIT',
+      }),
+    ),
+  );
+
+  const dbPressureRatio = roundRatio(
+    Math.max(
+      localDbPressureRatio,
+      resolvePressureRatio({
+        ratioEnv: 'BOTCOW_DB_PRESSURE_RATIO',
+        usedEnv: 'BOTCOW_DB_USAGE',
+        limitEnv: 'BOTCOW_DB_LIMIT',
+      }),
+    ),
+  );
+
+  const tokenPressureRatio = resolvePressureRatio({
+    ratioEnv: 'BOTCOW_MODEL_TOKEN_PRESSURE_RATIO',
+    usedEnv: 'BOTCOW_MODEL_TOKEN_USAGE',
+    limitEnv: 'BOTCOW_MODEL_TOKEN_LIMIT',
+  });
+
+  const storagePressureRatio = resolvePressureRatio({
+    ratioEnv: 'BOTCOW_STORAGE_PRESSURE_RATIO',
+    usedEnv: 'BOTCOW_STORAGE_USAGE',
+    limitEnv: 'BOTCOW_STORAGE_LIMIT',
+  });
+
+  const githubPressureRatio = resolvePressureRatio({
+    ratioEnv: 'BOTCOW_GITHUB_QUOTA_PRESSURE_RATIO',
+    remainingEnv: 'BOTCOW_GITHUB_REQUESTS_REMAINING',
+    limitEnv: 'BOTCOW_GITHUB_REQUESTS_LIMIT',
+  });
+
+  const vercelPressureRatio = resolvePressureRatio({
+    ratioEnv: 'BOTCOW_VERCEL_QUOTA_PRESSURE_RATIO',
+    remainingEnv: 'BOTCOW_VERCEL_REQUESTS_REMAINING',
+    limitEnv: 'BOTCOW_VERCEL_REQUESTS_LIMIT',
+  });
+
+  const queuePressureRatio = resolvePressureRatio({
+    ratioEnv: 'BOTCOW_ASYNC_QUEUE_PRESSURE_RATIO',
+    usedEnv: 'BOTCOW_ASYNC_QUEUE_DEPTH',
+    limitEnv: 'BOTCOW_ASYNC_QUEUE_LIMIT',
+  });
+
+  const dominant = pickDominantPressureFamily([
+    ['tokens', tokenPressureRatio],
+    ['db', dbPressureRatio],
+    ['storage', storagePressureRatio],
+    ['embeddings', embeddingPressureRatio],
+    ['github', githubPressureRatio],
+    ['vercel', vercelPressureRatio],
+    ['queue', queuePressureRatio],
+  ]);
+
+  const pressureRatio = dominant.ratio;
 
   const budgetMode: DevWixBudgetMode =
     pressureRatio >= AGGRESSIVE_THRESHOLD ? 'aggressive' : pressureRatio >= WARNING_THRESHOLD ? 'warning' : 'normal';
@@ -72,8 +201,14 @@ export function computeDevWixBudgetSnapshot(opts: {
   return {
     budgetMode,
     pressureRatio,
+    dominantPressureFamily: dominant.family,
     embeddingPressureRatio,
     dbPressureRatio,
+    tokenPressureRatio,
+    storagePressureRatio,
+    githubPressureRatio,
+    vercelPressureRatio,
+    queuePressureRatio,
     embeddingBudgetLimit,
     dbBudgetLimit,
   };

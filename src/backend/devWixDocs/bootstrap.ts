@@ -1,4 +1,9 @@
 import { prisma } from '../db';
+import {
+  createOrReuseKnowledgeJob,
+  finishKnowledgeJob,
+  markKnowledgeJobRunning,
+} from '../knowledgeJobs';
 import { logDevWixInfo, logDevWixWarn } from './observability';
 import {
   DEV_WIX_SCOPE_ALLOWLIST,
@@ -25,16 +30,20 @@ export type BootstrapDevWixKnowledgeResult = {
   updated: number;
   skipped: number;
   nextCursor: number | null;
+  reusedJob: boolean;
+  resumedFromCursor: number;
 };
 
 export async function bootstrapDevWixKnowledge(
   opts?: BootstrapDevWixKnowledgeOptions,
 ): Promise<BootstrapDevWixKnowledgeResult> {
   const batchLimit = Math.max(1, Math.min(500, Number(opts?.batchLimit ?? 100)));
-  const cursor = Math.max(0, Number(opts?.cursor ?? 0));
+  const requestedCursor =
+    typeof opts?.cursor === 'number' && Number.isFinite(opts.cursor)
+      ? Math.max(0, Number(opts.cursor))
+      : undefined;
+
   const manifest = loadDevWixSeedManifest(opts?.repoRoot);
-  const batch = manifest.urls.slice(cursor, cursor + batchLimit);
-  const nextCursor = cursor + batch.length < manifest.urls.length ? cursor + batch.length : null;
 
   const source = await prisma.knowledgeSource.upsert({
     where: { sourceKey: DEV_WIX_SOURCE_KEY },
@@ -53,23 +62,33 @@ export async function bootstrapDevWixKnowledge(
     },
   });
 
-  const job = await prisma.knowledgeJob.create({
-    data: {
-      sourceId: source.id,
-      jobKind: 'bootstrap',
-      jobStatus: 'running',
-      batchLimit,
-      cursor: String(cursor),
-    },
+  const { job: jobRecord, reused } = await createOrReuseKnowledgeJob({
+    sourceId: source.id,
+    jobKind: 'bootstrap',
+    batchLimit,
+    ...(requestedCursor !== undefined ? { cursor: String(requestedCursor) } : {}),
   });
 
+  const resumedFromCursor =
+    requestedCursor ?? Math.max(0, Number(jobRecord.cursor ?? 0));
+
+  const batch = manifest.urls.slice(resumedFromCursor, resumedFromCursor + batchLimit);
+  const nextCursor =
+    resumedFromCursor + batch.length < manifest.urls.length
+      ? resumedFromCursor + batch.length
+      : null;
+
+  await markKnowledgeJobRunning(jobRecord.id);
+
   await logDevWixInfo('dev_wix_bootstrap_started', {
-    jobId: job.id,
+    jobId: jobRecord.id,
     manifestPath: manifest.manifestPath,
     totalInManifest: manifest.urls.length,
     rejectedCount: manifest.rejected.length,
     batchLimit,
-    cursor,
+    cursor: resumedFromCursor,
+    reusedJob: reused,
+    reusedFromStatus: reused ? (jobRecord.jobStatus ?? null) : 'queued',
   });
 
   let inserted = 0;
@@ -95,7 +114,7 @@ export async function bootstrapDevWixKnowledge(
         updated += 1;
 
         await logDevWixInfo('dev_wix_bootstrap_document_registered', {
-          jobId: job.id,
+          jobId: jobRecord.id,
           canonicalUrl: url,
           action: 'updated_existing',
           documentStatusTo: existing.documentStatus ?? null,
@@ -115,57 +134,54 @@ export async function bootstrapDevWixKnowledge(
       inserted += 1;
 
       await logDevWixInfo('dev_wix_bootstrap_document_registered', {
-        jobId: job.id,
+        jobId: jobRecord.id,
         canonicalUrl: url,
         action: 'created_pending',
         documentStatusTo: 'pending',
       });
     }
 
-    await prisma.knowledgeJob.update({
-      where: { id: job.id },
-      data: {
-        jobStatus: 'done',
-        processed: batch.length,
-        inserted,
-        updated,
-        skipped,
-        cursor: nextCursor === null ? null : String(nextCursor),
-        finishedAt: new Date(),
-      },
+    await finishKnowledgeJob(jobRecord.id, {
+      status: 'done',
+      processed: batch.length,
+      inserted,
+      updated,
+      skipped,
+      cursor: nextCursor === null ? null : String(nextCursor),
+      lastError: null,
     });
 
     await logDevWixInfo('dev_wix_bootstrap_completed', {
-      jobId: job.id,
+      jobId: jobRecord.id,
       processed: batch.length,
       inserted,
       updated,
       skipped,
       nextCursor,
+      reusedJob: reused,
+      resumedFromCursor,
     });
   } catch (error: any) {
-    await prisma.knowledgeJob.update({
-      where: { id: job.id },
-      data: {
-        jobStatus: 'failed',
-        processed: batch.length,
-        inserted,
-        updated,
-        skipped,
-        errorCount: 1,
-        lastError: error?.message ?? String(error),
-        cursor: String(cursor),
-        finishedAt: new Date(),
-      },
+    await finishKnowledgeJob(jobRecord.id, {
+      status: 'failed',
+      processed: batch.length,
+      inserted,
+      updated,
+      skipped,
+      errorCount: 1,
+      lastError: error?.message ?? String(error),
+      cursor: String(resumedFromCursor),
     });
 
     await logDevWixWarn('dev_wix_bootstrap_failed', {
-      jobId: job.id,
+      jobId: jobRecord.id,
       processed: batch.length,
       inserted,
       updated,
       skipped,
       error: error?.message ?? String(error),
+      reusedJob: reused,
+      resumedFromCursor,
     });
 
     throw error;
@@ -173,7 +189,7 @@ export async function bootstrapDevWixKnowledge(
 
   return {
     sourceId: source.id,
-    jobId: job.id,
+    jobId: jobRecord.id,
     manifestPath: manifest.manifestPath,
     totalInManifest: manifest.urls.length,
     rejectedCount: manifest.rejected.length,
@@ -182,5 +198,7 @@ export async function bootstrapDevWixKnowledge(
     updated,
     skipped,
     nextCursor,
+    reusedJob: reused,
+    resumedFromCursor,
   };
 }

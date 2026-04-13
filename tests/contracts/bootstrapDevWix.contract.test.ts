@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 
 const knowledgeSourceUpsert = jest.fn();
+const knowledgeJobFindFirst = jest.fn();
 const knowledgeJobCreate = jest.fn();
 const knowledgeJobUpdate = jest.fn();
 const knowledgeDocumentFindFirst = jest.fn();
@@ -19,6 +20,7 @@ jest.mock('../../src/backend/db', () => ({
   prisma: {
     knowledgeSource: { upsert: (...args: any[]) => knowledgeSourceUpsert(...args) },
     knowledgeJob: {
+      findFirst: (...args: any[]) => knowledgeJobFindFirst(...args),
       create: (...args: any[]) => knowledgeJobCreate(...args),
       update: (...args: any[]) => knowledgeJobUpdate(...args),
     },
@@ -46,7 +48,8 @@ describe('bootstrapDevWixKnowledge contract', () => {
     logInfo.mockResolvedValue(undefined);
     logWarn.mockResolvedValue(undefined);
     knowledgeSourceUpsert.mockResolvedValue({ id: 'source-1' });
-    knowledgeJobCreate.mockResolvedValue({ id: 'job-1' });
+    knowledgeJobFindFirst.mockResolvedValue(null);
+    knowledgeJobCreate.mockResolvedValue({ id: 'job-1', jobStatus: 'queued', cursor: null });
     knowledgeJobUpdate.mockResolvedValue({ id: 'job-1' });
     knowledgeDocumentFindFirst.mockResolvedValue(null);
     knowledgeDocumentCreate.mockResolvedValue({});
@@ -67,6 +70,30 @@ describe('bootstrapDevWixKnowledge contract', () => {
     expect(result.inserted).toBe(1);
     expect(result.updated).toBe(0);
     expect(result.nextCursor).toBe(1);
+    expect(result.reusedJob).toBe(false);
+    expect(result.resumedFromCursor).toBe(0);
+
+    expect(knowledgeJobCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourceId: 'source-1',
+        jobKind: 'bootstrap',
+        jobStatus: 'queued',
+        batchLimit: 1,
+        cursor: '0',
+      }),
+    });
+
+    expect(knowledgeJobUpdate).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: { id: 'job-1' },
+        data: expect.objectContaining({
+          jobStatus: 'running',
+          finishedAt: null,
+          lastError: null,
+        }),
+      }),
+    );
 
     expect(knowledgeDocumentCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -91,6 +118,30 @@ describe('bootstrapDevWixKnowledge contract', () => {
       data: expect.objectContaining({
         sourceId: 'source-1',
         originalUrl: 'https://dev.wix.com/docs/sdk',
+      }),
+    });
+  });
+
+  test('reuses existing bootstrap job and resumes from saved cursor when cursor is omitted', async () => {
+    knowledgeJobFindFirst.mockResolvedValueOnce({
+      id: 'job-prev',
+      jobStatus: 'paused',
+      cursor: '1',
+    });
+
+    const { bootstrapDevWixKnowledge } = await import('../../src/backend/devWixDocs/bootstrap');
+    const result = await bootstrapDevWixKnowledge({ batchLimit: 1 });
+
+    expect(result.jobId).toBe('job-prev');
+    expect(result.reusedJob).toBe(true);
+    expect(result.resumedFromCursor).toBe(1);
+    expect(result.nextCursor).toBe(null);
+    expect(knowledgeJobCreate).not.toHaveBeenCalled();
+
+    expect(knowledgeDocumentCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        canonicalUrl: 'https://dev.wix.com/docs/velo',
+        originalUrl: 'https://dev.wix.com/docs/velo',
       }),
     });
   });

@@ -238,6 +238,40 @@ describe('ingestDevWixArticles knowledge contract', () => {
     expect(docsState[0]?.embeddedAt).toBeInstanceOf(Date);
   });
 
+  test('changed document records explicit lifecycle statuses in order', async () => {
+    docsState = [{ ...docsState[0], contentHash: 'old-hash', documentStatus: 'ready' }];
+
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    await ingestDevWixArticles({ startUrl: 'https://dev.wix.com/docs/sdk', limitPages: 1, force: true });
+
+    const transitions = logInfo.mock.calls
+      .filter(([event]) => event === 'dev_wix_document_status_transition')
+      .map(([, payload]) => payload.documentStatusTo);
+
+    expect(transitions).toEqual(['fetched', 'extracted', 'embedded', 'ready']);
+  });
+
+  test('unchanged ready document still records fetched and extracted before returning ready', async () => {
+    const html = makeHtml('<h1>SDK</h1><p>Stable text.</p>');
+    const markdown = htmlToMarkdown(html).markdown;
+    docsState = [{ ...docsState[0], contentHash: hashText(markdown), documentStatus: 'ready' }];
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'text/html' },
+      text: async () => html,
+    })) as any;
+
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    await ingestDevWixArticles({ startUrl: 'https://dev.wix.com/docs/sdk', limitPages: 1, force: true });
+
+    const transitions = logInfo.mock.calls
+      .filter(([event]) => event === 'dev_wix_document_status_transition')
+      .map(([, payload]) => payload.documentStatusTo);
+
+    expect(transitions).toEqual(['fetched', 'extracted', 'ready']);
+  });
+
   test('failed fetch records failed status', async () => {
     global.fetch = jest.fn(async () => ({
       ok: false,

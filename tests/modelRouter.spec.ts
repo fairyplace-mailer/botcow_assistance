@@ -135,4 +135,15 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     expect(res.reason).toBe('repo-audit-or-spec-compliance');
   });
 
+  test('17) explicit backend hints for multi-file and long context escalate routing', () => {
+    const res = chooseModel(mk('Сделай изменения', []), {
+      multiFileIntent: true,
+      longContextSize: 9000,
+      toolHeavy: true,
+    });
+    expect(res.model).toBe('gpt-5.4');
+    expect(res.reasoning?.effort).toBe('high');
+    expect(res.reason).toBe('architecture-or-design');
+  });
+
 });

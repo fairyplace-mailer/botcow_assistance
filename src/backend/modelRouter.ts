@@ -62,6 +62,8 @@ export function chooseModel(
 
   const messageCount = Array.isArray(messages) ? messages.length : 0;
   const touchedFiles = hints.touchedFiles ?? [];
+  const explicitLongContextSize = hints.longContextSize ?? 0;
+  const explicitMultiFileIntent = !!hints.multiFileIntent;
   const normalized = normalizeAllMessagesToText(messages);
   const repoAuditText = `${lastUserText ?? ''}\n${normalized.concatenatedText}`;
 
@@ -143,7 +145,7 @@ export function chooseModel(
   }
 
   const lastUserTextLength = lastUserText.length;
-  const estimatedTotalTextLength = normalized.totalTextLength;
+  const estimatedTotalTextLength = Math.max(normalized.totalTextLength, explicitLongContextSize);
 
   const flags = detectFlags(normalized.concatenatedText);
   const counts = countMarkers(normalized.concatenatedText);
@@ -234,7 +236,9 @@ export function chooseModel(
       messageCount > 25 ||
       counts.codeBlockCount >= 3 ||
       flags.hasMultiFileIntent ||
-      !!hints.toolHeavy;
+      explicitMultiFileIntent ||
+      !!hints.toolHeavy ||
+      explicitLongContextSize > 7000;
 
     if (longOrComplex) {
       chosenModel = 'gpt-5.4';
@@ -253,6 +257,7 @@ export function chooseModel(
     !signals.isLikelyClassificationTask &&
     !signals.isLikelyCodegenTask &&
     !(flags.hasPmWords || flags.hasRepoOpsWords || flags.hasVercelWords || flags.hasCICDWords) &&
+    !explicitMultiFileIntent &&
     lastUserTextLength < 600 &&
     messageCount < 10
   ) {
@@ -415,6 +420,7 @@ function scoreRouting(s: Signals, hints: ChatRoutingHints): RoutingScores {
     3 * bool(f.hasSecurityWords) +
     3 * bool(f.hasLargeErrorPayload) +
     3 * bool(f.hasMultiFileIntent) +
+    3 * bool(!!hints.multiFileIntent) +
     2 * bool(!!hints.toolHeavy) +
     (s.estimatedTotalTextLength > 8000 ? 3 : 0) +
     (s.messageCount > 25 ? 2 : 0) +
@@ -463,6 +469,7 @@ function scoreRouting(s: Signals, hints: ChatRoutingHints): RoutingScores {
     4 * bool(!!hints.hasSourceConflict) +
     2 * bool(s.estimatedTotalTextLength > 6000) +
     2 * bool(f.hasMultiFileIntent) +
+    2 * bool(!!hints.multiFileIntent) +
     2 * bool(f.hasReviewWords) +
     2 * bool(f.hasDiff) -
     4 * bool(s.isLikelyClassificationTask);
@@ -602,6 +609,7 @@ function isLikelyArchitectureTask(flags: KeywordFlags, hints: ChatRoutingHints):
     flags.hasArchWords ||
     flags.hasSecurityWords ||
     flags.hasMultiFileIntent ||
+    hints.multiFileIntent ||
     hints.hasSourceConflict
   );
 }

@@ -347,8 +347,9 @@ export async function ingestDevWixArticles(
       stoppedReason = 'budget_aggressive_stop';
 
       const aggressiveResult = buildResult();
-      if (jobId) {
-        await finishKnowledgeJob(jobId, {
+      const currentJobId = jobId;
+      if (currentJobId) {
+        await finishKnowledgeJob(currentJobId, {
           status: 'done',
           processed: 0,
           inserted: 0,
@@ -459,6 +460,24 @@ export async function ingestDevWixArticles(
           continue;
         }
 
+        const statusBeforeFetch = doc.documentStatus;
+        const contentHashBeforeFetch = doc.contentHash;
+        const fetchedAt = new Date();
+
+        const fetchedStartedAt = nowMs();
+        await transitionDocument({
+          jobId,
+          doc,
+          nextStatus: 'fetched',
+          lastHttpStatus: response.status,
+          data: {
+            lastHttpStatus: response.status,
+            fetchedAt,
+            lastError: null,
+          },
+        });
+        msDb += nowMs() - fetchedStartedAt;
+
         const htmlRaw = await response.text();
         if (!startHtmlBytes) startHtmlBytes = htmlRaw.length;
         const html = stripHeavyHtml(htmlRaw);
@@ -491,33 +510,6 @@ export async function ingestDevWixArticles(
           normalizedContentHash: contentHash,
         });
 
-        if (doc.contentHash && doc.contentHash === contentHash && doc.documentStatus === 'ready') {
-          const started = nowMs();
-          await prisma.knowledgeDocument.update({
-            where: { id: doc.id },
-            data: {
-              title,
-              lastHttpStatus: response.status,
-              fetchedAt: new Date(),
-              documentStatus: 'ready',
-              lastError: null,
-            },
-          });
-          msDb += nowMs() - started;
-          skippedUnchanged += 1;
-
-          await logDevWixInfo('dev_wix_document_unchanged', {
-            jobId,
-            canonicalUrl: doc.canonicalUrl,
-            normalizedContentHash: contentHash,
-            lastHttpStatus: response.status,
-            httpStatusClass: httpStatusClass(response.status),
-            fetchDurationMs,
-          });
-          continue;
-        }
-
-        const fetchedAt = new Date();
         const extractedStartedAt = nowMs();
         await transitionDocument({
           jobId,
@@ -535,6 +527,32 @@ export async function ingestDevWixArticles(
         });
         doc.contentHash = contentHash;
         msDb += nowMs() - extractedStartedAt;
+
+        if (contentHashBeforeFetch && contentHashBeforeFetch === contentHash && statusBeforeFetch === 'ready') {
+          const started = nowMs();
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'ready',
+            lastHttpStatus: response.status,
+            data: {
+              title,
+              lastError: null,
+            },
+          });
+          msDb += nowMs() - started;
+          skippedUnchanged += 1;
+
+          await logDevWixInfo('dev_wix_document_unchanged', {
+            jobId,
+            canonicalUrl: doc.canonicalUrl,
+            normalizedContentHash: contentHash,
+            lastHttpStatus: response.status,
+            httpStatusClass: httpStatusClass(response.status),
+            fetchDurationMs,
+          });
+          continue;
+        }
 
         const chunkStartedAt = nowMs();
         const chunks = chunkTextByTokens(markdown, { chunkTokens, overlapTokens }).slice(0, maxChunksPerPage);
@@ -626,15 +644,29 @@ export async function ingestDevWixArticles(
           const started = nowMs();
           const sql = buildVectorUpdateSql({ updates });
           await prisma.$executeRawUnsafe(sql.sql, ...sql.values);
+
+          const embeddedAt = new Date();
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'embedded',
+            lastHttpStatus: response.status,
+            data: {
+              embeddedAt,
+              lastError: null,
+            },
+          });
+
           await transitionDocument({
             jobId,
             doc,
             nextStatus: 'ready',
+            lastHttpStatus: response.status,
             data: {
-              embeddedAt: new Date(),
               lastError: null,
             },
           });
+
           msDb += nowMs() - started;
         }
 
@@ -666,8 +698,9 @@ export async function ingestDevWixArticles(
 
     const result = buildResult();
 
-    if (jobId) {
-      await finishKnowledgeJob(jobId, {
+    const currentJobId = jobId;
+    if (currentJobId) {
+      await finishKnowledgeJob(currentJobId, {
         status: 'done',
         processed: fetched,
         inserted: stored,
@@ -698,8 +731,9 @@ export async function ingestDevWixArticles(
 
     return result;
   } catch (error: any) {
-    if (jobId) {
-      await finishKnowledgeJob(jobId, {
+    const currentJobId = jobId;
+    if (currentJobId) {
+      await finishKnowledgeJob(currentJobId, {
         status: 'failed',
         processed: fetched,
         inserted: stored,

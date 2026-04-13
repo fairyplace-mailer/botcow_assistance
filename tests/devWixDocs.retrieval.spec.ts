@@ -163,4 +163,31 @@ describe('retrieveDevWixContext knowledge contract', () => {
       }),
     );
   });
+  it('external github quota pressure can reduce retrieval breadth even when official docs budget is low', async () => {
+    process.env.BOTCOW_GITHUB_QUOTA_PRESSURE_RATIO = '0.72';
+    queryRawUnsafe
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([
+        {
+          id: 'chunk-1',
+          documentId: 'doc-1',
+          canonicalUrl: 'https://dev.wix.com/docs/sdk',
+          title: 'SDK Docs',
+          chunkText: 'official content',
+          distance: 0.05,
+        },
+      ]);
+
+    const { retrieveDevWixContext } = await import('../src/backend/devWixDocs/retrieve');
+    const result = await retrieveDevWixContext({ query: 'sdk docs', topK: 4, maxChars: 5000 });
+
+    const sql = String(queryRawUnsafe.mock.calls[1]?.[0] ?? '');
+    expect(sql).toContain('LIMIT 6');
+    expect(result.budgetMode).toBe('warning');
+    expect(result.effectiveTopK).toBe(2);
+    expect(result.effectiveMaxChars).toBe(3000);
+
+    delete process.env.BOTCOW_GITHUB_QUOTA_PRESSURE_RATIO;
+  });
+
 });

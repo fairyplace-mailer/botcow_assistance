@@ -12,10 +12,10 @@ const DEFAULT_MAX_TOTAL_TOOL_CALLS = 24;
 const DEFAULT_MAX_SAME_FINGERPRINT_IN_ROW = 2;
 const DEFAULT_TOOL_TIMEOUT_MS = 20_000;
 
-const AUDIT_MAX_TOOL_LOOPS = 20;
-const AUDIT_MAX_TOTAL_TOOL_CALLS = 80;
-const AUDIT_MAX_SAME_FINGERPRINT_IN_ROW = 3;
-const AUDIT_TOOL_TIMEOUT_MS = 40_000;
+const AUDIT_MAX_TOOL_LOOPS = 40;
+const AUDIT_MAX_TOTAL_TOOL_CALLS = 160;
+const AUDIT_MAX_SAME_FINGERPRINT_IN_ROW = 4;
+const AUDIT_TOOL_TIMEOUT_MS = 60_000;
 
 function looksLikeRepoAuditRequest(text: string): boolean {
   if (!text) return false;
@@ -56,6 +56,10 @@ Repository audit mode:
 - Ignore removed legacy paths such as docs/spec.md.
 - Prefer broad repo inspection before conclusions.
 - Prefer reading files in batches with github_get_files_batch when available.
+- For repo audit, avoid one-file-per-round exploration when a batch read is possible.
+- Inspect strongest candidate files first, then stop tool use once evidence is sufficient.
+- Do not spend tool loops on exhaustive repo traversal if the main compliance answer is already supported.
+- Avoid reopening the same files unless new evidence requires it.
 - Before any strict-mode conclusion, inspect the Responses runtime and strict tool schema builder directly.
 - Focus on exact compliance against docs/strong_spec.md.
 - In the final answer, report only mismatches, partial mismatches, and whether Responses API strict mode is configured.

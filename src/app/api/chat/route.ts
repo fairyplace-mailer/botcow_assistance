@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 
 import { runAssistant } from '../../../backend/assistant';
-import type { ChatRequestBody } from '../../../backend/contracts/chat';
+import type { ChatMessage, ChatRequestBody } from '../../../backend/contracts/chat';
 import { logEvent } from '../../../backend/log';
 import { planAssistantTurn } from '../../../backend/orchestrator/planAssistantTurn';
 import { normalizePublicChatError, normalizePublicChatSuccess } from '../../../backend/responses';
@@ -23,9 +23,84 @@ function validateBody(body: unknown): body is ChatRequestBody {
   return true;
 }
 
+function normalizeContentToText(content: unknown): string {
+  if (!content) return '';
+
+  if (typeof content === 'string') return content;
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (!part) return '';
+        if (typeof part === 'string') return part;
+        if (typeof part === 'object' && part !== null && 'text' in part) {
+          return String((part as { text?: unknown }).text ?? '');
+        }
+        return '';
+      })
+      .join('\n');
+  }
+
+  if (typeof content === 'object' && content !== null && 'text' in content) {
+    return String((content as { text?: unknown }).text ?? '');
+  }
+
+  return '';
+}
+
+function allMessagesText(messages: ChatMessage[]): string {
+  return messages.map((message) => normalizeContentToText(message.content)).join('\n');
+}
+
+function looksLikeAuditOrDebugRequest(messages: ChatMessage[]): boolean {
+  const text = allMessagesText(messages);
+  if (!text) return false;
+
+  return (
+    /\b(audit|strict mode|responses api|strong_spec|docs\/strong_spec\.md|repo|branch)\b/i.test(text) ||
+    /аудит|строгий режим|ветк|репо|strong_spec/i.test(text)
+  );
+}
+
+function shouldExposeInternalStopReason(req: Request, body?: ChatRequestBody): boolean {
+  if (req.headers.get('x-botcow-debug') === '1') return true;
+  if (process.env.NODE_ENV !== 'production') return true;
+  if (body?.messages && looksLikeAuditOrDebugRequest(body.messages)) return true;
+  return false;
+}
+
+function readInternalStopReason(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+
+  const record = error as Record<string, unknown>;
+  const candidates = [
+    record.internalCode,
+    record.stopReason,
+    record.code,
+    record.publicCode,
+  ];
+
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+
+  return null;
+}
+
+function formatVisibleErrorMessage(params: {
+  debugMode: boolean;
+  fallbackMessage: string;
+  stopReason: string | null;
+}): string {
+  if (!params.debugMode) return params.fallbackMessage;
+  if (!params.stopReason) return params.fallbackMessage;
+  return `${params.fallbackMessage} [debug: ${params.stopReason}]`;
+}
+
 export async function POST(req: Request) {
   const startedAt = Date.now();
   const sessionId = normalizeSessionId(req);
+  let debugMode = process.env.NODE_ENV !== 'production';
 
   try {
     const rawBody = await req.json();
@@ -40,6 +115,8 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+
+    debugMode = shouldExposeInternalStopReason(req, rawBody);
 
     const messages = rawBody.messages;
     const plan = planAssistantTurn({
@@ -65,14 +142,24 @@ export async function POST(req: Request) {
       conversationId: result.state.conversationId,
       latestResponseId: result.state.latestResponseId,
       toolCalls: result.toolCalls.length,
+      debugMode,
+      stopReason: readInternalStopReason(result.error),
     });
 
     if (result.error || !result.response) {
+      const publicCode = result.error?.publicCode ?? 'assistant_run_failed';
+      const fallbackMessage = result.error?.publicMessage ?? 'Не удалось завершить действие автоматически.';
+      const stopReason = readInternalStopReason(result.error);
+
       return NextResponse.json(
         normalizePublicChatError({
           sessionId,
-          code: result.error?.publicCode ?? 'assistant_run_failed',
-          message: result.error?.publicMessage ?? 'Chat request failed.',
+          code: publicCode,
+          message: formatVisibleErrorMessage({
+            debugMode,
+            fallbackMessage,
+            stopReason,
+          }),
         }),
         { status: 500 },
       );
@@ -93,6 +180,8 @@ export async function POST(req: Request) {
     await logEvent('chat_request_failed', {
       sessionId,
       durationMs: Date.now() - startedAt,
+      debugMode,
+      stopReason: readInternalStopReason(error),
       error: {
         name: error?.name ?? null,
         message: error?.message ?? 'Unknown error',
@@ -103,7 +192,11 @@ export async function POST(req: Request) {
       normalizePublicChatError({
         sessionId,
         code: 'chat_request_failed',
-        message: 'Chat request failed.',
+        message: formatVisibleErrorMessage({
+          debugMode,
+          fallbackMessage: 'Не удалось завершить действие автоматически.',
+          stopReason: readInternalStopReason(error) ?? (error?.name ? String(error.name) : null),
+        }),
       }),
       { status: 500 },
     );

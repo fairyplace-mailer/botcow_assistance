@@ -1,5 +1,3 @@
-import { createHash } from 'crypto';
-
 import type OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
 
@@ -16,6 +14,15 @@ import {
   type ResponsesStateMode,
 } from './responses';
 import { getToolsSchemas, handleToolCall } from './tools';
+import { buildExecutionProfile } from './guards/assistantExecutionProfile';
+import {
+  hashToolArgs,
+  makeToolFingerprint,
+  normalizeStrictToolArgs,
+  safeParseToolArgs,
+  validateToolArgsAgainstSchema,
+} from './guards/toolArgs';
+import { runToolWithTimeout } from './guards/toolExecution';
 import type { ModelRoutingDecision, ReasoningEffort } from './modelRouter';
 import { logEvent, logInfo, logWarn } from './log';
 import {
@@ -94,16 +101,6 @@ export type AssistantResult = {
   };
 };
 
-const DEFAULT_MAX_TOOL_LOOPS = 12;
-const DEFAULT_MAX_TOTAL_TOOL_CALLS = 24;
-const DEFAULT_MAX_SAME_FINGERPRINT_IN_ROW = 2;
-const DEFAULT_TOOL_TIMEOUT_MS = 20_000;
-
-const AUDIT_MAX_TOOL_LOOPS = 20;
-const AUDIT_MAX_TOTAL_TOOL_CALLS = 80;
-const AUDIT_MAX_SAME_FINGERPRINT_IN_ROW = 3;
-const AUDIT_TOOL_TIMEOUT_MS = 40_000;
-
 const MAX_NO_PROGRESS_ROUNDS = 2;
 const OPENAI_RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504]);
 const OPENAI_MAX_ATTEMPTS = 3;
@@ -159,61 +156,6 @@ export function resolveReasoningDecision(
   };
 }
 
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(',')}}`;
-}
-
-function sha256(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function hashArgs(args: unknown): string {
-  return sha256(stableStringify(args));
-}
-
-function makeToolFingerprint(toolName: string, args: unknown): string {
-  return sha256(`${toolName}\n${stableStringify(args)}`);
-}
-
-function safeParseToolArgs(raw: string): { ok: true; value: unknown } | { ok: false } {
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false };
-  }
-}
-
-function normalizeStrictToolArgs(value: unknown): unknown {
-  if (value === null || value === undefined) return undefined;
-
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => normalizeStrictToolArgs(item))
-      .filter((item) => item !== undefined);
-  }
-
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      const normalized = normalizeStrictToolArgs(item);
-      if (normalized !== undefined) out[key] = normalized;
-    }
-    return out;
-  }
-
-  return value;
-}
-
-function jsonSchemaTypeOf(value: unknown): string {
-  if (Array.isArray(value)) return 'array';
-  if (value === null) return 'null';
-  return typeof value;
-}
-
 function abort(code: AssistantInternalCode, responseId?: string) {
   return {
     publicCode: 'assistant_run_failed' as const,
@@ -228,55 +170,6 @@ function getToolDefinition(name: string, tools: OpenAI.Responses.Tool[] | undefi
   return tools.find((tool: any) => tool?.type === 'function' && tool?.name === name) as
     | OpenAI.Responses.FunctionTool
     | undefined;
-}
-
-function validateToolArgsAgainstSchema(
-  schema: Record<string, unknown> | null | undefined,
-  value: unknown,
-): { ok: true } | { ok: false; issues: string[] } {
-  if (!schema || typeof schema !== 'object') return { ok: true };
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return { ok: false, issues: ['arguments must be an object'] };
-  }
-
-  const objectValue = value as Record<string, unknown>;
-  const properties =
-    schema.properties && typeof schema.properties === 'object'
-      ? (schema.properties as Record<string, Record<string, unknown>>)
-      : {};
-  const required = Array.isArray(schema.required)
-    ? schema.required.filter((item): item is string => typeof item === 'string')
-    : [];
-  const additionalProperties = schema.additionalProperties;
-  const issues: string[] = [];
-
-  for (const key of required) {
-    if (!(key in objectValue)) issues.push(`missing required field: ${key}`);
-  }
-
-  for (const [key, item] of Object.entries(objectValue)) {
-    const propSchema = properties[key];
-    if (!propSchema) {
-      if (additionalProperties === false) issues.push(`unexpected field: ${key}`);
-      continue;
-    }
-
-    const expectedType = propSchema.type;
-    if (typeof expectedType === 'string') {
-      const actualType = jsonSchemaTypeOf(item);
-      if (expectedType !== actualType) issues.push(`field ${key} must be ${expectedType}`);
-      continue;
-    }
-
-    if (Array.isArray(expectedType) && expectedType.every((t): t is string => typeof t === 'string')) {
-      const actualType = jsonSchemaTypeOf(item);
-      if (!expectedType.includes(actualType)) {
-        issues.push(`field ${key} must be one of: ${expectedType.join(', ')}`);
-      }
-    }
-  }
-
-  return issues.length ? { ok: false, issues } : { ok: true };
 }
 
 function normalizeContentToText(content: unknown): string | null {
@@ -383,110 +276,11 @@ function normalizeMessagesToInput(
   return normalized;
 }
 
-type AssistantExecutionProfile = {
-  mode: 'default' | 'repo_audit';
-  instructions: string;
-  maxToolLoops: number;
-  maxTotalToolCalls: number;
-  maxSameFingerprintInRow: number;
-  toolTimeoutMs: number;
-};
-
 function allMessagesText(messages: Array<{ role: string; content: unknown }>): string {
   return messages
     .map((message) => normalizeContentToText(message?.content) ?? '')
     .filter(Boolean)
     .join('\n');
-}
-
-function looksLikeRepoAuditRequest(text: string): boolean {
-  if (!text) return false;
-
-  const hasAuditIntent =
-    /\b(full audit|audit code|audit the code|audit codebase|repo audit|spec audit|strict mode|responses api)\b/i.test(
-      text,
-    ) || /полный аудит|сделать аудит|аудит кода|соответствие|строгий режим|репо|ветк|strong_spec/i.test(text);
-
-  const hasRepoScope =
-    /docs\/strong_spec\.md|strong_spec|repo|repository|branch|ветк|репо|strict mode|responses api/i.test(text);
-
-  return hasAuditIntent && hasRepoScope;
-}
-
-function buildExecutionProfile(params: Pick<RunAssistantTurnParams, 'instructions' | 'messages'>): AssistantExecutionProfile {
-  const detectionText = `${params.instructions}\n${allMessagesText(params.messages)}`;
-
-  if (!looksLikeRepoAuditRequest(detectionText)) {
-    return {
-      mode: 'default',
-      instructions: params.instructions,
-      maxToolLoops: DEFAULT_MAX_TOOL_LOOPS,
-      maxTotalToolCalls: DEFAULT_MAX_TOTAL_TOOL_CALLS,
-      maxSameFingerprintInRow: DEFAULT_MAX_SAME_FINGERPRINT_IN_ROW,
-      toolTimeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
-    };
-  }
-
-  const auditSuffix = `
-Repository audit mode:
-- This is a repo-wide read-only audit task.
-- Do not modify files, do not commit, do not deploy.
-- First read docs/strong_spec.md before judging compliance.
-- Treat docs/strong_spec.md as the primary spec.
-- If golden core files are present, treat golden core as higher priority than legacy docs.
-- Ignore removed legacy paths such as docs/spec.md.
-- Prefer broad repo inspection before conclusions.
-- Prefer reading files in batches with github_get_files_batch when available.
-- Before any strict-mode conclusion, inspect the Responses runtime and strict tool schema builder directly.
-- Focus on exact compliance against docs/strong_spec.md.
-- In the final answer, report only mismatches, partial mismatches, and whether Responses API strict mode is configured.
-- Keep the answer short, direct, and in simple language.
-`.trim();
-
-  return {
-    mode: 'repo_audit',
-    instructions: `${params.instructions}\n\n${auditSuffix}`,
-    maxToolLoops: AUDIT_MAX_TOOL_LOOPS,
-    maxTotalToolCalls: AUDIT_MAX_TOTAL_TOOL_CALLS,
-    maxSameFingerprintInRow: AUDIT_MAX_SAME_FINGERPRINT_IN_ROW,
-    toolTimeoutMs: AUDIT_TOOL_TIMEOUT_MS,
-  };
-}
-
-async function runToolWithTimeout(
-  name: string,
-  args: unknown,
-  timeoutMs: number,
-): Promise<
-  | { ok: true; output: unknown }
-  | { ok: false; code: 'tool_timeout' | 'tool_execution_failed'; error?: string }
-> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-  try {
-    const result = await Promise.race([
-      handleToolCall(name, args),
-      new Promise<never>((_, reject) => {
-        const error = new Error(`Tool timed out after ${timeoutMs}ms`);
-        error.name = 'TimeoutError';
-        timeoutId = setTimeout(() => reject(error), timeoutMs);
-      }),
-    ]);
-
-    return { ok: true, output: result };
-  } catch (error: any) {
-    if (error?.name === 'TimeoutError') {
-      return { ok: false, code: 'tool_timeout', error: error.message };
-    }
-
-    return {
-      ok: false,
-      code: 'tool_execution_failed',
-      error: error?.message ? String(error.message) : String(error),
-    };
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
 }
 
 function selectResponsesStateMode(params: {
@@ -581,8 +375,8 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
   }
 
   const executionProfile = buildExecutionProfile({
-    instructions: params.instructions,
-    messages: requestMessages,
+    baseInstructions: params.instructions,
+    detectionText: `${params.instructions}\n${allMessagesText(requestMessages)}`,
   });
 
   const effectiveInstructions = await buildContextAugmentedInstructions({
@@ -860,7 +654,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
       const normalizedArgs =
         (normalizeStrictToolArgs(parsed.value) as Record<string, unknown> | undefined) ?? {};
-      const argsHash = hashArgs(normalizedArgs);
+      const argsHash = hashToolArgs(normalizedArgs);
 
       if (!schemaValidation.ok) {
         toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: 'invalid_tool_args_schema' });
@@ -930,7 +724,12 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       }
 
       const startedToolAt = Date.now();
-      const result = await runToolWithTimeout(call.name, normalizedArgs, executionProfile.toolTimeoutMs);
+      const result = await runToolWithTimeout({
+        name: call.name,
+        args: normalizedArgs,
+        timeoutMs: executionProfile.toolTimeoutMs,
+        execute: handleToolCall,
+      });
       const toolLatencyMs = Date.now() - startedToolAt;
 
       if (result.ok === false) {

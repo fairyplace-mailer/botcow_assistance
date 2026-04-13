@@ -347,8 +347,9 @@ export async function ingestDevWixArticles(
       stoppedReason = 'budget_aggressive_stop';
 
       const aggressiveResult = buildResult();
-      if (jobId) {
-        await finishKnowledgeJob(jobId, {
+      const currentJobId = jobId;
+      if (currentJobId) {
+        await finishKnowledgeJob(currentJobId, {
           status: 'done',
           processed: 0,
           inserted: 0,
@@ -697,8 +698,9 @@ export async function ingestDevWixArticles(
 
     const result = buildResult();
 
-    if (jobId) {
-      await finishKnowledgeJob(jobId, {
+    const currentJobId = jobId;
+    if (currentJobId) {
+      await finishKnowledgeJob(currentJobId, {
         status: 'done',
         processed: fetched,
         inserted: stored,
@@ -729,8 +731,9 @@ export async function ingestDevWixArticles(
 
     return result;
   } catch (error: any) {
-    if (jobId) {
-      await finishKnowledgeJob(jobId, {
+    const currentJobId = jobId;
+    if (currentJobId) {
+      await finishKnowledgeJob(currentJobId, {
         status: 'failed',
         processed: fetched,
         inserted: stored,

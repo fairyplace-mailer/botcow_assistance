@@ -173,7 +173,13 @@ export function resolveReasoningDecision(
     };
   }
 
-  if (options?.stateMode && !statePathSupportsReasoning(options)) {
+  if (
+    options?.stateMode &&
+    !statePathSupportsReasoning({
+      stateMode: options.stateMode,
+      pendingInput: options.pendingInput,
+    })
+  ) {
     return {
       requestedReasoningEffort,
       sentReasoningEffort: null,

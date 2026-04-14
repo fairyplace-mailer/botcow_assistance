@@ -53,6 +53,29 @@ describe('assistant routing propagation', () => {
     });
   });
 
+  test('resolveReasoningDecision omits reasoning on stateless follow-up path without previous response continuity', () => {
+    expect(
+      resolveReasoningDecision(
+        { model: 'gpt-5.4', reasoning: { effort: 'high' } } as any,
+        runtimeSupported,
+        {
+          stateMode: { kind: 'stateless' },
+          pendingInput: [
+            {
+              type: 'function_call_output',
+              call_id: 'call-1',
+              output: '{}',
+            },
+          ] as any,
+        },
+      ),
+    ).toEqual({
+      requestedReasoningEffort: 'high',
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'state_path_not_supported',
+    });
+  });
+
   test('resolveReasoningDecision omits reasoning when runtime is not supported', () => {
     expect(
       resolveReasoningDecision(
@@ -136,6 +159,80 @@ describe('assistant routing propagation', () => {
         payloadKeys: expect.arrayContaining(['reasoning', 'text', 'max_output_tokens']),
       }),
     );
+  });
+
+  test('runAssistant suppresses reasoning on stateless follow-up when previous_response_id is unavailable', async () => {
+    const create = jest
+      .fn()
+      .mockResolvedValueOnce({
+        model: 'gpt-5.4',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call-1',
+            name: 'demo_tool',
+            arguments: JSON.stringify({}),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: 'resp-final',
+        model: 'gpt-5.4',
+        output_text: 'ok',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'ok' }],
+          },
+        ],
+      });
+
+    const { getToolsSchemas, handleToolCall } = require('../src/backend/tools');
+
+    (getToolsSchemas as jest.Mock).mockReturnValue([
+      {
+        type: 'function',
+        name: 'demo_tool',
+        description: 'demo',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    (handleToolCall as jest.Mock).mockResolvedValue({ ok: true });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({
+      responses: { create },
+    });
+
+    await runAssistant({
+      instructions: 'SYS',
+      messages: [{ role: 'user', content: 'hello' }],
+      routing: {
+        model: 'gpt-5.4',
+        reasoning: { effort: 'high' },
+        reason: 'deep-code-debug-review',
+      },
+      state: {},
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0][0].reasoning).toEqual({ effort: 'high', summary: 'concise' });
+    expect(create.mock.calls[1][0].previous_response_id).toBeUndefined();
+    expect(create.mock.calls[1][0].conversation).toBeUndefined();
+    expect(create.mock.calls[1][0].reasoning).toBeUndefined();
+
+    const matchingLog = (logEvent as jest.Mock).mock.calls.find(
+      ([eventName, payload]) =>
+        eventName === 'openai_request_completed' &&
+        payload?.reasoningSuppressedReason === 'state_path_not_supported',
+    );
+
+    expect(matchingLog).toBeDefined();
   });
 
   test('runAssistant logs supported runtime reasoning behavior', async () => {

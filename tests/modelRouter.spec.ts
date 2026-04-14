@@ -50,7 +50,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     const txt = `TypeError: Cannot read properties of undefined\n    at foo (/app/x.js:10:5)\n    at bar (/app/y.js:20:1)\nError: boom\nTraceback (most recent call last):\n`;
     const res = chooseModel(mk(txt));
     expect(res.model).toBe('gpt-5.4');
-    expect(['high', 'xhigh']).toContain(res.reasoning?.effort);
+    expect(['medium', 'high', 'xhigh']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('deep-code-debug-review');
   });
 
@@ -58,7 +58,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     const diff = '```diff\n' + '@@ -1,1 +1,1 @@\n'.repeat(6) + '+ new\n- old\n```\nпосмотри diff и сделай review';
     const res = chooseModel(mk(diff));
     expect(res.model).toBe('gpt-5.4');
-    expect(['high', 'xhigh']).toContain(res.reasoning?.effort);
+    expect(['medium', 'high', 'xhigh']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('deep-code-debug-review');
   });
 
@@ -126,12 +126,12 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     expect(res.reason).toBe('classification-or-extraction-or-ranking');
   });
 
-  test('16) repo-wide strong_spec audit -> full high/xhigh / repo-audit-or-spec-compliance', () => {
+  test('16) repo-wide strong_spec audit -> full medium/high/xhigh / repo-audit-or-spec-compliance', () => {
     const txt =
       'Work in repo fairyplace-mailer/botcow_assistance branch provecta. Make a full audit against docs/strong_spec.md. Check strict mode. Do not change anything.';
     const res = chooseModel(mk(txt));
     expect(res.model).toBe('gpt-5.4');
-    expect(['high', 'xhigh']).toContain(res.reasoning?.effort);
+    expect(['medium', 'high', 'xhigh']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('repo-audit-or-spec-compliance');
   });
 

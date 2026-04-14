@@ -55,51 +55,136 @@ export function normalizeStrictToolArgs(value: unknown): unknown {
   return value;
 }
 
+function valuesEqual(a: unknown, b: unknown): boolean {
+  return stableStringify(a) === stableStringify(b);
+}
+
+function allowedTypesFromSchema(schema: Record<string, unknown>): string[] {
+  const typeValue = schema.type;
+
+  if (typeof typeValue === 'string') return [typeValue];
+  if (Array.isArray(typeValue)) {
+    return typeValue.filter((item): item is string => typeof item === 'string');
+  }
+
+  return [];
+}
+
+function matchesAllowedType(value: unknown, allowedTypes: string[]): boolean {
+  if (allowedTypes.length === 0) return true;
+
+  const actualType = jsonSchemaTypeOf(value);
+  return allowedTypes.some((type) => {
+    if (type === 'integer') return typeof value === 'number' && Number.isInteger(value);
+    return type === actualType;
+  });
+}
+
+function formatPath(path: string, segment: string | number): string {
+  if (typeof segment === 'number') return `${path}[${segment}]`;
+  return path === '$' ? `$.${segment}` : `${path}.${segment}`;
+}
+
+function validateValueAgainstSchema(
+  schema: Record<string, unknown> | null | undefined,
+  value: unknown,
+  path: string,
+  issues: string[],
+): void {
+  if (!schema || typeof schema !== 'object') return;
+
+  const allowedTypes = allowedTypesFromSchema(schema);
+  if (!matchesAllowedType(value, allowedTypes)) {
+    issues.push(
+      `${path} must be ${allowedTypes.join(' | ') || 'a valid schema type'}, got ${jsonSchemaTypeOf(value)}`,
+    );
+    return;
+  }
+
+  if (Array.isArray(schema.enum) && !schema.enum.some((candidate) => valuesEqual(candidate, value))) {
+    issues.push(`${path} must be one of: ${schema.enum.map((item) => JSON.stringify(item)).join(', ')}`);
+    return;
+  }
+
+  if (typeof value === 'string') {
+    if (typeof schema.minLength === 'number' && value.length < schema.minLength) {
+      issues.push(`${path} must have length >= ${schema.minLength}`);
+    }
+    if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) {
+      issues.push(`${path} must have length <= ${schema.maxLength}`);
+    }
+  }
+
+  if (typeof value === 'number') {
+    if (typeof schema.minimum === 'number' && value < schema.minimum) {
+      issues.push(`${path} must be >= ${schema.minimum}`);
+    }
+    if (typeof schema.maximum === 'number' && value > schema.maximum) {
+      issues.push(`${path} must be <= ${schema.maximum}`);
+    }
+  }
+
+  if (Array.isArray(value)) {
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems) {
+      issues.push(`${path} must contain at least ${schema.minItems} items`);
+    }
+    if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) {
+      issues.push(`${path} must contain at most ${schema.maxItems} items`);
+    }
+
+    const itemSchema =
+      schema.items && typeof schema.items === 'object' && !Array.isArray(schema.items)
+        ? (schema.items as Record<string, unknown>)
+        : null;
+
+    if (itemSchema) {
+      value.forEach((item, index) => {
+        validateValueAgainstSchema(itemSchema, item, formatPath(path, index), issues);
+      });
+    }
+
+    return;
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const objectValue = value as Record<string, unknown>;
+    const properties =
+      schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)
+        ? (schema.properties as Record<string, Record<string, unknown>>)
+        : {};
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((item): item is string => typeof item === 'string')
+      : [];
+    const additionalProperties = schema.additionalProperties;
+
+    for (const key of required) {
+      if (!(key in objectValue)) {
+        issues.push(`${formatPath(path, key)} is required`);
+      }
+    }
+
+    for (const [key, item] of Object.entries(objectValue)) {
+      const propSchema = properties[key];
+      if (!propSchema) {
+        if (additionalProperties === false) {
+          issues.push(`${formatPath(path, key)} is not allowed`);
+        }
+        continue;
+      }
+
+      validateValueAgainstSchema(propSchema, item, formatPath(path, key), issues);
+    }
+  }
+}
+
 export function validateToolArgsAgainstSchema(
   schema: Record<string, unknown> | null | undefined,
   value: unknown,
 ): { ok: true } | { ok: false; issues: string[] } {
   if (!schema || typeof schema !== 'object') return { ok: true };
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return { ok: false, issues: ['arguments must be an object'] };
-  }
 
-  const objectValue = value as Record<string, unknown>;
-  const properties =
-    schema.properties && typeof schema.properties === 'object'
-      ? (schema.properties as Record<string, Record<string, unknown>>)
-      : {};
-  const required = Array.isArray(schema.required)
-    ? schema.required.filter((item): item is string => typeof item === 'string')
-    : [];
-  const additionalProperties = schema.additionalProperties;
   const issues: string[] = [];
-
-  for (const key of required) {
-    if (!(key in objectValue)) issues.push(`missing required field: ${key}`);
-  }
-
-  for (const [key, item] of Object.entries(objectValue)) {
-    const propSchema = properties[key];
-    if (!propSchema) {
-      if (additionalProperties === false) issues.push(`unexpected field: ${key}`);
-      continue;
-    }
-
-    const expectedType = propSchema.type;
-    if (typeof expectedType === 'string') {
-      const actualType = jsonSchemaTypeOf(item);
-      if (expectedType !== actualType) issues.push(`field ${key} must be ${expectedType}`);
-      continue;
-    }
-
-    if (Array.isArray(expectedType) && expectedType.every((t): t is string => typeof t === 'string')) {
-      const actualType = jsonSchemaTypeOf(item);
-      if (!expectedType.includes(actualType)) {
-        issues.push(`field ${key} must be one of: ${expectedType.join(', ')}`);
-      }
-    }
-  }
+  validateValueAgainstSchema(schema, value, '$', issues);
 
   return issues.length ? { ok: false, issues } : { ok: true };
 }

@@ -118,9 +118,7 @@ export const githubToolsSchemas = [
           paths: {
             type: 'array',
             items: { type: 'string' },
-            minItems: 1,
-            maxItems: 20,
-            description: 'Repository file paths to read.',
+            description: 'Repository file paths to read. Server validates 1..20 unique non-empty paths.',
           },
           repo: {
             type: ['string', 'null'],

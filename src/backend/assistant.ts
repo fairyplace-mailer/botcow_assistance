@@ -11,6 +11,7 @@ import {
   extractFinalAssistantMessage,
   extractFunctionCalls,
   responseUsage,
+  validateResponsesToolsContract,
   type ResponsesStateMode,
 } from './responses';
 import { getToolsSchemas, handleToolCall } from './tools';
@@ -51,7 +52,8 @@ type AssistantInternalCode =
   | 'no_progress_abort'
   | 'tool_budget_exceeded'
   | 'no_actionable_output'
-  | 'tool_loop_limit';
+  | 'tool_loop_limit'
+  | 'invalid_tool_schema';
 
 export type AssistantRunOptions = {
   model: ModelRoutingDecision['model'];
@@ -108,9 +110,31 @@ const OPENAI_MAX_ATTEMPTS = 3;
 export { getResponsesRuntimeCapabilities, supportsReasoning };
 export type { ResponsesRuntimeCapabilities, ReasoningSuppressedReason };
 
+function pendingInputNeedsReasoningStateCarry(
+  input: OpenAI.Responses.ResponseInputItem[] | undefined,
+): boolean {
+  if (!Array.isArray(input) || input.length === 0) return false;
+
+  return input.some((item: any) => item?.type === 'function_call_output' || item?.type === 'reasoning');
+}
+
+function statePathSupportsReasoning(params: {
+  stateMode: ResponsesStateMode;
+  pendingInput?: OpenAI.Responses.ResponseInputItem[];
+}): boolean {
+  if (params.stateMode.kind === 'conversation') return true;
+  if (params.stateMode.kind === 'previous_response') return true;
+
+  return !pendingInputNeedsReasoningStateCarry(params.pendingInput);
+}
+
 export function resolveReasoningDecision(
   routing: Pick<ModelRoutingDecision, 'model' | 'reasoning'>,
   runtimeCapabilities: ResponsesRuntimeCapabilities,
+  options?: {
+    stateMode?: ResponsesStateMode;
+    pendingInput?: OpenAI.Responses.ResponseInputItem[];
+  },
 ): ReasoningDecision {
   const requestedReasoningEffort = routing.reasoning?.effort ?? null;
 
@@ -146,6 +170,20 @@ export function resolveReasoningDecision(
       sentReasoningEffort: null,
       reasoningSuppressedReason:
         runtimeCapabilities.reasoning === 'unknown' ? 'sdk_contract_unknown' : 'runtime_not_supported',
+    };
+  }
+
+  if (
+    options?.stateMode &&
+    !statePathSupportsReasoning({
+      stateMode: options.stateMode,
+      pendingInput: options.pendingInput,
+    })
+  ) {
+    return {
+      requestedReasoningEffort,
+      sentReasoningEffort: null,
+      reasoningSuppressedReason: 'state_path_not_supported',
     };
   }
 
@@ -394,16 +432,43 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
   const openai = getOpenAIClient();
   const tools = buildStrictFunctionTools(params.tools ?? getToolsSchemas() ?? []);
+  const toolContract = validateResponsesToolsContract(tools);
+
+  if (!toolContract.ok) {
+    const error = abort('invalid_tool_schema');
+    await logFatalStop('assistant_run_failed', {
+      traceId,
+      userTurnId,
+      conversationId: currentConversationId,
+      assistantMode: executionProfile.mode,
+      stopReason: error.internalCode,
+      schemaValid: false,
+      toolResultClass: 'invalid_tool_args_schema',
+      duration: Date.now() - startedAt,
+      toolSchemaIssues: toolContract.issues,
+    });
+    return {
+      response: null,
+      toolCalls: toolCallsLog,
+      reasoningDecision: lastReasoningDecision,
+      state: buildFailureState(currentConversationId, previousResponseId),
+      error,
+    };
+  }
 
   for (let round = 1; round <= executionProfile.maxToolLoops; round += 1) {
     const runtimeCapabilities = getResponsesRuntimeCapabilities();
-    const reasoningDecision = resolveReasoningDecision(params.routing, runtimeCapabilities);
-    lastReasoningDecision = reasoningDecision;
 
     const stateMode = selectResponsesStateMode({
       ...(currentConversationId ? { conversationId: currentConversationId } : {}),
       ...(previousResponseId ? { previousResponseId } : {}),
     });
+
+    const reasoningDecision = resolveReasoningDecision(params.routing, runtimeCapabilities, {
+      stateMode,
+      pendingInput,
+    });
+    lastReasoningDecision = reasoningDecision;
 
     const requestPreviousResponseId =
       stateMode.kind === 'previous_response' ? stateMode.previousResponseId : undefined;

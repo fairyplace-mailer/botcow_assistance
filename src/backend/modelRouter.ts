@@ -117,8 +117,11 @@ export function chooseModel(
   }
 
   if (looksLikeRepoAuditRequest(repoAuditText)) {
-    const forcedEffort: ReasoningEffort =
-      hints.previousAttemptFailed || normalized.totalTextLength > 5000 ? 'xhigh' : 'high';
+    const forcedEffort: ReasoningEffort = hints.previousAttemptFailed
+      ? 'xhigh'
+      : hints.hasSourceConflict || normalized.totalTextLength > 5000
+        ? 'high'
+        : 'medium';
 
     return withOptionalDebug(
       {
@@ -136,8 +139,8 @@ export function chooseModel(
           fullScore: 10,
           noneScore: 0,
           lowScore: 0,
-          mediumScore: 0,
-          highScore: 9,
+          mediumScore: forcedEffort === 'medium' ? 8 : 0,
+          highScore: forcedEffort === 'high' ? 9 : 0,
           xhighScore: forcedEffort === 'xhigh' ? 10 : 0,
         },
       },

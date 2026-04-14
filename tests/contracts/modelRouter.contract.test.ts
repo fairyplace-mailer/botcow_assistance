@@ -23,7 +23,7 @@ describe('modelRouter contract', () => {
     expect(['none', 'low']).toContain(result.reasoning?.effort ?? 'none');
   });
 
-  it('forces full/high for repo-wide strong_spec audits', () => {
+  it('forces full model and at least medium reasoning for repo-wide strong_spec audits', () => {
     const result = chooseModel([
       {
         role: 'user',
@@ -33,7 +33,7 @@ describe('modelRouter contract', () => {
     ]);
 
     expect(result.model).toBe('gpt-5.4');
-    expect(['high', 'xhigh']).toContain(result.reasoning?.effort ?? 'high');
+    expect(['medium', 'high', 'xhigh']).toContain(result.reasoning?.effort ?? 'medium');
     expect(result.reason).toBe('repo-audit-or-spec-compliance');
   });
 

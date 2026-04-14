@@ -42,6 +42,26 @@ describe('getFilesBatch', () => {
     ]);
   });
 
+  test('rejects an empty batch after normalization', async () => {
+    await expect(
+      getFilesBatch({
+        paths: ['', '   '],
+        repo: 'fairyplace-mailer/botcow_assistance',
+        ref: 'provecta',
+      }),
+    ).rejects.toThrow('paths must contain at least 1 unique non-empty item');
+  });
+
+  test('rejects batches above 20 unique paths instead of silently trimming', async () => {
+    await expect(
+      getFilesBatch({
+        paths: Array.from({ length: 21 }, (_, index) => `file-${index}.ts`),
+        repo: 'fairyplace-mailer/botcow_assistance',
+        ref: 'provecta',
+      }),
+    ).rejects.toThrow('paths must contain at most 20 unique non-empty items');
+  });
+
   test('returns per-file errors without aborting the whole batch', async () => {
     __setGithubClientForTests({
       repos: {

@@ -3,7 +3,8 @@ import type { ModelId, ReasoningEffort } from './modelRouter';
 export type ReasoningSuppressedReason =
   | 'model_not_supported'
   | 'runtime_not_supported'
-  | 'sdk_contract_unknown';
+  | 'sdk_contract_unknown'
+  | 'state_path_not_supported';
 
 export type ResponsesRuntimeCapabilities = {
   path: 'openai.responses.create';

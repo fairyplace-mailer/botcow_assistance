@@ -206,6 +206,93 @@ describe('chat route routing contract', () => {
     });
   });
 
+  test('does not expose internal stop reason in production just because the message looks like an audit request', async () => {
+    const previousEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    try {
+      const plan = {
+        normalizedHints: {
+          multiFileIntent: false,
+          longContextSize: 120,
+        },
+        routing: {
+          model: 'gpt-5.4',
+          reasoning: { effort: 'medium' },
+          reason: 'repo-audit-or-spec-compliance',
+        },
+        execution: {
+          model: 'gpt-5.4',
+          reasoningEffort: 'medium',
+          responseVerbosity: 'medium',
+          maxOutputTokens: 8000,
+          toolUsePolicy: 'tool_first',
+        },
+        instructions: 'CORE_INSTRUCTIONS',
+        run: {
+          model: 'gpt-5.4',
+          reasoning: { effort: 'medium' },
+          reason: 'repo-audit-or-spec-compliance',
+          text: { verbosity: 'medium' },
+          maxOutputTokens: 8000,
+        },
+      };
+
+      (planAssistantTurn as jest.Mock).mockReturnValue(plan);
+      (runAssistant as jest.Mock).mockResolvedValue({
+        response: null,
+        toolCalls: [],
+        reasoningDecision: {
+          requestedReasoningEffort: 'medium',
+          sentReasoningEffort: 'medium',
+          reasoningSuppressedReason: null,
+        },
+        state: {
+          conversationId: null,
+          latestResponseId: null,
+        },
+        error: {
+          publicCode: 'assistant_run_failed',
+          publicMessage: 'Не удалось завершить действие автоматически.',
+          internalCode: 'tool_loop_limit',
+        },
+      });
+
+      const res = await POST(
+        new Request('http://localhost/api/chat', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-botcow-session-id': 'session_prod_audit',
+          },
+          body: JSON.stringify({
+            messages: [
+              {
+                role: 'user',
+                content:
+                  'Work in repo fairyplace-mailer/botcow_assistance branch provecta. Make a full audit against docs/strong_spec.md. Do not change anything.',
+              },
+            ],
+          }),
+        }),
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(500);
+      expect(body).toEqual({
+        ok: false,
+        sessionId: 'session_prod_audit',
+        response: null,
+        error: {
+          code: 'assistant_run_failed',
+          message: 'Не удалось завершить действие автоматически.',
+        },
+      });
+    } finally {
+      process.env.NODE_ENV = previousEnv;
+    }
+  });
+
   test('returns normalized invalid body error', async () => {
     const res = await POST(
       new Request('http://localhost/api/chat', {

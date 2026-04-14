@@ -383,7 +383,15 @@ export async function getFilesBatch(options: {
 }) {
   const uniquePaths = Array.from(
     new Set((options.paths ?? []).map((item) => String(item ?? '').trim()).filter(Boolean)),
-  ).slice(0, 20);
+  );
+
+  if (uniquePaths.length === 0) {
+    throw new Error('paths must contain at least 1 unique non-empty item');
+  }
+
+  if (uniquePaths.length > 20) {
+    throw new Error('paths must contain at most 20 unique non-empty items');
+  }
 
   const maxCharsPerFile =
     typeof options.maxCharsPerFile === 'number' && options.maxCharsPerFile > 0

@@ -58,6 +58,50 @@ describe('runAssistant stabilization', () => {
     } as any;
   }
 
+  it('fails fast before OpenAI call when request-time tool schema is invalid', async () => {
+    mockedGetToolsSchemas.mockReturnValue([
+      {
+        type: 'function',
+        name: 'demo_tool',
+        description: 'demo',
+        parameters: {
+          type: 'object',
+          properties: {
+            paths: {
+              type: 'array',
+              items: { type: 'string' },
+              minItems: 1,
+            },
+          },
+          required: ['paths'],
+          additionalProperties: false,
+        },
+      },
+    ]);
+
+    const create = jest.fn();
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: { create },
+    });
+
+    const result = await runAssistant({
+      instructions: 'sys',
+      messages: [{ role: 'user', content: 'hello' }],
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
+
+    expect(result.error?.internalCode).toBe('invalid_tool_schema');
+    expect(create).not.toHaveBeenCalled();
+
+    const events = getRecentRunEvents();
+    const warnEvent = events.find((event) => event.payload.stopReason === 'invalid_tool_schema');
+
+    expect(warnEvent?.payload.finalStatus).toBe('failed');
+    expect(warnEvent?.payload.schemaValid).toBe(false);
+    expect(warnEvent?.payload.stopReason).toBe('invalid_tool_schema');
+  });
+
   it('logs normalized success fields on final assistant answer', async () => {
     mockedGetOpenAIClient.mockReturnValue({
       responses: {

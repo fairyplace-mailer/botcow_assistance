@@ -23,49 +23,9 @@ function validateBody(body: unknown): body is ChatRequestBody {
   return true;
 }
 
-function normalizeContentToText(content: unknown): string {
-  if (!content) return '';
-
-  if (typeof content === 'string') return content;
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (!part) return '';
-        if (typeof part === 'string') return part;
-        if (typeof part === 'object' && part !== null && 'text' in part) {
-          return String((part as { text?: unknown }).text ?? '');
-        }
-        return '';
-      })
-      .join('\n');
-  }
-
-  if (typeof content === 'object' && content !== null && 'text' in content) {
-    return String((content as { text?: unknown }).text ?? '');
-  }
-
-  return '';
-}
-
-function allMessagesText(messages: ChatMessage[]): string {
-  return messages.map((message) => normalizeContentToText(message.content)).join('\n');
-}
-
-function looksLikeAuditOrDebugRequest(messages: ChatMessage[]): boolean {
-  const text = allMessagesText(messages);
-  if (!text) return false;
-
-  return (
-    /\b(audit|strict mode|responses api|strong_spec|docs\/strong_spec\.md|repo|branch)\b/i.test(text) ||
-    /аудит|строгий режим|ветк|репо|strong_spec/i.test(text)
-  );
-}
-
-function shouldExposeInternalStopReason(req: Request, body?: ChatRequestBody): boolean {
+function shouldExposeInternalStopReason(req: Request, _body?: ChatRequestBody): boolean {
   if (req.headers.get('x-botcow-debug') === '1') return true;
   if (process.env.NODE_ENV !== 'production') return true;
-  if (body?.messages && looksLikeAuditOrDebugRequest(body.messages)) return true;
   return false;
 }
 

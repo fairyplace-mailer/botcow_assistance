@@ -7,6 +7,7 @@ import {
   normalizePublicChatError,
   normalizePublicChatSuccess,
   responseUsage,
+  validateResponsesToolsContract,
 } from '../src/backend/responses';
 
 describe('responses helpers', () => {
@@ -37,6 +38,99 @@ describe('responses helpers', () => {
         },
       },
     ]);
+  });
+
+  test('buildStrictFunctionTools normalizes legacy wrapped function tools', () => {
+    expect(
+      buildStrictFunctionTools([
+        {
+          type: 'function',
+          function: {
+            name: 'tool_one',
+            description: 'tool one',
+            parameters: {
+              type: 'object',
+              properties: {},
+              additionalProperties: false,
+            },
+          },
+        } as any,
+      ] as any),
+    ).toEqual([
+      {
+        type: 'function',
+        name: 'tool_one',
+        description: 'tool one',
+        strict: true,
+        parameters: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+    ]);
+  });
+
+  test('validateResponsesToolsContract rejects unsupported strict-schema keywords', () => {
+    expect(
+      validateResponsesToolsContract([
+        {
+          type: 'function',
+          name: 'tool_one',
+          description: 'tool one',
+          parameters: {
+            type: 'object',
+            properties: {
+              paths: {
+                type: 'array',
+                items: { type: 'string' },
+                minItems: 1,
+              },
+            },
+            required: ['paths'],
+            additionalProperties: false,
+          },
+        } as any,
+      ] as any),
+    ).toEqual({
+      ok: false,
+      issues: ['tool_one: unsupported strict-schema key at $.properties.paths.minItems'],
+    });
+  });
+
+
+  test('validateResponsesToolsContract rejects object properties that are not fully required', () => {
+    expect(
+      validateResponsesToolsContract([
+        {
+          type: 'function',
+          name: 'tool_two',
+          description: 'tool two',
+          parameters: {
+            type: 'object',
+            properties: {
+              repo: { type: ['string', 'null'] },
+              options: {
+                type: 'object',
+                properties: {
+                  branch: { type: ['string', 'null'] },
+                },
+                required: [],
+              },
+            },
+            required: ['repo'],
+            additionalProperties: false,
+          },
+        } as any,
+      ] as any),
+    ).toEqual({
+      ok: false,
+      issues: [
+        'tool_two: object schema at $ must require property options',
+        'tool_two: object schema at $.properties.options must set additionalProperties=false',
+        'tool_two: object schema at $.properties.options must require property branch',
+      ],
+    });
   });
 
   test('createModelResponse sends conversation state only when conversation mode selected', async () => {

@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatRoutingHints } from '../contracts/chat';
 import { chooseModel, type ModelRoutingDecision } from '../modelRouter';
 import { buildCoreInstructions } from '../prompt/buildCoreInstructions';
+import { normalizeContentToText } from '../prompt/normalizeContentToText';
 import type { AssistantExecutionContract, PlannedAssistantRunOptions, ToolUsePolicy } from './contracts';
 
 export type PlannedAssistantTurn = {
@@ -11,34 +12,9 @@ export type PlannedAssistantTurn = {
   run: PlannedAssistantRunOptions;
 };
 
-function normalizeContentToText(content: unknown): string {
-  if (!content) return '';
-
-  if (typeof content === 'string') return content;
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (!part) return '';
-        if (typeof part === 'string') return part;
-        if (typeof part === 'object' && part !== null && 'text' in part) {
-          return String((part as any).text ?? '');
-        }
-        return '';
-      })
-      .join('\n');
-  }
-
-  if (typeof content === 'object' && content !== null && 'text' in content) {
-    return String((content as any).text ?? '');
-  }
-
-  return '';
-}
-
 function estimateMessagesTextLength(messages: ChatMessage[]): number {
   return (messages ?? []).reduce((sum, message) => {
-    return sum + normalizeContentToText(message?.content).trim().length;
+    return sum + (normalizeContentToText(message?.content) ?? '').length;
   }, 0);
 }
 
@@ -60,7 +36,9 @@ function chooseToolUsePolicy(
 ): ToolUsePolicy {
   if (
     hints.toolHeavy ||
+    routing.reason === 'golden-core-self-rewrite' ||
     routing.reason === 'repo-audit-or-spec-compliance' ||
+    routing.reason === 'source-conflict' ||
     routing.reason === 'deep-code-debug-review' ||
     routing.reason === 'architecture-or-design'
   ) {

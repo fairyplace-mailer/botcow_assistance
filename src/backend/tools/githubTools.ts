@@ -611,15 +611,12 @@ export const githubToolHandlers = {
   },
 
   async github_get_files_batch(args: GetFilesBatchArgs) {
-    return getFilesBatch(
-      buildOptional({
-        paths: args.paths,
-        repo: args.repo,
-        ref: args.ref,
-        maxCharsPerFile: args.maxCharsPerFile,
-        maxTotalChars: args.maxTotalChars,
-      }),
-    );
+    const options: GetFilesBatchArgs = { paths: args.paths };
+    if (args.repo !== undefined) options.repo = args.repo;
+    if (args.ref !== undefined) options.ref = args.ref;
+    if (args.maxCharsPerFile !== undefined) options.maxCharsPerFile = args.maxCharsPerFile;
+    if (args.maxTotalChars !== undefined) options.maxTotalChars = args.maxTotalChars;
+    return getFilesBatch(options);
   },
 
   async github_search_in_repo(args: SearchArgs) {
@@ -797,13 +794,10 @@ export const githubToolHandlers = {
     repo?: string;
     maxChars?: number;
   }) {
-    return githubGetWorkflowRunLogsText(
-      buildOptional({
-        run_id: args.run_id,
-        repo: args.repo,
-        maxChars: args.maxChars,
-      }),
-    );
+    const options: { run_id: number; repo?: string; maxChars?: number } = { run_id: args.run_id };
+    if (args.repo !== undefined) options.repo = args.repo;
+    if (args.maxChars !== undefined) options.maxChars = args.maxChars;
+    return githubGetWorkflowRunLogsText(options);
   },
 
   async github_diagnose_workflow_run(args: {
@@ -811,13 +805,10 @@ export const githubToolHandlers = {
     repo?: string;
     maxChars?: number;
   }) {
-    return githubDiagnoseWorkflowRun(
-      buildOptional({
-        run_id: args.run_id,
-        repo: args.repo,
-        maxChars: args.maxChars,
-      }),
-    );
+    const options: { run_id: number; repo?: string; maxChars?: number } = { run_id: args.run_id };
+    if (args.repo !== undefined) options.repo = args.repo;
+    if (args.maxChars !== undefined) options.maxChars = args.maxChars;
+    return githubDiagnoseWorkflowRun(options);
   },
 
   async github_diagnose_latest_workflow_run(args: {

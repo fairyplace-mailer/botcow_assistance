@@ -1,5 +1,7 @@
 import type { ChatRoutingHints } from './contracts/chat';
 import { looksLikeRepoAuditRequest } from './guards/repoAuditIntent';
+import { hasGoldenCoreTouch } from './guards/goldenCore';
+import { shouldUseReasoningByPolicy } from './guards/strongModePolicy';
 
 export type ModelId = 'gpt-5.4' | 'gpt-5.4-mini' | 'gpt-5.4-nano';
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -26,28 +28,6 @@ const MODEL_MINI_NONE: ModelConfig = {
   model: 'gpt-5.4-mini',
 };
 
-const GOLDEN_CORE_FILES = new Set([
-  'src/app/api/chat/route.ts',
-  'src/backend/assistant.ts',
-  'src/backend/modelRouter.ts',
-  'src/backend/openai.ts',
-  'src/backend/openaiRuntime.ts',
-  'src/backend/responses.ts',
-]);
-
-const STRONG_MODE_REASON_REASONS = new Set([
-  'golden-core-self-rewrite',
-  'repo-audit-or-spec-compliance',
-  'source-conflict',
-  'deep-code-debug-review',
-  'architecture-or-design',
-]);
-
-function shouldUseReasoningByPolicy(reason: string): boolean {
-  return STRONG_MODE_REASON_REASONS.has(reason);
-}
-
-
 export function chooseModel(
   messages: Array<{ role: string; content: unknown }>,
   hints: ChatRoutingHints = {},
@@ -62,7 +42,7 @@ export function chooseModel(
   const normalized = normalizeAllMessagesToText(messages);
   const repoAuditText = `${lastUserText ?? ''}\n${normalized.concatenatedText}`;
 
-  if (touchedFiles.some((file) => GOLDEN_CORE_FILES.has(file))) {
+  if (hasGoldenCoreTouch(touchedFiles)) {
     return withOptionalDebug(
       {
         model: 'gpt-5.4',
@@ -112,11 +92,7 @@ export function chooseModel(
   }
 
   if (looksLikeRepoAuditRequest(repoAuditText)) {
-    const forcedEffort: ReasoningEffort = hints.previousAttemptFailed
-      ? 'xhigh'
-      : hints.hasSourceConflict || normalized.totalTextLength > 5000
-        ? 'high'
-        : 'medium';
+    const forcedEffort: ReasoningEffort = hints.previousAttemptFailed ? 'xhigh' : 'high';
 
     return withOptionalDebug(
       {
@@ -134,7 +110,7 @@ export function chooseModel(
           fullScore: 10,
           noneScore: 0,
           lowScore: 0,
-          mediumScore: forcedEffort === 'medium' ? 8 : 0,
+          mediumScore: 0,
           highScore: forcedEffort === 'high' ? 9 : 0,
           xhighScore: forcedEffort === 'xhigh' ? 10 : 0,
         },

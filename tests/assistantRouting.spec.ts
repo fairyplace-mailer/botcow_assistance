@@ -235,6 +235,94 @@ describe('assistant routing propagation', () => {
     expect(matchingLog).toBeDefined();
   });
 
+  test('runAssistant fails explicitly on incomplete responses instead of treating them as empty output', async () => {
+    const create = jest.fn().mockResolvedValue({
+      id: 'resp_incomplete',
+      model: 'gpt-5.4',
+      status: 'incomplete',
+      incomplete_details: {
+        reason: 'max_output_tokens',
+      },
+      output: [],
+    });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({
+      responses: { create },
+    });
+
+    const result = await runAssistant({
+      instructions: 'SYS',
+      messages: [{ role: 'user', content: 'debug this repo' }],
+      routing: {
+        model: 'gpt-5.4',
+        reasoning: { effort: 'high' },
+        reason: 'deep-code-debug-review',
+        text: { verbosity: 'medium' },
+        maxOutputTokens: 24000,
+      },
+      state: {},
+    });
+
+    expect(result.error).toEqual(
+      expect.objectContaining({
+        publicCode: 'assistant_run_failed',
+        internalCode: 'response_incomplete',
+        responseId: 'resp_incomplete',
+      }),
+    );
+    expect(result.response?.id).toBe('resp_incomplete');
+  });
+
+  test('runAssistant retries retryable OpenAI failures and logs retry scheduling', async () => {
+    const create = jest
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('rate limited'), {
+          status: 429,
+          headers: { 'retry-after-ms': '1' },
+        }),
+      )
+      .mockResolvedValueOnce({
+        id: 'resp_retry_ok',
+        model: 'gpt-5.4',
+        output_text: 'ok',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'ok' }],
+          },
+        ],
+      });
+
+    (getOpenAIClient as jest.Mock).mockReturnValue({
+      responses: { create },
+    });
+
+    const result = await runAssistant({
+      instructions: 'SYS',
+      messages: [{ role: 'user', content: 'hello' }],
+      routing: {
+        model: 'gpt-5.4',
+        reasoning: { effort: 'high' },
+        reason: 'deep-code-debug-review',
+      },
+      state: {},
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(logEvent).toHaveBeenCalledWith(
+      'assistant_openai_retry_scheduled',
+      expect.objectContaining({
+        attempt: 1,
+        nextAttempt: 2,
+        status: 429,
+        delayMs: 1,
+      }),
+    );
+  });
+
   test('runAssistant logs supported runtime reasoning behavior', async () => {
     const create = jest.fn().mockResolvedValue({
       id: 'resp_3',

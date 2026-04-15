@@ -293,6 +293,121 @@ describe('chat route routing contract', () => {
     }
   });
 
+  test('returns 503 with Retry-After for transient upstream failures', async () => {
+    const plan = {
+      normalizedHints: {
+        multiFileIntent: false,
+        longContextSize: 5,
+      },
+      routing: {
+        model: 'gpt-5.4-mini',
+        reasoning: { effort: 'low' },
+        reason: 'short-general-request',
+      },
+      execution: {
+        model: 'gpt-5.4-mini',
+        reasoningEffort: 'low',
+        responseVerbosity: 'low',
+        maxOutputTokens: 4000,
+        toolUsePolicy: 'normal',
+      },
+      instructions: 'CORE_INSTRUCTIONS',
+      run: {
+        model: 'gpt-5.4-mini',
+        reasoning: { effort: 'low' },
+        reason: 'short-general-request',
+        text: { verbosity: 'low' },
+        maxOutputTokens: 4000,
+      },
+    };
+
+    (planAssistantTurn as jest.Mock).mockReturnValue(plan);
+    (runAssistant as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('rate limited'), {
+        status: 429,
+        headers: { 'retry-after': '7' },
+      }),
+    );
+
+    const res = await POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-botcow-session-id': 'session_retryable',
+        },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'hello' }] }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBe('7');
+    expect(body).toEqual({
+      ok: false,
+      sessionId: 'session_retryable',
+      response: null,
+      error: {
+        code: 'chat_request_failed',
+        message: 'Не удалось завершить действие автоматически. [debug: Error]',
+      },
+    });
+  });
+
+  test('rejects empty messages array', async () => {
+    const res = await POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: [] }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body).toEqual({
+      ok: false,
+      sessionId: expect.any(String),
+      response: null,
+      error: {
+        code: 'invalid_messages',
+        message: 'Invalid messages.',
+      },
+    });
+  });
+
+  test('rejects message with unsupported role', async () => {
+    const res = await POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'tool', content: 'bad' }],
+        }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error?.code).toBe('invalid_messages');
+  });
+
+  test('rejects request without user message', async () => {
+    const res = await POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'assistant', content: 'hello' }],
+        }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error?.code).toBe('invalid_messages');
+  });
+
   test('returns normalized invalid body error', async () => {
     const res = await POST(
       new Request('http://localhost/api/chat', {

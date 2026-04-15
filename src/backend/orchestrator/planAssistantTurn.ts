@@ -83,7 +83,7 @@ function buildExecutionContract(
       model: routing.model,
       reasoningEffort,
       responseVerbosity: 'medium',
-      maxOutputTokens: 8000,
+      maxOutputTokens: 24000,
       toolUsePolicy,
     };
   }
@@ -93,7 +93,7 @@ function buildExecutionContract(
       model: routing.model,
       reasoningEffort,
       responseVerbosity: 'low',
-      maxOutputTokens: 4000,
+      maxOutputTokens: 8000,
       toolUsePolicy,
     };
   }
@@ -102,7 +102,7 @@ function buildExecutionContract(
     model: routing.model,
     reasoningEffort,
     responseVerbosity: 'low',
-    maxOutputTokens: 2000,
+    maxOutputTokens: 4000,
     toolUsePolicy,
   };
 }
@@ -122,7 +122,9 @@ export function planAssistantTurn(params: {
 
   const run: PlannedAssistantRunOptions = {
     model: execution.model,
-    reasoning: { effort: execution.reasoningEffort },
+    ...(execution.reasoningEffort !== 'none'
+      ? { reasoning: { effort: execution.reasoningEffort } }
+      : {}),
     reason: routing.reason,
     text: { verbosity: execution.responseVerbosity },
     maxOutputTokens: execution.maxOutputTokens,

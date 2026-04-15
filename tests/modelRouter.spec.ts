@@ -13,28 +13,28 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
   test('1) empty input -> mini none / no-user-text', () => {
     const res = chooseModel([]);
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(res.reasoning?.effort).toBe('none');
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('no-user-text');
   });
 
   test('2) short general question -> mini low / short-general-request', () => {
     const res = chooseModel(mk('Сколько времени займет деплой?'));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(res.reasoning?.effort).toBe('low');
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('short-general-request');
   });
 
   test('3) simple codegen -> mini low/medium / codegen-or-refactor', () => {
     const res = chooseModel(mk('Напиши функцию на TypeScript: function sum(a,b) { return a+b }'));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(['low', 'medium']).toContain(res.reasoning?.effort);
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('codegen-or-refactor');
   });
 
   test('4) short refactor -> mini medium / codegen-or-refactor', () => {
     const res = chooseModel(mk('Рефакторни эту функцию, сделай чище. ```ts\nexport function a(x:number){return x+1}\n```'));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(['low', 'medium']).toContain(res.reasoning?.effort);
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('codegen-or-refactor');
   });
 
@@ -42,7 +42,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     const long = '```ts\n' + 'const x = 1;\n'.repeat(400) + '```\nРефакторни файл целиком';
     const res = chooseModel(mk(long));
     expect(res.model).toBe('gpt-5.4');
-    expect(res.reasoning?.effort).toBe('high');
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('codegen-or-refactor-long-or-complex');
   });
 
@@ -72,21 +72,21 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
   test('9) extraction to JSON -> nano none/low / classification-or-extraction-or-ranking', () => {
     const res = chooseModel(mk('Извлеки поля name,email и верни JSON.'));
     expect(res.model).toBe('gpt-5.4-nano');
-    expect(['none', 'low']).toContain(res.reasoning?.effort);
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('classification-or-extraction-or-ranking');
   });
 
   test('10) ranking -> nano none/low / classification-or-extraction-or-ranking', () => {
     const res = chooseModel(mk('Сравни и ранжируй варианты A,B,C по релевантности. Верни список.'));
     expect(res.model).toBe('gpt-5.4-nano');
-    expect(['none', 'low']).toContain(res.reasoning?.effort);
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('classification-or-extraction-or-ranking');
   });
 
   test('11) PM/status request -> mini low/medium / pm-or-status-or-ci-cd-or-deploy', () => {
     const res = chooseModel(mk('Дай статус по issue #123 и следующий шаг.'));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(['low', 'medium']).toContain(res.reasoning?.effort);
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('pm-or-status-or-ci-cd-or-deploy');
   });
 
@@ -94,7 +94,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     const txt = 'Vercel deployment log: build failed. workflow CI failed.\n' + 'line\n'.repeat(200);
     const res = chooseModel(mk(txt));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(['medium', 'high']).toContain(res.reasoning?.effort);
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('pm-or-status-or-ci-cd-or-deploy');
   });
 
@@ -106,7 +106,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     msgs.push({ role: 'user', content: 'Продолжай, но учти весь контекст' });
     const res = chooseModel(msgs as any);
     expect(res.model).toBe('gpt-5.4');
-    expect(['medium', 'high']).toContain(res.reasoning?.effort);
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('long-context-general');
   });
 
@@ -122,7 +122,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     const txt = 'Извлеки поля и верни JSON. ```ts\nconst user = {name:"a", email:"b"}\n```';
     const res = chooseModel(mk(txt));
     expect(res.model).toBe('gpt-5.4-nano');
-    expect(['none', 'low']).toContain(res.reasoning?.effort);
+    expect(res.reasoning).toBeUndefined();
     expect(res.reason).toBe('classification-or-extraction-or-ranking');
   });
 
@@ -133,6 +133,14 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     expect(res.model).toBe('gpt-5.4');
     expect(['medium', 'high', 'xhigh']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('repo-audit-or-spec-compliance');
+  });
+
+
+  test('18) strong_spec and Responses API mention alone do not force repo audit', () => {
+    const txt =
+      'Сделай бота стабильным и работоспособным. Если есть конфликт между кодом, docs/strong_spec.md и strong mode Responses API, соблюдай приоритет спецификации.';
+    const res = chooseModel(mk(txt));
+    expect(res.reason).not.toBe('repo-audit-or-spec-compliance');
   });
 
   test('17) explicit backend hints for multi-file and long context escalate routing', () => {

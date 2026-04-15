@@ -1,4 +1,5 @@
 import type { ChatRoutingHints } from './contracts/chat';
+import { looksLikeRepoAuditRequest } from './guards/repoAuditIntent';
 
 export type ModelId = 'gpt-5.4' | 'gpt-5.4-mini' | 'gpt-5.4-nano';
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -23,7 +24,6 @@ const isDebugMode = process.env.NODE_ENV !== 'production';
 
 const MODEL_MINI_NONE: ModelConfig = {
   model: 'gpt-5.4-mini',
-  reasoning: { effort: 'none' },
 };
 
 const GOLDEN_CORE_FILES = new Set([
@@ -35,23 +35,18 @@ const GOLDEN_CORE_FILES = new Set([
   'src/backend/responses.ts',
 ]);
 
+const STRONG_MODE_REASON_REASONS = new Set([
+  'golden-core-self-rewrite',
+  'repo-audit-or-spec-compliance',
+  'source-conflict',
+  'deep-code-debug-review',
+  'architecture-or-design',
+]);
 
-function looksLikeRepoAuditRequest(text: string): boolean {
-  if (!text) return false;
-
-  const hasAuditIntent =
-    /\b(full audit|audit code|audit the code|audit codebase|repo audit|spec audit|strict mode|responses api|compliance)\b/i.test(
-      text,
-    ) || /полный аудит|сделать аудит|аудит кода|соответствие|строгий режим|strong_spec/i.test(text);
-
-  const hasRepoScope =
-    /docs\/strong_spec\.md|strong_spec|repo|repository|branch|ветк|репо|codebase|кодовая база/i.test(text);
-
-  const hasReadOnlyAuditConstraint =
-    /do not change|do not modify|read-only|не меняй|не изменяй|ничего не меняй/i.test(text);
-
-  return (hasAuditIntent && hasRepoScope) || (hasAuditIntent && hasReadOnlyAuditConstraint);
+function shouldUseReasoningByPolicy(reason: string): boolean {
+  return STRONG_MODE_REASON_REASONS.has(reason);
 }
+
 
 export function chooseModel(
   messages: Array<{ role: string; content: unknown }>,
@@ -300,9 +295,13 @@ export function chooseModel(
 
   chosenEffort = clampEffortForModel(chosenModel, chosenEffort);
 
+  if (!shouldUseReasoningByPolicy(reason)) {
+    chosenEffort = 'none';
+  }
+
   const decision: ModelRoutingDecision = {
     model: chosenModel,
-    reasoning: { effort: chosenEffort },
+    ...(chosenEffort !== 'none' ? { reasoning: { effort: chosenEffort } } : {}),
     reason,
   };
 

@@ -1,3 +1,5 @@
+import { looksLikeRepoAuditRequest } from './repoAuditIntent';
+
 export type AssistantExecutionProfile = {
   mode: 'default' | 'repo_audit';
   instructions: string;
@@ -16,20 +18,6 @@ const AUDIT_MAX_TOOL_LOOPS = 24;
 const AUDIT_MAX_TOTAL_TOOL_CALLS = 64;
 const AUDIT_MAX_SAME_FINGERPRINT_IN_ROW = 3;
 const AUDIT_TOOL_TIMEOUT_MS = 45_000;
-
-function looksLikeRepoAuditRequest(text: string): boolean {
-  if (!text) return false;
-
-  const hasAuditIntent =
-    /\b(full audit|audit code|audit the code|audit codebase|repo audit|spec audit|strict mode|responses api)\b/i.test(
-      text,
-    ) || /полный аудит|сделать аудит|аудит кода|соответствие|строгий режим|репо|ветк|strong_spec/i.test(text);
-
-  const hasRepoScope =
-    /docs\/strong_spec\.md|strong_spec|repo|repository|branch|ветк|репо|strict mode|responses api/i.test(text);
-
-  return hasAuditIntent && hasRepoScope;
-}
 
 export function buildExecutionProfile(params: {
   baseInstructions: string;

@@ -50,10 +50,13 @@ type AssistantInternalCode =
   | 'tool_execution_failed'
   | 'repeated_tool_call'
   | 'no_progress_abort'
+  | 'response_incomplete'
   | 'tool_budget_exceeded'
   | 'no_actionable_output'
   | 'tool_loop_limit'
-  | 'invalid_tool_schema';
+  | 'invalid_tool_schema'
+  | 'provider_invalid_request'
+  | 'provider_runtime_failed';
 
 export type AssistantRunOptions = {
   model: ModelRoutingDecision['model'];
@@ -353,6 +356,14 @@ function buildFailureState(conversationId: string | null, responseId?: string | 
   };
 }
 
+function readIncompleteReason(response: Response | null): string | null {
+  const anyResponse = response as any;
+  if (!anyResponse || anyResponse.status !== 'incomplete') return null;
+  const reason = anyResponse?.incomplete_details?.reason;
+  if (typeof reason === 'string' && reason.trim()) return reason.trim();
+  return 'unknown';
+}
+
 function isRetryableOpenAIError(error: any): boolean {
   const status = error?.status ?? error?.statusCode ?? error?.cause?.status;
   if (typeof status === 'number' && OPENAI_RETRYABLE_STATUS.has(status)) return true;
@@ -361,26 +372,141 @@ function isRetryableOpenAIError(error: any): boolean {
   return code === 'etimedout' || code === 'econnreset' || code === 'eai_again';
 }
 
+function readHeaderValue(headers: unknown, name: string): string | null {
+  if (!headers) return null;
+  const target = name.toLowerCase();
+
+  if (typeof (headers as any)?.get === 'function') {
+    const value = (headers as any).get(name) ?? (headers as any).get(target);
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+
+  if (Array.isArray(headers)) {
+    for (const entry of headers) {
+      if (!Array.isArray(entry) || entry.length < 2) continue;
+      const key = String(entry[0] ?? '').toLowerCase();
+      if (key !== target) continue;
+      const value = String(entry[1] ?? '').trim();
+      if (value) return value;
+    }
+  }
+
+  if (typeof headers === 'object' && headers !== null) {
+    for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+      if (key.toLowerCase() !== target) continue;
+      const normalized = String(value ?? '').trim();
+      if (normalized) return normalized;
+    }
+  }
+
+  return null;
+}
+
+function readRetryAfterMs(error: any): number | null {
+  const headerSources = [
+    error?.headers,
+    error?.response?.headers,
+    error?.cause?.headers,
+    error?.cause?.response?.headers,
+  ];
+
+  for (const headers of headerSources) {
+    const retryAfterMs = readHeaderValue(headers, 'retry-after-ms');
+    if (retryAfterMs) {
+      const n = Number(retryAfterMs);
+      if (Number.isFinite(n) && n >= 0) return Math.ceil(n);
+    }
+
+    const retryAfter = readHeaderValue(headers, 'retry-after');
+    if (retryAfter) {
+      const n = Number(retryAfter);
+      if (Number.isFinite(n) && n >= 0) return Math.ceil(n * 1000);
+    }
+  }
+
+  return null;
+}
+
+function computeRetryDelayMs(error: any, attempt: number): number {
+  const hinted = readRetryAfterMs(error);
+  if (hinted !== null) return hinted;
+
+  const base = 400 * Math.pow(2, attempt - 1);
+  const jitter = Math.floor(Math.random() * 250);
+  return Math.min(base + jitter, 8000);
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function createModelResponseWithRetry(params: Parameters<typeof createModelResponse>[0]) {
+async function createModelResponseWithRetry(
+  params: Parameters<typeof createModelResponse>[0],
+  options?: {
+    onRetry?: (meta: {
+      attempt: number;
+      nextAttempt: number;
+      delayMs: number;
+      status: number | null;
+      code: string | null;
+    }) => Promise<void> | void;
+  },
+) {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt += 1) {
     try {
       return await createModelResponse(params);
-    } catch (error) {
+    } catch (error: any) {
       lastError = error;
       if (attempt >= OPENAI_MAX_ATTEMPTS || !isRetryableOpenAIError(error)) {
         throw error;
       }
-      await delay(300 * attempt);
+
+      const delayMs = computeRetryDelayMs(error, attempt);
+      const status =
+        typeof error?.status === 'number'
+          ? error.status
+          : typeof error?.statusCode === 'number'
+            ? error.statusCode
+            : typeof error?.cause?.status === 'number'
+              ? error.cause.status
+              : null;
+      const codeRaw = error?.code ?? error?.cause?.code ?? null;
+      const code = typeof codeRaw === 'string' && codeRaw.trim() ? codeRaw.trim() : null;
+
+      await options?.onRetry?.({
+        attempt,
+        nextAttempt: attempt + 1,
+        delayMs,
+        status,
+        code,
+      });
+
+      await delay(delayMs);
     }
   }
 
   throw lastError;
+}
+
+function readProviderErrorDetails(error: any) {
+  return {
+    status: error?.status ?? error?.statusCode ?? error?.cause?.status ?? null,
+    code: String(error?.code ?? error?.cause?.code ?? '').trim().toLowerCase() || null,
+    type: String(error?.type ?? error?.error?.type ?? '').trim().toLowerCase() || null,
+    message: error?.message ? String(error.message) : null,
+  };
+}
+
+function classifyProviderError(error: any): AssistantInternalCode {
+  const details = readProviderErrorDetails(error);
+
+  if (details.status === 400 || details.code === 'invalid_value' || details.type === 'invalid_request_error') {
+    return 'provider_invalid_request';
+  }
+
+  return 'provider_runtime_failed';
 }
 
 export async function runAssistant(params: RunAssistantTurnParams): Promise<AssistantResult> {
@@ -490,21 +616,45 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       duration: Date.now() - startedAt,
     });
 
-    const response = await createModelResponseWithRetry({
-      client: openai,
-      model: params.routing.model,
-      input: pendingInput,
-      instructions: effectiveInstructions,
-      state: stateMode,
-      tools,
-      ...(reasoningDecision.sentReasoningEffort
-        ? { reasoning: { effort: reasoningDecision.sentReasoningEffort, summary: 'concise' as const } }
-        : {}),
-      ...(params.routing.text ? { text: params.routing.text } : {}),
-      ...(typeof params.routing.maxOutputTokens === 'number'
-        ? { maxOutputTokens: params.routing.maxOutputTokens }
-        : {}),
-    });
+    const response = await createModelResponseWithRetry(
+      {
+        client: openai,
+        model: params.routing.model,
+        input: pendingInput,
+        instructions: effectiveInstructions,
+        state: stateMode,
+        tools,
+        ...(reasoningDecision.sentReasoningEffort
+          ? { reasoning: { effort: reasoningDecision.sentReasoningEffort, summary: 'concise' as const } }
+          : {}),
+        ...(params.routing.text ? { text: params.routing.text } : {}),
+        ...(typeof params.routing.maxOutputTokens === 'number'
+          ? { maxOutputTokens: params.routing.maxOutputTokens }
+          : {}),
+      },
+      {
+        onRetry: async (meta) => {
+          await logEvent('assistant_openai_retry_scheduled', {
+            traceId,
+            userTurnId,
+            round,
+            conversationId: requestConversationId,
+            previousResponseId: requestPreviousResponseId ?? null,
+            model: params.routing.model,
+            modelReason: params.routing.reason,
+            reasoningEffort: reasoningDecision.sentReasoningEffort,
+            assistantMode: executionProfile.mode,
+            attempt: meta.attempt,
+            nextAttempt: meta.nextAttempt,
+            delayMs: meta.delayMs,
+            status: meta.status,
+            code: meta.code,
+            finalStatus: 'in_progress',
+            duration: Date.now() - startedAt,
+          });
+        },
+      },
+    );
 
     lastResponse = response;
     previousResponseId = response.id;
@@ -512,6 +662,7 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
 
     const functionCalls = extractFunctionCalls((response as any).output);
     const finalMessage = extractFinalAssistantMessage(response);
+    const incompleteReason = readIncompleteReason(response);
 
     await logInfo('assistant_round_completed', {
       traceId,
@@ -528,7 +679,12 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       toolCallId: functionCalls[0]?.call_id ?? null,
       assistantMode: executionProfile.mode,
       assistantPhase: finalMessage?.phase ?? null,
-      finalStatus: finalMessage?.text && functionCalls.length === 0 ? 'completed' : 'in_progress',
+      finalStatus:
+        incompleteReason
+          ? 'failed'
+          : finalMessage?.text && functionCalls.length === 0
+            ? 'completed'
+            : 'in_progress',
       duration: Date.now() - startedAt,
       usage: responseUsage(response),
     });
@@ -556,8 +712,9 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
       usage: responseUsage(response),
       toolCount: functionCalls.length,
       assistantMode: executionProfile.mode,
+      incompleteReason,
       assistantPhase: finalMessage?.phase ?? null,
-      finalStatus: 'in_progress',
+      finalStatus: incompleteReason ? 'failed' : 'in_progress',
       payloadKeys: [
         'model',
         'input',
@@ -570,6 +727,35 @@ export async function runAssistant(params: RunAssistantTurnParams): Promise<Assi
         ...payloadKeysForStateMode(stateMode),
       ],
     });
+
+    if (incompleteReason) {
+      const error = abort('response_incomplete', response.id);
+      await logFatalStop('assistant_run_failed', {
+        traceId,
+        userTurnId,
+        round,
+        conversationId: currentConversationId,
+        responseId: response.id ?? null,
+        previousResponseId: requestPreviousResponseId ?? null,
+        totalToolCalls,
+        model: params.routing.model,
+        modelReason: params.routing.reason,
+        reasoningEffort: reasoningDecision.sentReasoningEffort,
+        assistantMode: executionProfile.mode,
+        assistantPhase: finalMessage?.phase ?? null,
+        stopReason: error.internalCode,
+        incompleteReason,
+        duration: Date.now() - startedAt,
+        usage: responseUsage(response),
+      });
+      return {
+        response,
+        toolCalls: toolCallsLog,
+        reasoningDecision,
+        state: buildFailureState(currentConversationId, response.id),
+        error,
+      };
+    }
 
     if (finalMessage?.text && functionCalls.length === 0) {
       await logInfo('assistant_run_completed', {

@@ -288,12 +288,19 @@ export function normalizePublicChatSuccess(params: {
   sessionId: string;
   response: Response;
   routing: ModelRoutingDecision;
+  deliveredReasoningEffort?: string | null;
   state: {
     conversationId: string | null;
     previousResponseId: string | null;
   };
 }): PublicChatSuccess {
   const finalMessage = extractFinalAssistantMessage(params.response);
+  const deliveredReasoningEffort = Object.prototype.hasOwnProperty.call(
+    params,
+    'deliveredReasoningEffort',
+  )
+    ? (params.deliveredReasoningEffort ?? null)
+    : (params.routing.reasoning?.effort ?? null);
 
   return {
     ok: true,
@@ -304,7 +311,7 @@ export function normalizePublicChatSuccess(params: {
       phase: finalMessage?.phase ?? 'unknown',
       outputText: finalMessage?.text ?? '',
       reason: params.routing.reason,
-      reasoningEffort: params.routing.reasoning?.effort ?? null,
+      reasoningEffort: deliveredReasoningEffort,
       state: params.state,
     },
     error: null,

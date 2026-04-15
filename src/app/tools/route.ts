@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import { getToolsSchemas } from '../../backend/tools.js';
-import { requireAdminBearerAuth } from '../../backend/auth/adminAuth.js';
+import { getToolsSchemas } from '@/backend/tools';
+import { requireAdminBearerAuth } from '@/backend/auth/adminAuth';
 
 export async function GET(req: Request) {
   const auth = requireAdminBearerAuth(req);

@@ -18,8 +18,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, result });
   } catch (error: any) {
     const message = typeof error?.message === 'string' ? error.message : 'Tool execution failed';
-
-    // Unknown tool is a client error
     const status = /^Unknown tool:/.test(message) ? 404 : 500;
 
     return NextResponse.json({ ok: false, error: message }, { status });

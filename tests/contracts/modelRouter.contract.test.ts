@@ -14,6 +14,38 @@ describe('modelRouter contract', () => {
     expect(result.reason).toBe('golden-core-self-rewrite');
   });
 
+  it('forces full/high for replacement-runtime prompt layer files too', () => {
+    const result = chooseModel(
+      [{ role: 'user', content: 'Refactor the prompt layer carefully.' }],
+      { touchedFiles: ['src/backend/prompt/buildCoreInstructions.ts'] },
+    );
+
+    expect(result.model).toBe('gpt-5.4');
+    expect(result.reasoning?.effort).toBe('high');
+    expect(result.reason).toBe('golden-core-self-rewrite');
+  });
+
+  it('forces full/high for contracts and guards touched by self-rewrite', () => {
+    const result = chooseModel(
+      [{ role: 'user', content: 'Update the runtime guard safely.' }],
+      { touchedFiles: ['src/backend/guards/toolArgs.ts', 'src/backend/contracts/chat.ts'] },
+    );
+
+    expect(result.model).toBe('gpt-5.4');
+    expect(result.reasoning?.effort).toBe('high');
+    expect(result.reason).toBe('golden-core-self-rewrite');
+  });
+
+  it('keeps reasoning disabled for ordinary codegen', () => {
+    const result = chooseModel(
+      [{ role: 'user', content: 'Refactor this small React component and keep behavior the same.' }],
+      { touchedFiles: ['src/components/Button.tsx'] },
+    );
+
+    expect(result.reason).toMatch(/codegen|fallback|short-general-request|pm-or-status-or-ci-cd-or-deploy/);
+    expect(result.reasoning).toBeUndefined();
+  });
+
   it('allows nano only for lightweight classification-like tasks', () => {
     const result = chooseModel([
       { role: 'user', content: 'Classify this issue into one label. Return JSON only.' },

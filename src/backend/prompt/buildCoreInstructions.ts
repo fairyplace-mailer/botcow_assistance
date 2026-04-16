@@ -16,23 +16,17 @@ type BuildCoreInstructionsParams = {
   execution: AssistantExecutionContract;
 };
 
-export function buildCoreInstructions({ routing, hints, execution }: BuildCoreInstructionsParams): string {
+export function buildCoreInstructions({
+  routing: _routing,
+  hints,
+  execution,
+}: BuildCoreInstructionsParams): string {
   const touchedFiles = (hints?.touchedFiles ?? []).slice(0, 20);
-
-  const executionFacts = [
-    `Backend-owned model: ${execution.model}.`,
-    `Backend-owned reasoning effort: ${execution.reasoningEffort}.`,
-    `Backend-owned response verbosity: ${execution.responseVerbosity}.`,
-    `Backend-owned max output tokens: ${execution.maxOutputTokens}.`,
-    `Backend-owned tool-use policy: ${execution.toolUsePolicy}.`,
-    `Current routing reason: ${routing.reason}.`,
-  ];
 
   const modelSpecificLines = buildModelSpecificInstructions({
     model: execution.model,
     reasoningEffort: execution.reasoningEffort,
     toolUsePolicy: execution.toolUsePolicy,
-    routingReason: routing.reason,
   });
 
   return [
@@ -45,8 +39,6 @@ export function buildCoreInstructions({ routing, hints, execution }: BuildCoreIn
     ...ORCHESTRATION_LINES,
     '',
     ...modelSpecificLines,
-    '',
-    ...executionFacts,
     '',
     ...buildTouchedFilesBlock(touchedFiles),
   ].join('\n');

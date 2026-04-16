@@ -121,19 +121,22 @@ model KnowledgeDocument {
 }
 
 model KnowledgeChunk {
-  id         String            @id @default(cuid())
-  documentId String            @map("document_id")
-  chunkIndex Int               @map("chunk_index")
-  chunkText  String            @db.Text @map("chunk_text")
-  tokenCount Int               @map("token_count")
-  textHash   String            @map("text_hash")
-  embedding  Unsupported("vector(1536)")?
-  createdAt  DateTime          @default(now()) @map("created_at")
-  updatedAt  DateTime          @updatedAt @map("updated_at")
+  id           String            @id @default(cuid())
+  documentId   String            @map("document_id")
+  chunkVersion Int               @default(1) @map("chunk_version")
+  chunkIndex   Int               @map("chunk_index")
+  isActive     Boolean           @default(true) @map("is_active")
+  chunkText    String            @db.Text @map("chunk_text")
+  tokenCount   Int               @map("token_count")
+  textHash     String            @map("text_hash")
+  embedding    Unsupported("vector(1536)")?
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
 
   document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
-  @@unique([documentId, chunkIndex])
+  @@unique([documentId, chunkVersion, chunkIndex])
   @@index([documentId])
+  @@index([documentId, isActive])
   @@map("knowledge_chunks")
 }

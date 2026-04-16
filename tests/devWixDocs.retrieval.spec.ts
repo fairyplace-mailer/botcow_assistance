@@ -46,6 +46,7 @@ describe('retrieveDevWixContext knowledge contract', () => {
     expect(sql).toContain("s.source_key = 'wix_docs_public'");
     expect(sql).toContain("s.status = 'active'");
     expect(sql).toContain("d.document_status = 'ready'");
+    expect(sql).toContain('c.is_active = true');
   });
 
   it('returns knowledge chunks from canonical urls', async () => {

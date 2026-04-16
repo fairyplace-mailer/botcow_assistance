@@ -278,11 +278,12 @@ A dedicated prompt layer is mandatory.
 ### 10.2 Priority of truth
 
 For runtime behavior, priority SHALL be:
-1. this strong spec;
-2. golden core code;
-3. explicit owner instructions in the current task;
-4. repository docs such as `docs/spec.md`;
-5. tool-observed facts.
+1. supported OpenAI Responses API strong-mode/runtime rules and contract;
+2. this strong spec;
+3. golden core code;
+4. explicit owner instructions in the current task;
+5. repository docs such as `docs/spec.md`;
+6. tool-observed facts.
 
 The model SHALL NOT invent missing rules.
 

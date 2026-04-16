@@ -1,13 +1,3 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [
-    {
-      "path": "/api/cron/devwix-seed?maxPages=1000&maxDurationMs=6500",
-      "schedule": "0 3 * * *"
-    },
-    {
-      "path": "/api/cron/devwix-ingest?limitPages=1",
-      "schedule": "0 4 * * *"
-    }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json"
 }

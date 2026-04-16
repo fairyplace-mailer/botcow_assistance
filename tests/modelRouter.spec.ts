@@ -135,6 +135,18 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     expect(res.reason).toBe('repo-audit-or-spec-compliance');
   });
 
+  test('17) multi-file risky changes never stay on nano', () => {
+    const res = chooseModel(
+      mk('Across the repo, refactor and rename props in several files. Return JSON summary only.'),
+      {
+        multiFileIntent: true,
+        touchedFiles: ['src/components/A.tsx', 'src/components/B.tsx'],
+      },
+    );
+    expect(res.model).not.toBe('gpt-5.4-nano');
+    expect(['gpt-5.4-mini', 'gpt-5.4']).toContain(res.model);
+    expect(['low', 'medium', 'high', 'xhigh']).toContain(res.reasoning?.effort ?? 'low');
+  });
 
   test('18) strong_spec and Responses API mention alone do not force repo audit', () => {
     const txt =

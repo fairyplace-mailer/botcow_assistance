@@ -55,6 +55,19 @@ describe('modelRouter contract', () => {
     expect(['none', 'low']).toContain(result.reasoning?.effort ?? 'none');
   });
 
+  it('never allows nano for multi-file risky changes', () => {
+    const result = chooseModel(
+      [{ role: 'user', content: 'Across the repo, refactor several files and rename shared props.' }],
+      {
+        multiFileIntent: true,
+        touchedFiles: ['src/components/A.tsx', 'src/components/B.tsx'],
+      },
+    );
+
+    expect(result.model).not.toBe('gpt-5.4-nano');
+    expect(['gpt-5.4-mini', 'gpt-5.4']).toContain(result.model);
+  });
+
   it('forces full model and at least medium reasoning for repo-wide strong_spec audits', () => {
     const result = chooseModel([
       {

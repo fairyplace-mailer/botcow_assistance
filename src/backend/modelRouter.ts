@@ -256,12 +256,33 @@ export function chooseModel(
     reason = chosenModel === 'gpt-5.4' ? 'fallback-high-risk' : 'fallback-not-risky';
   }
 
-  if (
-    chosenModel === 'gpt-5.4-nano' &&
-    (flags.hasStackTrace || flags.hasDiff || flags.hasReviewWords || flags.hasArchWords || flags.hasBugWords)
-  ) {
-    chosenModel = 'gpt-5.4-mini';
-    chosenEffort = chosenEffort === 'none' ? 'low' : chosenEffort;
+  const nanoDisallowedBySpec =
+    flags.hasStackTrace ||
+    flags.hasDiff ||
+    flags.hasReviewWords ||
+    flags.hasArchWords ||
+    flags.hasBugWords ||
+    ((flags.hasMultiFileIntent || explicitMultiFileIntent) &&
+      (flags.hasRefactorWords ||
+        flags.hasBugWords ||
+        flags.hasReviewWords ||
+        flags.hasDiff ||
+        flags.hasStackTrace ||
+        !!hints.toolHeavy ||
+        touchedFiles.length > 1));
+
+  if (chosenModel === 'gpt-5.4-nano' && nanoDisallowedBySpec) {
+    const forceFullModel =
+      flags.hasStackTrace ||
+      flags.hasDiff ||
+      flags.hasReviewWords ||
+      flags.hasArchWords ||
+      flags.hasBugWords ||
+      ((flags.hasMultiFileIntent || explicitMultiFileIntent) &&
+        (flags.hasRefactorWords || !!hints.toolHeavy || touchedFiles.length > 1));
+
+    chosenModel = forceFullModel ? 'gpt-5.4' : 'gpt-5.4-mini';
+    chosenEffort = forceFullModel ? 'high' : chosenEffort === 'none' ? 'low' : chosenEffort;
     reason = 'hard-override-nano-not-allowed-for-risk';
   }
 

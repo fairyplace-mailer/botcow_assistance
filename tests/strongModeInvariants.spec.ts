@@ -24,13 +24,13 @@ describe('strong mode invariants', () => {
     expect(result.reasoning?.effort).toBe('high');
   });
 
-  test('ordinary code task keeps reasoning off by default', () => {
+  test('ordinary code task keeps economical reasoning on by default', () => {
     const result = chooseModel(
       [{ role: 'user', content: 'Refactor this small React button component without changing behavior.' }],
       { touchedFiles: ['src/components/Button.tsx'] },
     );
 
-    expect(result.reasoning).toBeUndefined();
+    expect(['low', 'medium']).toContain(result.reasoning?.effort);
   });
 
   test('planAssistantTurn keeps tool-first policy for architecture work', () => {
@@ -46,13 +46,13 @@ describe('strong mode invariants', () => {
     expect(plan.run.reasoning).toEqual({ effort: 'high' });
   });
 
-  test('planAssistantTurn keeps reasoning absent for ordinary task slices', () => {
+  test('planAssistantTurn keeps economical reasoning for ordinary task slices', () => {
     const plan = planAssistantTurn({
       messages: [{ role: 'user', content: 'Rename a few props in this UI component.' }],
       hints: { touchedFiles: ['src/components/Card.tsx'] },
     });
 
-    expect(plan.execution.reasoningEffort).toBe('none');
-    expect(plan.run.reasoning).toBeUndefined();
+    expect(['low', 'medium']).toContain(plan.execution.reasoningEffort);
+    expect(['low', 'medium']).toContain(plan.run.reasoning?.effort);
   });
 });

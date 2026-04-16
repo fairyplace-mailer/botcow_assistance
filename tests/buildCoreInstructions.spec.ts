@@ -1,7 +1,7 @@
 import { buildCoreInstructions } from '../src/backend/prompt/buildCoreInstructions';
 
 describe('buildCoreInstructions', () => {
-  test('includes priority of truth and backend-owned execution contract', () => {
+  test('includes updated priority of truth without exposing orchestrator metadata', () => {
     const text = buildCoreInstructions({
       routing: {
         model: 'gpt-5.4',
@@ -21,9 +21,17 @@ describe('buildCoreInstructions', () => {
     });
 
     expect(text).toContain('Priority of truth for runtime behavior:');
-    expect(text).toContain('Execution contract is backend-owned.');
-    expect(text).toContain('Backend-owned model: gpt-5.4.');
-    expect(text).toContain('This is a strong-mode task slice. Be conservative and evidence-first.');
+    expect(text).toContain('1. supported OpenAI Responses API strong-mode/runtime rules and contract;');
+    expect(text).toContain('2. docs/strong_spec.md;');
+    expect(text).toContain('Stay within the assigned task slice.');
+    expect(text).toContain('Be conservative and check edge cases before concluding.');
+
+    expect(text).not.toContain('Backend-owned model:');
+    expect(text).not.toContain('Backend-owned reasoning effort:');
+    expect(text).not.toContain('Backend-owned tool-use policy:');
+    expect(text).not.toContain('Current routing reason:');
+    expect(text).not.toContain('Assigned routing reason:');
+    expect(text).not.toContain('Execution contract is backend-owned.');
   });
 
   test('adds nano-specific restriction profile', () => {

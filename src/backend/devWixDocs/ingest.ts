@@ -72,6 +72,16 @@ type MutableDoc = {
   canonicalUrl: string;
   documentStatus: 'pending' | 'fetched' | 'extracted' | 'embedded' | 'ready' | 'failed' | 'deleted';
   contentHash: string | null;
+  embeddedAt?: Date | null;
+};
+
+type ActiveChunkResumeRow = {
+  id: string;
+  chunkText: string;
+  textHash: string;
+  chunkIndex: number;
+  chunkVersion: number;
+  hasEmbedding: boolean;
 };
 
 const DEFAULT_START_URL = 'https://dev.wix.com/docs';
@@ -92,7 +102,7 @@ function embeddingToSqlVectorLiteral(embedding: number[]): string {
     })
     .join(',');
 
-  return `'[${body}]'::vector`;
+  return `[${body}]`;
 }
 
 function nowMs(): number {
@@ -141,25 +151,34 @@ WHERE c.id = v.id
   };
 }
 
-async function ensureStartDocument(startUrl: string, sourceId: string): Promise<void> {
-  const canonical = canonicalizeDocsUrl(startUrl);
-  if (!canonical || !isAllowedDocsUrl(canonical)) return;
+async function loadActiveChunkResumeRows(documentId: string): Promise<ActiveChunkResumeRow[]> {
+  return (await prisma.$queryRawUnsafe(
+    `
+SELECT
+  id,
+  chunk_text AS "chunkText",
+  text_hash AS "textHash",
+  chunk_index AS "chunkIndex",
+  chunk_version AS "chunkVersion",
+  CASE WHEN embedding IS NULL THEN FALSE ELSE TRUE END AS "hasEmbedding"
+FROM "knowledge_chunks"
+WHERE document_id = $1
+  AND is_active = TRUE
+ORDER BY chunk_index ASC
+`,
+    documentId,
+  )) as ActiveChunkResumeRow[];
+}
 
-  const existing = await prisma.knowledgeDocument.findFirst({
-    where: { sourceId, canonicalUrl: canonical },
-    select: { id: true },
-  });
+function canResumeActiveChunkSet(
+  existingRows: ActiveChunkResumeRow[],
+  finalChunks: Array<{ text: string }>,
+): boolean {
+  if (existingRows.length !== finalChunks.length) return false;
 
-  if (existing) return;
-
-  await prisma.knowledgeDocument.create({
-    data: {
-      sourceId,
-      originalUrl: canonical,
-      canonicalUrl: canonical,
-      sourceSection: DEV_WIX_SOURCE_KEY,
-      documentStatus: 'pending',
-    },
+  return existingRows.every((row, index) => {
+    if (row.chunkIndex !== index) return false;
+    return row.textHash === hashText(finalChunks[index]?.text ?? '');
   });
 }
 
@@ -207,7 +226,12 @@ export async function ingestDevWixArticles(
   },
 ): Promise<IngestResult> {
   const runStartedAt = nowMs();
-  const startUrl = opts?.startUrl ?? DEFAULT_START_URL;
+
+  const requestedStartUrl = opts?.startUrl?.trim() ?? '';
+  const canonicalStartUrl = requestedStartUrl ? canonicalizeDocsUrl(requestedStartUrl) : null;
+  const startUrl = canonicalStartUrl && isAllowedDocsUrl(canonicalStartUrl) ? canonicalStartUrl : DEFAULT_START_URL;
+  const targetCanonicalUrl = canonicalStartUrl && isAllowedDocsUrl(canonicalStartUrl) ? canonicalStartUrl : null;
+
   const limitPages = Math.max(1, Math.min(50, Number(opts?.limitPages ?? 10)));
   const maxDurationMs = Math.max(500, Math.min(30000, Number(opts?.maxDurationMs ?? 15000)));
 
@@ -242,7 +266,7 @@ export async function ingestDevWixArticles(
   const [officialPages, officialChunks] = source
     ? await Promise.all([
         prisma.knowledgeDocument.count({ where: { sourceId: source.id, documentStatus: 'ready' } }),
-        prisma.knowledgeChunk.count({ where: { document: { sourceId: source.id } } }),
+        prisma.knowledgeChunk.count({ where: { document: { sourceId: source.id }, isActive: true } }),
       ])
     : [0, 0];
   msDb += nowMs() - tDb0;
@@ -379,20 +403,37 @@ export async function ingestDevWixArticles(
       return aggressiveResult;
     }
 
-    await ensureStartDocument(startUrl, source.id);
+    const baseWhere = {
+      sourceId: source.id,
+      ...(targetCanonicalUrl ? { canonicalUrl: targetCanonicalUrl } : {}),
+    };
 
-    const targets = (await prisma.knowledgeDocument.findMany({
+    const resumeTargets = (await prisma.knowledgeDocument.findMany({
       where: {
-        sourceId: source.id,
-        ...(opts?.force
-          ? {}
-          : {
-              documentStatus: { in: ['pending', 'failed', 'fetched', 'extracted', 'embedded', 'ready'] },
-            }),
+        ...baseWhere,
+        documentStatus: { in: ['embedded', 'extracted', 'fetched'] },
       },
-      orderBy: [{ fetchedAt: 'asc' }, { createdAt: 'asc' }],
+      orderBy: [{ updatedAt: 'asc' }, { fetchedAt: 'asc' }, { createdAt: 'asc' }],
       take: limitPages,
     })) as MutableDoc[];
+
+    const remainingSlots = Math.max(0, limitPages - resumeTargets.length);
+
+    const freshTargets =
+      remainingSlots > 0
+        ? ((await prisma.knowledgeDocument.findMany({
+            where: {
+              ...baseWhere,
+              documentStatus: {
+                in: opts?.force ? ['pending', 'failed', 'ready'] : ['pending', 'failed'],
+              },
+            },
+            orderBy: [{ fetchedAt: 'asc' }, { createdAt: 'asc' }],
+            take: remainingSlots,
+          })) as MutableDoc[])
+        : [];
+
+    const targets = [...resumeTargets, ...freshTargets];
 
     for (const doc of targets) {
       if (nowMs() > deadline) {
@@ -429,7 +470,10 @@ export async function ingestDevWixArticles(
 
         if (isDefinitivelyGone(response.status)) {
           const started = nowMs();
-          await prisma.knowledgeChunk.deleteMany({ where: { documentId: doc.id } });
+          await prisma.knowledgeChunk.updateMany({
+            where: { documentId: doc.id, isActive: true },
+            data: { isActive: false },
+          });
           await transitionDocument({
             jobId,
             doc,
@@ -568,27 +612,95 @@ export async function ingestDevWixArticles(
         });
 
         const rebuildStartedAt = nowMs();
-        await prisma.knowledgeChunk.deleteMany({ where: { documentId: doc.id } });
-        await prisma.knowledgeChunk.createMany({
-          data: finalChunks.map((chunk, index) => ({
-            documentId: doc.id,
-            chunkIndex: index,
-            chunkText: chunk.text,
-            tokenCount: chunk.tokenCount,
-            textHash: hashText(chunk.text),
-          })),
-        });
+        const existingActiveRows = await loadActiveChunkResumeRows(doc.id);
+        const resumeExistingActiveChunks = canResumeActiveChunkSet(existingActiveRows, finalChunks);
+
+        let chunkRows: Array<{ id: string; chunkText: string }>;
+
+        if (resumeExistingActiveChunks) {
+          chunkRows = existingActiveRows
+            .filter((row) => !row.hasEmbedding)
+            .map((row) => ({ id: row.id, chunkText: row.chunkText }));
+
+          await logDevWixInfo('dev_wix_document_resume_detected', {
+            jobId,
+            canonicalUrl: doc.canonicalUrl,
+            chunkVersion: existingActiveRows[0]?.chunkVersion ?? null,
+            pendingChunkCount: chunkRows.length,
+            totalChunkCount: existingActiveRows.length,
+          });
+        } else {
+          const latestChunk = await prisma.knowledgeChunk.findFirst({
+            where: { documentId: doc.id },
+            orderBy: [{ chunkVersion: 'desc' }, { chunkIndex: 'desc' }],
+            select: { chunkVersion: true },
+          });
+          const nextChunkVersion = (latestChunk?.chunkVersion ?? 0) + 1;
+
+          await prisma.knowledgeChunk.updateMany({
+            where: { documentId: doc.id, isActive: true },
+            data: { isActive: false },
+          });
+
+          await prisma.knowledgeChunk.createMany({
+            data: finalChunks.map((chunk, index) => ({
+              documentId: doc.id,
+              chunkVersion: nextChunkVersion,
+              chunkIndex: index,
+              isActive: true,
+              chunkText: chunk.text,
+              tokenCount: chunk.tokenCount,
+              textHash: hashText(chunk.text),
+            })),
+          });
+
+          chunkRows = await prisma.knowledgeChunk.findMany({
+            where: { documentId: doc.id, chunkVersion: nextChunkVersion, isActive: true },
+            orderBy: { chunkIndex: 'asc' },
+            select: { id: true, chunkText: true },
+          });
+        }
+
         msDb += nowMs() - rebuildStartedAt;
 
-        const chunkRows = await prisma.knowledgeChunk.findMany({
-          where: { documentId: doc.id },
-          orderBy: { chunkIndex: 'asc' },
-          select: { id: true, chunkText: true },
-        });
+        if (chunkRows.length === 0) {
+          const started = nowMs();
+          const embeddedAt = new Date();
+
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'embedded',
+            lastHttpStatus: response.status,
+            data: {
+              embeddedAt,
+              lastError: null,
+            },
+          });
+
+          await transitionDocument({
+            jobId,
+            doc,
+            nextStatus: 'ready',
+            lastHttpStatus: response.status,
+            data: {
+              lastError: null,
+            },
+          });
+
+          msDb += nowMs() - started;
+          stored += 1;
+          continue;
+        }
 
         const updates: Array<{ id: string; vectorLiteral: string }> = [];
 
         for (const chunk of chunkRows) {
+          if (nowMs() > deadline) {
+            stoppedReason = 'time_budget_exhausted';
+            break;
+          }
+
           if (embeddingsAttempted >= maxEmbeddings) {
             stoppedReason = 'embed_budget_exhausted';
             break;
@@ -624,8 +736,34 @@ export async function ingestDevWixArticles(
           embedDurationMs,
         });
 
+        if (updates.length > 0) {
+          const started = nowMs();
+          const sql = buildVectorUpdateSql({ updates });
+          await prisma.$executeRawUnsafe(sql.sql, ...sql.values);
+          msDb += nowMs() - started;
+        }
+
         if (updates.length !== chunkRows.length) {
           const started = nowMs();
+
+          if (
+            (stoppedReason === 'embed_budget_exhausted' || stoppedReason === 'time_budget_exhausted') &&
+            updates.length > 0
+          ) {
+            await transitionDocument({
+              jobId,
+              doc,
+              nextStatus: 'embedded',
+              lastHttpStatus: response.status,
+              data: {
+                embeddedAt: new Date(),
+                lastError: null,
+              },
+            });
+            msDb += nowMs() - started;
+            break;
+          }
+
           await transitionDocument({
             jobId,
             doc,
@@ -636,16 +774,14 @@ export async function ingestDevWixArticles(
           });
           msDb += nowMs() - started;
 
-          if (stoppedReason === 'embed_budget_exhausted') break;
+          if (stoppedReason === 'embed_budget_exhausted' || stoppedReason === 'time_budget_exhausted') break;
           continue;
         }
 
-        if (updates.length > 0) {
+        {
           const started = nowMs();
-          const sql = buildVectorUpdateSql({ updates });
-          await prisma.$executeRawUnsafe(sql.sql, ...sql.values);
-
           const embeddedAt = new Date();
+
           await transitionDocument({
             jobId,
             doc,

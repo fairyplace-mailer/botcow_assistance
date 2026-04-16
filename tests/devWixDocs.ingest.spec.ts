@@ -21,7 +21,9 @@ type Doc = {
 type Chunk = {
   id: string;
   documentId: string;
+  chunkVersion: number;
   chunkIndex: number;
+  isActive: boolean;
   chunkText: string;
   tokenCount: number;
   textHash: string;
@@ -44,10 +46,12 @@ const knowledgeDocumentFindMany = jest.fn();
 const knowledgeDocumentFindFirst = jest.fn();
 const knowledgeDocumentCreate = jest.fn();
 const knowledgeDocumentUpdate = jest.fn();
-const knowledgeChunkDeleteMany = jest.fn();
+const knowledgeChunkUpdateMany = jest.fn();
 const knowledgeChunkCreateMany = jest.fn();
+const knowledgeChunkFindFirst = jest.fn();
 const knowledgeChunkFindMany = jest.fn();
 const executeRawUnsafe = jest.fn();
+const queryRawUnsafe = jest.fn();
 
 jest.mock('../src/backend/log', () => ({
   logEvent: jest.fn().mockResolvedValue(undefined),
@@ -76,10 +80,12 @@ jest.mock('../src/backend/db', () => ({
     },
     knowledgeChunk: {
       count: (...args: any[]) => knowledgeChunkCount(...args),
-      deleteMany: (...args: any[]) => knowledgeChunkDeleteMany(...args),
+      updateMany: (...args: any[]) => knowledgeChunkUpdateMany(...args),
       createMany: (...args: any[]) => knowledgeChunkCreateMany(...args),
+      findFirst: (...args: any[]) => knowledgeChunkFindFirst(...args),
       findMany: (...args: any[]) => knowledgeChunkFindMany(...args),
     },
+    $queryRawUnsafe: (...args: any[]) => queryRawUnsafe(...args),
     $executeRawUnsafe: (...args: any[]) => executeRawUnsafe(...args),
   },
 }));
@@ -122,7 +128,10 @@ describe('ingestDevWixArticles knowledge contract', () => {
     embedText.mockResolvedValue({ vector: [0.1, 0.2], dims: 2, model: 'text-embedding-3-small' });
     knowledgeSourceFindUnique.mockResolvedValue({ id: 'source-1', sourceKey: 'wix_docs_public' });
     knowledgeDocumentCount.mockImplementation(async () => docsState.filter((x) => x.documentStatus === 'ready').length);
-    knowledgeChunkCount.mockImplementation(async () => chunksState.length);
+    knowledgeChunkCount.mockImplementation(async (args: any) => {
+      const onlyActive = args?.where?.isActive;
+      return chunksState.filter((x) => (onlyActive === undefined ? true : x.isActive === onlyActive)).length;
+    });
     knowledgeDocumentFindMany.mockImplementation(async () => docsState);
     knowledgeDocumentFindFirst.mockImplementation(async (args: any) => {
       const where = args?.where ?? {};
@@ -155,9 +164,14 @@ describe('ingestDevWixArticles knowledge contract', () => {
       Object.assign(doc, args.data);
       return doc;
     });
-    knowledgeChunkDeleteMany.mockImplementation(async (args: any) => {
+    knowledgeChunkUpdateMany.mockImplementation(async (args: any) => {
       const documentId = args?.where?.documentId;
-      if (documentId) chunksState = chunksState.filter((item) => item.documentId !== documentId);
+      const onlyActive = args?.where?.isActive;
+      for (const item of chunksState) {
+        if (item.documentId !== documentId) continue;
+        if (onlyActive !== undefined && item.isActive !== onlyActive) continue;
+        Object.assign(item, args.data);
+      }
       return { count: 0 };
     });
     knowledgeChunkCreateMany.mockImplementation(async (args: any) => {
@@ -165,7 +179,9 @@ describe('ingestDevWixArticles knowledge contract', () => {
         chunksState.push({
           id: `chunk-${chunkSeq++}`,
           documentId: row.documentId,
+          chunkVersion: row.chunkVersion ?? 1,
           chunkIndex: row.chunkIndex,
+          isActive: row.isActive ?? true,
           chunkText: row.chunkText,
           tokenCount: row.tokenCount,
           textHash: row.textHash,
@@ -173,14 +189,28 @@ describe('ingestDevWixArticles knowledge contract', () => {
       }
       return { count: args.data?.length ?? 0 };
     });
+    knowledgeChunkFindFirst.mockImplementation(async (args: any) => {
+      const documentId = args?.where?.documentId;
+      return (
+        chunksState
+          .filter((item) => item.documentId === documentId)
+          .sort((a, b) => (b.chunkVersion - a.chunkVersion) || (b.chunkIndex - a.chunkIndex))[0] ?? null
+      );
+    });
+
     knowledgeChunkFindMany.mockImplementation(async (args: any) => {
       const documentId = args?.where?.documentId;
+      const chunkVersion = args?.where?.chunkVersion;
+      const isActive = args?.where?.isActive;
       return chunksState
         .filter((item) => item.documentId === documentId)
+        .filter((item) => (chunkVersion === undefined ? true : item.chunkVersion === chunkVersion))
+        .filter((item) => (isActive === undefined ? true : item.isActive === isActive))
         .sort((a, b) => a.chunkIndex - b.chunkIndex)
         .map((item) => ({ id: item.id, chunkText: item.chunkText }));
     });
     executeRawUnsafe.mockResolvedValue(0);
+    queryRawUnsafe.mockResolvedValue([]);
 
     global.fetch = jest.fn(async () => ({
       ok: true,
@@ -188,6 +218,22 @@ describe('ingestDevWixArticles knowledge contract', () => {
       headers: { get: () => 'text/html; charset=utf-8' },
       text: async () => makeHtml('<h1>SDK</h1><pre><code>const x = 1;</code></pre><p>Use it.</p>'),
     })) as any;
+  });
+
+  test('does not auto-queue a missing start url outside bootstrap state', async () => {
+    docsState = [];
+
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    const result = await ingestDevWixArticles({
+      startUrl: 'https://dev.wix.com/docs/velo',
+      limitPages: 1,
+      force: true,
+    });
+
+    expect(result.fetched).toBe(0);
+    expect(result.stored).toBe(0);
+    expect(knowledgeDocumentCreate).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   test('preserves fenced code blocks in stored chunks', async () => {
@@ -217,20 +263,31 @@ describe('ingestDevWixArticles knowledge contract', () => {
     const result = await ingestDevWixArticles({ startUrl: 'https://dev.wix.com/docs/sdk', limitPages: 1, force: true });
 
     expect(result.skippedUnchanged).toBe(1);
-    expect(knowledgeChunkDeleteMany).not.toHaveBeenCalled();
+    expect(knowledgeChunkUpdateMany).not.toHaveBeenCalled();
     expect(knowledgeChunkCreateMany).not.toHaveBeenCalled();
     expect(embedText).not.toHaveBeenCalled();
   });
 
   test('changed markdown rebuilds chunks and refreshes embeddings', async () => {
     docsState = [{ ...docsState[0], contentHash: 'old-hash', documentStatus: 'ready' }];
-    chunksState = [{ id: 'chunk-old', documentId: 'doc-1', chunkIndex: 0, chunkText: 'old', tokenCount: 1, textHash: 'old' }];
+    chunksState = [{
+      id: 'chunk-old',
+      documentId: 'doc-1',
+      chunkVersion: 1,
+      chunkIndex: 0,
+      isActive: true,
+      chunkText: 'old',
+      tokenCount: 1,
+      textHash: 'old',
+    }];
 
     const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
     const result = await ingestDevWixArticles({ startUrl: 'https://dev.wix.com/docs/sdk', limitPages: 1, force: true });
 
     expect(result.stored).toBe(1);
-    expect(knowledgeChunkDeleteMany).toHaveBeenCalled();
+    expect(knowledgeChunkUpdateMany).toHaveBeenCalled();
+    expect(chunksState.some((x) => x.id === 'chunk-old' && x.isActive === false)).toBe(true);
+    expect(chunksState.some((x) => x.id !== 'chunk-old' && x.isActive === true && x.chunkVersion === 2)).toBe(true);
     expect(knowledgeChunkCreateMany).toHaveBeenCalled();
     expect(embedText).toHaveBeenCalled();
     expect(executeRawUnsafe).toHaveBeenCalled();
@@ -298,7 +355,7 @@ describe('ingestDevWixArticles knowledge contract', () => {
     const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
     await ingestDevWixArticles({ startUrl: 'https://dev.wix.com/docs/sdk', limitPages: 1, force: true });
 
-    expect(knowledgeChunkDeleteMany).toHaveBeenCalled();
+    expect(knowledgeChunkUpdateMany).toHaveBeenCalled();
     expect(docsState[0]?.documentStatus).toBe('deleted');
     expect(docsState[0]?.lastError).toBe('http_404');
   });
@@ -309,7 +366,9 @@ describe('ingestDevWixArticles knowledge contract', () => {
     chunksState = Array.from({ length: 7 }, (_, index) => ({
       id: `seed-${index}`,
       documentId: 'seed-doc',
+      chunkVersion: 1,
       chunkIndex: index,
+      isActive: true,
       chunkText: `seed-${index}`,
       tokenCount: 10,
       textHash: `seed-${index}`,
@@ -341,7 +400,9 @@ describe('ingestDevWixArticles knowledge contract', () => {
     chunksState = Array.from({ length: 9 }, (_, index) => ({
       id: `seed-${index}`,
       documentId: 'seed-doc',
+      chunkVersion: 1,
       chunkIndex: index,
+      isActive: true,
       chunkText: `seed-${index}`,
       tokenCount: 10,
       textHash: `seed-${index}`,

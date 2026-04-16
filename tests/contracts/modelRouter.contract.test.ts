@@ -36,14 +36,14 @@ describe('modelRouter contract', () => {
     expect(result.reason).toBe('golden-core-self-rewrite');
   });
 
-  it('keeps reasoning disabled for ordinary codegen', () => {
+  it('keeps ordinary codegen on economical reasoning, not none and not high', () => {
     const result = chooseModel(
       [{ role: 'user', content: 'Refactor this small React component and keep behavior the same.' }],
       { touchedFiles: ['src/components/Button.tsx'] },
     );
 
     expect(result.reason).toMatch(/codegen|fallback|short-general-request|pm-or-status-or-ci-cd-or-deploy/);
-    expect(result.reasoning).toBeUndefined();
+    expect(['low', 'medium']).toContain(result.reasoning?.effort);
   });
 
   it('allows nano only for lightweight classification-like tasks', () => {
@@ -53,6 +53,19 @@ describe('modelRouter contract', () => {
 
     expect(['gpt-5.4-nano', 'gpt-5.4-mini']).toContain(result.model);
     expect(['none', 'low']).toContain(result.reasoning?.effort ?? 'none');
+  });
+
+  it('never allows nano for multi-file risky changes', () => {
+    const result = chooseModel(
+      [{ role: 'user', content: 'Across the repo, refactor several files and rename shared props.' }],
+      {
+        multiFileIntent: true,
+        touchedFiles: ['src/components/A.tsx', 'src/components/B.tsx'],
+      },
+    );
+
+    expect(result.model).not.toBe('gpt-5.4-nano');
+    expect(['gpt-5.4-mini', 'gpt-5.4']).toContain(result.model);
   });
 
   it('forces full model and at least medium reasoning for repo-wide strong_spec audits', () => {

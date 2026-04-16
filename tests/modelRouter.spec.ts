@@ -27,14 +27,14 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
   test('3) simple codegen -> mini low/medium / codegen-or-refactor', () => {
     const res = chooseModel(mk('Напиши функцию на TypeScript: function sum(a,b) { return a+b }'));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(res.reasoning).toBeUndefined();
+    expect(['low', 'medium']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('codegen-or-refactor');
   });
 
   test('4) short refactor -> mini medium / codegen-or-refactor', () => {
     const res = chooseModel(mk('Рефакторни эту функцию, сделай чище. ```ts\nexport function a(x:number){return x+1}\n```'));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(res.reasoning).toBeUndefined();
+    expect(['low', 'medium']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('codegen-or-refactor');
   });
 
@@ -42,7 +42,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     const long = '```ts\n' + 'const x = 1;\n'.repeat(400) + '```\nРефакторни файл целиком';
     const res = chooseModel(mk(long));
     expect(res.model).toBe('gpt-5.4');
-    expect(res.reasoning).toBeUndefined();
+    expect(res.reasoning?.effort).toBe('high');
     expect(res.reason).toBe('codegen-or-refactor-long-or-complex');
   });
 
@@ -86,7 +86,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
   test('11) PM/status request -> mini low/medium / pm-or-status-or-ci-cd-or-deploy', () => {
     const res = chooseModel(mk('Дай статус по issue #123 и следующий шаг.'));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(res.reasoning).toBeUndefined();
+    expect(['low', 'medium']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('pm-or-status-or-ci-cd-or-deploy');
   });
 
@@ -94,7 +94,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     const txt = 'Vercel deployment log: build failed. workflow CI failed.\n' + 'line\n'.repeat(200);
     const res = chooseModel(mk(txt));
     expect(res.model).toBe('gpt-5.4-mini');
-    expect(res.reasoning).toBeUndefined();
+    expect(['medium', 'high']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('pm-or-status-or-ci-cd-or-deploy');
   });
 
@@ -106,7 +106,7 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     msgs.push({ role: 'user', content: 'Продолжай, но учти весь контекст' });
     const res = chooseModel(msgs as any);
     expect(res.model).toBe('gpt-5.4');
-    expect(res.reasoning).toBeUndefined();
+    expect(['medium', 'high']).toContain(res.reasoning?.effort);
     expect(res.reason).toBe('long-context-general');
   });
 
@@ -135,6 +135,18 @@ describe('modelRouter.chooseModel (gpt-5.4 family)', () => {
     expect(res.reason).toBe('repo-audit-or-spec-compliance');
   });
 
+  test('17) multi-file risky changes never stay on nano', () => {
+    const res = chooseModel(
+      mk('Across the repo, refactor and rename props in several files. Return JSON summary only.'),
+      {
+        multiFileIntent: true,
+        touchedFiles: ['src/components/A.tsx', 'src/components/B.tsx'],
+      },
+    );
+    expect(res.model).not.toBe('gpt-5.4-nano');
+    expect(['gpt-5.4-mini', 'gpt-5.4']).toContain(res.model);
+    expect(['low', 'medium', 'high', 'xhigh']).toContain(res.reasoning?.effort ?? 'low');
+  });
 
   test('18) strong_spec and Responses API mention alone do not force repo audit', () => {
     const txt =

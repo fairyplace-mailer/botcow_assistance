@@ -76,7 +76,8 @@ export async function retrieveDevWixContext(opts: {
        JOIN knowledge_sources s ON s.id = d.source_id
        WHERE s.source_key = '${DEV_WIX_SOURCE_KEY}'
          AND s.status = 'active'
-         AND d.document_status = 'ready';`,
+         AND d.document_status = 'ready'
+         AND c.is_active = true;`,
     )) as Array<{ count: number | string }>;
 
     const officialChunks = Number(budgetRows[0]?.count ?? 0);
@@ -98,6 +99,7 @@ export async function retrieveDevWixContext(opts: {
        JOIN knowledge_documents d ON d.id = c.document_id
        JOIN knowledge_sources s ON s.id = d.source_id
        WHERE c.embedding IS NOT NULL
+         AND c.is_active = true
          AND s.source_key = '${DEV_WIX_SOURCE_KEY}'
          AND s.status = 'active'
          AND d.document_status = 'ready'

@@ -12,14 +12,14 @@ https://dev.wix.com/docs/api-reference/app-management/app-permissions
 https://dev.wix.com/docs/api-reference/app-management/bi-event
 https://dev.wix.com/docs/api-reference/app-management/editor-deep-link
 https://dev.wix.com/docs/api-reference/app-management/embedded-scripts
+https://dev.wix.com/docs/api-reference/app-management/market-listing-v1
 https://dev.wix.com/docs/api-reference/app-management/oauth-2
 https://dev.wix.com/docs/api-reference/app-management/site-plugins
 https://dev.wix.com/docs/api-reference/articles
-https://dev.wix.com/docs/api-reference/articles/ai-apis
+https://dev.wix.com/docs/api-reference/articles/ai-tools
 https://dev.wix.com/docs/api-reference/articles/authentication
 https://dev.wix.com/docs/api-reference/articles/platform-overview
 https://dev.wix.com/docs/api-reference/articles/sdk-setup-and-usage
-https://dev.wix.com/docs/api-reference/articles/wix-mcp
 https://dev.wix.com/docs/api-reference/articles/work-with-wix-apis
 https://dev.wix.com/docs/api-reference/assets
 https://dev.wix.com/docs/api-reference/assets/http-functions
@@ -110,6 +110,7 @@ https://dev.wix.com/docs/build-apps/manage-your-app/user-support
 https://dev.wix.com/docs/build-apps/manage-your-app/versioning
 https://dev.wix.com/docs/develop-websites-sdk
 https://dev.wix.com/docs/develop-websites-sdk/code-your-site
+https://dev.wix.com/docs/develop-websites-sdk/code-your-site/account-level-development
 https://dev.wix.com/docs/develop-websites-sdk/code-your-site/authorization
 https://dev.wix.com/docs/develop-websites-sdk/code-your-site/best-practices
 https://dev.wix.com/docs/develop-websites-sdk/code-your-site/build-a-custom-backend

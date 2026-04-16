@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { requireAdminBearerAuth } from '../../../../../backend/auth/adminAuth';
-import { withKnowledgeJob } from '../../../../../backend/knowledgeJobs';
 import { ingestDevWixArticles } from '../../../../../backend/devWixDocs/ingest';
-import { DEV_WIX_SOURCE_KEY } from '../../../../../backend/devWixDocs/seedManifest';
 
 export const runtime = 'nodejs';
 
@@ -22,32 +20,9 @@ export async function POST(req: Request) {
       opts.maxChunksPerRun = maxChunksPerRun;
     }
 
-    const { jobId, result } = await withKnowledgeJob(
-      {
-        sourceKey: DEV_WIX_SOURCE_KEY,
-        jobKind: 'ingest',
-        batchLimit: limitPages,
-      },
-      async () => {
-        const r = await ingestDevWixArticles(opts);
-        return {
-          result: r,
-          finish: {
-            processed: r.fetched,
-            updated: r.stored,
-            skipped: r.skippedUnchanged,
-            metaJson: {
-              stoppedReason: r.stoppedReason ?? null,
-              maxChunksPerRun: maxChunksPerRun ?? null,
-              chunksUpserted: r.chunksUpserted,
-              discoveredQueued: r.discoveredQueued,
-            },
-          },
-        };
-      },
-    );
+    const result = await ingestDevWixArticles(opts);
 
-    return NextResponse.json({ ok: true, jobId, result });
+    return NextResponse.json({ ok: true, jobId: result.jobId, result });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
   }

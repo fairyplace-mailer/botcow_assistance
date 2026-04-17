@@ -1,4 +1,7 @@
-export type ToolExecutionFailureCode = 'tool_timeout' | 'tool_execution_failed';
+export type ToolExecutionFailureCode =
+  | 'tool_timeout'
+  | 'tool_execution_failed'
+  | 'tool_not_allowed';
 
 export async function runToolWithTimeout(params: {
   name: string;
@@ -25,6 +28,14 @@ export async function runToolWithTimeout(params: {
   } catch (error: any) {
     if (error?.name === 'TimeoutError') {
       return { ok: false, code: 'tool_timeout', error: error.message };
+    }
+
+    if (error?.code === 'tool_not_allowed' || error?.name === 'ToolPolicyError') {
+      return {
+        ok: false,
+        code: 'tool_not_allowed',
+        error: error?.message ? String(error.message) : String(error),
+      };
     }
 
     return {

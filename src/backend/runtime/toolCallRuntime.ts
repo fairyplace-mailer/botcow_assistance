@@ -91,7 +91,12 @@ export async function executePreparedToolCall(params: {
   execute: (name: string, args: unknown) => Promise<unknown>;
 }): Promise<
   | { ok: true; output: unknown; toolLatencyMs: number }
-  | { ok: false; code: 'tool_timeout' | 'tool_execution_failed'; error?: string; toolLatencyMs: number }
+  | {
+      ok: false;
+      code: 'tool_timeout' | 'tool_execution_failed' | 'tool_not_allowed';
+      error?: string;
+      toolLatencyMs: number;
+    }
 > {
   const startedToolAt = Date.now();
 

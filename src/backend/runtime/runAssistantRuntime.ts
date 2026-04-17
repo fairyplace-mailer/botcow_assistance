@@ -4,6 +4,7 @@ import type { Response } from 'openai/resources/responses/responses';
 import type { AssistantInternalCode, AssistantResult, RunAssistantTurnParams } from '../assistant';
 import { compactAssistantMessages } from '../compaction';
 import { buildExecutionProfile } from '../guards/assistantExecutionProfile';
+import { filterToolsForMode } from '../guards/toolPolicy';
 import { logEvent, logInfo, logWarn } from '../log';
 import { getOpenAIClient } from '../openai';
 import { getResponsesRuntimeCapabilities } from '../openaiRuntime';
@@ -30,7 +31,8 @@ type ToolResultClass =
   | 'invalid_tool_args_schema'
   | 'unknown_tool'
   | 'tool_timeout'
-  | 'tool_execution_failed';
+  | 'tool_execution_failed'
+  | 'tool_not_allowed';
 
 const MAX_NO_PROGRESS_ROUNDS = 2;
 
@@ -134,7 +136,9 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
   let sameFingerprintInRow = 0;
 
   const openai = getOpenAIClient();
-  const tools = buildStrictFunctionTools(params.tools ?? getToolsSchemas() ?? []);
+  const tools = buildStrictFunctionTools(
+    filterToolsForMode(params.tools ?? getToolsSchemas(executionProfile.mode) ?? [], executionProfile.mode),
+  );
   const toolContract = validateResponsesToolsContract(tools);
   const invalidToolContract = toolContract.ok
     ? null
@@ -534,7 +538,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         name: call.name,
         normalizedArgs,
         timeoutMs: executionProfile.toolTimeoutMs,
-        execute: handleToolCall,
+        execute: (name, args) => handleToolCall(name, args, executionProfile.mode),
       });
       const toolLatencyMs = result.toolLatencyMs;
 
@@ -542,7 +546,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         ? null
         : (result as {
             ok: false;
-            code: 'tool_timeout' | 'tool_execution_failed';
+            code: 'tool_timeout' | 'tool_execution_failed' | 'tool_not_allowed';
             error?: string;
             toolLatencyMs: number;
           });
@@ -550,7 +554,11 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         lastFingerprint = fingerprint;
         toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: failedToolResult.code });
         const error = abort(
-          failedToolResult.code === 'tool_timeout' ? 'tool_timeout' : 'tool_execution_failed',
+          failedToolResult.code === 'tool_timeout'
+            ? 'tool_timeout'
+            : failedToolResult.code === 'tool_not_allowed'
+              ? 'tool_not_allowed'
+              : 'tool_execution_failed',
           response.id,
         );
         await logFatalStop('assistant_run_failed', {

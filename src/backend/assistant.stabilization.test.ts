@@ -372,7 +372,7 @@ describe('runAssistant stabilization', () => {
 
     expect(result.error).toBeUndefined();
     expect(mockedHandleToolCall).toHaveBeenCalledTimes(1);
-    expect(mockedHandleToolCall).toHaveBeenCalledWith('demo_tool', { value: 'x' });
+    expect(mockedHandleToolCall).toHaveBeenCalledWith('demo_tool', { value: 'x' }, 'default');
   });
 
   it('fails fast on invalid tool args schema when required nullable field is omitted', async () => {

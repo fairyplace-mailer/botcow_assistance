@@ -15,6 +15,7 @@ export type AssistantInternalCode =
   | 'invalid_tool_args_json'
   | 'invalid_tool_args_schema'
   | 'unknown_tool'
+  | 'tool_not_allowed'
   | 'tool_timeout'
   | 'tool_execution_failed'
   | 'repeated_tool_call'

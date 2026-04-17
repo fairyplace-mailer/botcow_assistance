@@ -1,4 +1,5 @@
 import type OpenAI from 'openai';
+import { assertToolAllowed, filterToolsForMode, type ToolPolicyMode } from './guards/toolPolicy';
 import { toolsHandlers, toolsSchemas } from './tools/index';
 
 export const toolSchemas = toolsSchemas;
@@ -19,11 +20,17 @@ function normalizeResponsesTool(tool: any): OpenAI.Responses.Tool {
   return tool as OpenAI.Responses.Tool;
 }
 
-export function getToolsSchemas(): OpenAI.Responses.Tool[] {
-  return toolsSchemas.map(normalizeResponsesTool);
+export function getToolsSchemas(mode: ToolPolicyMode = 'default'): OpenAI.Responses.Tool[] {
+  return filterToolsForMode(toolsSchemas.map(normalizeResponsesTool), mode);
 }
 
-export async function handleToolCall(name: string, args: any) {
+export async function handleToolCall(
+  name: string,
+  args: any,
+  mode: ToolPolicyMode = 'default',
+) {
+  assertToolAllowed(name, mode);
+
   const handler = (toolsHandlers as any)[name];
   if (!handler) {
     throw new Error(`Unknown tool: ${name}`);

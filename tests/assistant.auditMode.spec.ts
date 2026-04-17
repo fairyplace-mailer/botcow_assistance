@@ -37,12 +37,12 @@ describe('assistant audit mode', () => {
     mockedGetToolsSchemas.mockReturnValue([
       {
         type: 'function',
-        name: 'demo_tool',
-        description: 'demo',
+        name: 'github_get_file',
+        description: 'read file',
         parameters: {
           type: 'object',
-          properties: { value: { type: 'string' } },
-          required: ['value'],
+          properties: { path: { type: 'string' } },
+          required: ['path'],
           additionalProperties: false,
         },
       } as any,
@@ -61,14 +61,14 @@ describe('assistant audit mode', () => {
             {
               type: 'function_call',
               call_id: `call-${round}-a`,
-              name: 'demo_tool',
-              arguments: JSON.stringify({ value: `round-${round}-a` }),
+              name: 'github_get_file',
+              arguments: JSON.stringify({ path: `src/file-${round}-a.ts` }),
             },
             {
               type: 'function_call',
               call_id: `call-${round}-b`,
-              name: 'demo_tool',
-              arguments: JSON.stringify({ value: `round-${round}-b` }),
+              name: 'github_get_file',
+              arguments: JSON.stringify({ path: `src/file-${round}-b.ts` }),
             },
           ],
         }),

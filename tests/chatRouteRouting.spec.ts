@@ -92,6 +92,7 @@ describe('chat route routing contract', () => {
     expect(res.status).toBe(200);
     expect(planAssistantTurn).toHaveBeenCalledWith({
       messages: [{ role: 'user', content: 'analyze stack trace' }],
+      hints: undefined,
     });
     expect(runAssistant).toHaveBeenCalledWith({
       instructions: 'CORE_INSTRUCTIONS',
@@ -346,14 +347,99 @@ describe('chat route routing contract', () => {
     });
   });
 
-  test('rejects client-supplied routing hints', async () => {
+  test('passes normalized routing hints to orchestrator', async () => {
+    const plan = {
+      normalizedHints: {
+        touchedFiles: ['src/backend/runtime/runAssistantRuntime.ts', 'docs/strong_spec.md'],
+        previousAttemptFailed: true,
+        hasSourceConflict: true,
+        toolHeavy: true,
+        multiFileIntent: true,
+        longContextSize: 2048,
+        ragSourceCount: 3,
+      },
+      routing: {
+        model: 'gpt-5.4',
+        reasoning: { effort: 'xhigh' },
+        reason: 'repo-audit-or-spec-compliance',
+      },
+      execution: {
+        model: 'gpt-5.4',
+        reasoningEffort: 'xhigh',
+        responseVerbosity: 'medium',
+        maxOutputTokens: 24000,
+        toolUsePolicy: 'tool_first',
+      },
+      instructions: 'CORE_INSTRUCTIONS',
+      run: {
+        model: 'gpt-5.4',
+        reasoning: { effort: 'xhigh' },
+        reason: 'repo-audit-or-spec-compliance',
+        text: { verbosity: 'medium' },
+        maxOutputTokens: 24000,
+      },
+    };
+
+    (planAssistantTurn as jest.Mock).mockReturnValue(plan);
+    (runAssistant as jest.Mock).mockResolvedValue({
+      response: {
+        id: 'resp_hints',
+        model: 'gpt-5.4',
+        output_text: 'done',
+      },
+      toolCalls: [],
+      reasoningDecision: {
+        requestedReasoningEffort: 'xhigh',
+        sentReasoningEffort: 'xhigh',
+        reasoningSuppressedReason: null,
+      },
+      state: { previousResponseId: 'resp_hints' },
+    });
+
     const res = await POST(
       new Request('http://localhost/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           messages: [{ role: 'user', content: 'hello' }],
-          hints: { toolHeavy: true },
+          hints: {
+            touchedFiles: [' src/backend/runtime/runAssistantRuntime.ts ', 'docs/strong_spec.md', 'docs/strong_spec.md'],
+            previousAttemptFailed: true,
+            ragSourceCount: 3.9,
+            hasSourceConflict: true,
+            toolHeavy: true,
+            multiFileIntent: true,
+            longContextSize: 2048.7,
+          },
+        }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(planAssistantTurn).toHaveBeenCalledWith({
+      messages: [{ role: 'user', content: 'hello' }],
+      hints: {
+        touchedFiles: ['src/backend/runtime/runAssistantRuntime.ts', 'docs/strong_spec.md'],
+        previousAttemptFailed: true,
+        ragSourceCount: 3,
+        hasSourceConflict: true,
+        toolHeavy: true,
+        multiFileIntent: true,
+        longContextSize: 2048,
+      },
+    });
+  });
+
+  test('rejects invalid routing hints payload', async () => {
+    const res = await POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: 'hello' }],
+          hints: { toolHeavy: 'yes', unknownKey: true },
         }),
       }),
     );

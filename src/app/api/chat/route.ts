@@ -6,6 +6,7 @@ import { runAssistant } from '../../../backend/assistant';
 import type { ChatMessage, ChatRequestBody, ChatRole } from '../../../backend/contracts/chat';
 import { logEvent } from '../../../backend/log';
 import { planAssistantTurn } from '../../../backend/orchestrator/planAssistantTurn';
+import type { ChatRoutingHints } from '../../../backend/orchestrator/routingHints';
 import { normalizePublicChatError, normalizePublicChatSuccess } from '../../../backend/responses';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -80,18 +81,101 @@ function normalizeState(input: unknown): ChatRequestBody['state'] {
   return { previousResponseId };
 }
 
+const HINT_KEYS = new Set<keyof ChatRoutingHints>([
+  'touchedFiles',
+  'previousAttemptFailed',
+  'ragSourceCount',
+  'hasSourceConflict',
+  'toolHeavy',
+  'multiFileIntent',
+  'longContextSize',
+]);
+
+function normalizeBooleanHint(value: unknown): boolean | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') return null;
+  return value;
+}
+
+function normalizeCountHint(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  if (value < 0) return null;
+  return Math.floor(value);
+}
+
+function normalizeTouchedFilesHint(value: unknown): string[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+
+  const normalized: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') return null;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    if (trimmed.length > 512) return null;
+    if (!normalized.includes(trimmed)) normalized.push(trimmed);
+    if (normalized.length > 64) return null;
+  }
+
+  return normalized;
+}
+
+function normalizeHints(input: unknown): ChatRequestBody['hints'] | null | undefined {
+  if (input === undefined) return undefined;
+  if (!isPlainObject(input)) return null;
+
+  for (const key of Object.keys(input)) {
+    if (!HINT_KEYS.has(key as keyof ChatRoutingHints)) return null;
+  }
+
+  const touchedFiles = normalizeTouchedFilesHint(input.touchedFiles);
+  if (touchedFiles === null) return null;
+
+  const previousAttemptFailed = normalizeBooleanHint(input.previousAttemptFailed);
+  if (previousAttemptFailed === null) return null;
+
+  const ragSourceCount = normalizeCountHint(input.ragSourceCount);
+  if (ragSourceCount === null) return null;
+
+  const hasSourceConflict = normalizeBooleanHint(input.hasSourceConflict);
+  if (hasSourceConflict === null) return null;
+
+  const toolHeavy = normalizeBooleanHint(input.toolHeavy);
+  if (toolHeavy === null) return null;
+
+  const multiFileIntent = normalizeBooleanHint(input.multiFileIntent);
+  if (multiFileIntent === null) return null;
+
+  const longContextSize = normalizeCountHint(input.longContextSize);
+  if (longContextSize === null) return null;
+
+  const hints: ChatRoutingHints = {};
+  if (touchedFiles !== undefined) hints.touchedFiles = touchedFiles;
+  if (previousAttemptFailed !== undefined) hints.previousAttemptFailed = previousAttemptFailed;
+  if (ragSourceCount !== undefined) hints.ragSourceCount = ragSourceCount;
+  if (hasSourceConflict !== undefined) hints.hasSourceConflict = hasSourceConflict;
+  if (toolHeavy !== undefined) hints.toolHeavy = toolHeavy;
+  if (multiFileIntent !== undefined) hints.multiFileIntent = multiFileIntent;
+  if (longContextSize !== undefined) hints.longContextSize = longContextSize;
+
+  return hints;
+}
+
 function normalizeRequestBody(body: unknown): ChatRequestBody | null {
   if (!isPlainObject(body)) return null;
-  if (body.hints !== undefined) return null;
 
   const messages = normalizeMessages(body.messages);
   if (!messages) return null;
 
   const state = normalizeState(body.state);
+  const hints = normalizeHints(body.hints);
+  if (hints === null) return null;
 
   return {
     messages,
     ...(state ? { state } : {}),
+    ...(hints ? { hints } : {}),
   };
 }
 
@@ -236,6 +320,7 @@ export async function POST(req: Request) {
     const messages = body.messages;
     const plan = planAssistantTurn({
       messages,
+      hints: body.hints,
     });
 
     const result = await runAssistant({

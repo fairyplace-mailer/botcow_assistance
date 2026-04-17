@@ -152,9 +152,8 @@ export default function Page() {
     }
 
     const newMessage: Message = { role: 'user', content: input.trim() };
-    const nextMessages = [...messages, newMessage];
 
-    setMessages(nextMessages);
+    setMessages((prev) => [...prev, newMessage]);
     setInput('');
     setChatLoading(true);
     setChatError(null);
@@ -167,7 +166,7 @@ export default function Page() {
           'x-botcow-session-id': sessionIdRef.current || getOrCreateSessionId(),
         },
         body: JSON.stringify({
-          messages: nextMessages,
+          messages: [newMessage],
           state: chatStateRef.current,
         }),
       });
@@ -178,12 +177,9 @@ export default function Page() {
         throw new Error(data?.error?.message || `HTTP ${res.status}`);
       }
 
-      chatStateRef.current = {
-        ...(data.response.state.conversationId ? { conversationId: data.response.state.conversationId } : {}),
-        ...(data.response.state.previousResponseId
-          ? { previousResponseId: data.response.state.previousResponseId }
-          : {}),
-      };
+      chatStateRef.current = data.response.state.previousResponseId
+        ? { previousResponseId: data.response.state.previousResponseId }
+        : {};
 
       const reply: Message = {
         role: 'assistant' as Role,
@@ -192,7 +188,7 @@ export default function Page() {
 
       setMessages((prev) => [...prev, reply]);
       void saveRecentChatSession({
-        messages: [...nextMessages, reply],
+        messages: [...messages, newMessage, reply],
         state: chatStateRef.current,
       });
     } catch (err: any) {

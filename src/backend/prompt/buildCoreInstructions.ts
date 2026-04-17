@@ -1,4 +1,4 @@
-import type { ChatRoutingHints } from '../contracts/chat';
+import type { ChatRoutingHints } from '../orchestrator/routingHints';
 import type { ModelRoutingDecision } from '../modelRouter';
 import type { AssistantExecutionContract } from '../orchestrator/contracts';
 import {

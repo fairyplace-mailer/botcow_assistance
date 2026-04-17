@@ -27,7 +27,6 @@ function statePathSupportsReasoning(params: {
   stateMode: ResponsesStateMode;
   pendingInput?: OpenAI.Responses.ResponseInputItem[];
 }): boolean {
-  if (params.stateMode.kind === 'conversation') return true;
   if (params.stateMode.kind === 'previous_response') return true;
 
   return !pendingInputNeedsReasoningStateCarry(params.pendingInput);

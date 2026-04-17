@@ -4,6 +4,7 @@ import type { Response } from 'openai/resources/responses/responses';
 import type { AssistantInternalCode, AssistantResult, RunAssistantTurnParams } from '../assistant';
 import { compactAssistantMessages } from '../compaction';
 import { buildExecutionProfile } from '../guards/assistantExecutionProfile';
+import { filterToolsForMode } from '../guards/toolPolicy';
 import { logEvent, logInfo, logWarn } from '../log';
 import { getOpenAIClient } from '../openai';
 import { getResponsesRuntimeCapabilities } from '../openaiRuntime';
@@ -30,7 +31,8 @@ type ToolResultClass =
   | 'invalid_tool_args_schema'
   | 'unknown_tool'
   | 'tool_timeout'
-  | 'tool_execution_failed';
+  | 'tool_execution_failed'
+  | 'tool_not_allowed';
 
 const MAX_NO_PROGRESS_ROUNDS = 2;
 
@@ -72,10 +74,9 @@ async function logFatalStop(event: string, payload: Parameters<typeof logWarn>[1
   await logWarn(event, { ...payload, finalStatus: 'failed' });
 }
 
-function buildFailureState(conversationId: string | null, responseId?: string | null) {
+function buildFailureState(responseId?: string | null) {
   return {
-    conversationId,
-    latestResponseId: responseId ?? null,
+    previousResponseId: responseId ?? null,
   };
 }
 
@@ -120,22 +121,37 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
     baseInstructions: params.instructions,
     detectionText: `${params.instructions}\n${allMessagesText(requestMessages)}`,
   });
+  const toolPolicyMode = executionProfile.readOnlyTools ? 'repo_audit' : 'default';
 
-  const effectiveInstructions = await buildContextAugmentedInstructions({
+  const contextAugmentation = await buildContextAugmentedInstructions({
     instructions: executionProfile.instructions,
     messages: requestMessages,
+  });
+  const effectiveInstructions = contextAugmentation.instructions;
+
+  await logInfo('assistant_context_retrieval_status', {
+    traceId,
+    userTurnId,
+    assistantMode: executionProfile.mode,
+    retrievalStatus: contextAugmentation.retrieval.status,
+    retrievalSource: contextAugmentation.retrieval.source,
+    retrievalQuery: contextAugmentation.retrieval.query,
+    finalStatus: 'in_progress',
+    duration: Date.now() - startedAt,
   });
 
   let pendingInput = normalizeMessagesToInput(requestMessages);
   let previousResponseId: string | undefined = params.state.previousResponseId;
-  let currentConversationId: string | null = params.state.conversationId ?? null;
+  let currentConversationId: string | null = null;
   let totalToolCalls = 0;
   let noProgressRounds = 0;
   let lastFingerprint: string | null = null;
   let sameFingerprintInRow = 0;
 
   const openai = getOpenAIClient();
-  const tools = buildStrictFunctionTools(params.tools ?? getToolsSchemas() ?? []);
+  const tools = buildStrictFunctionTools(
+    filterToolsForMode(params.tools ?? getToolsSchemas(toolPolicyMode) ?? [], toolPolicyMode),
+  );
   const toolContract = validateResponsesToolsContract(tools);
   const invalidToolContract = toolContract.ok
     ? null
@@ -146,7 +162,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
     await logFatalStop('assistant_run_failed', {
       traceId,
       userTurnId,
-      conversationId: currentConversationId,
       assistantMode: executionProfile.mode,
       stopReason: error.internalCode,
       schemaValid: false,
@@ -158,7 +173,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
       response: null,
       toolCalls: toolCallsLog,
       reasoningDecision: lastReasoningDecision,
-      state: buildFailureState(currentConversationId, previousResponseId),
+      state: buildFailureState(previousResponseId),
       error,
     };
   }
@@ -167,7 +182,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
     const runtimeCapabilities = getResponsesRuntimeCapabilities();
 
     const stateMode = selectResponsesStateMode({
-      ...(currentConversationId ? { conversationId: currentConversationId } : {}),
       ...(previousResponseId ? { previousResponseId } : {}),
     });
 
@@ -179,14 +193,12 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
 
     const requestPreviousResponseId =
       stateMode.kind === 'previous_response' ? stateMode.previousResponseId : undefined;
-    const requestConversationId =
-      stateMode.kind === 'conversation' ? stateMode.conversation.id : currentConversationId;
+    const requestConversationId = currentConversationId;
 
     await logInfo('assistant_round_started', {
       traceId,
       userTurnId,
       round,
-      conversationId: requestConversationId,
       previousResponseId: requestPreviousResponseId ?? null,
       totalToolCalls,
       model: params.routing.model,
@@ -221,7 +233,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
               traceId,
               userTurnId,
               round,
-              conversationId: requestConversationId,
               previousResponseId: requestPreviousResponseId ?? null,
               model: params.routing.model,
               modelReason: params.routing.reason,
@@ -246,7 +257,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         traceId,
         userTurnId,
         round,
-        conversationId: requestConversationId,
         previousResponseId: requestPreviousResponseId ?? null,
         totalToolCalls,
         model: params.routing.model,
@@ -265,14 +275,13 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         response: lastResponse,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: buildFailureState(currentConversationId, previousResponseId),
+        state: buildFailureState(previousResponseId),
         error: failure,
       };
     }
 
     lastResponse = response;
     previousResponseId = response.id;
-    currentConversationId = extractConversationId(response, currentConversationId);
 
     const functionCalls = extractFunctionCalls((response as any).output);
     const finalMessage = extractFinalAssistantMessage(response);
@@ -282,7 +291,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
       traceId,
       userTurnId,
       round,
-      conversationId: currentConversationId,
       responseId: response.id ?? null,
       previousResponseId: requestPreviousResponseId ?? null,
       totalToolCalls,
@@ -318,7 +326,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
       runtimeReasoningSupport: runtimeCapabilities.reasoning,
       runtimeKind: runtimeCapabilities.runtimeKind,
       apiBaseUrl: runtimeCapabilities.apiBaseUrl,
-      conversationId: currentConversationId,
       previousResponseId: requestPreviousResponseId ?? null,
       responseId: response.id ?? null,
       round,
@@ -348,7 +355,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         traceId,
         userTurnId,
         round,
-        conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         totalToolCalls,
@@ -366,7 +372,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         response,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: buildFailureState(currentConversationId, response.id),
+        state: buildFailureState(response.id),
         error,
       };
     }
@@ -375,7 +381,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
       await logInfo('assistant_run_completed', {
         traceId,
         userTurnId,
-        conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         totalToolCalls,
@@ -394,8 +399,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         toolCalls: toolCallsLog,
         reasoningDecision,
         state: {
-          conversationId: currentConversationId,
-          latestResponseId: response.id ?? null,
+          previousResponseId: response.id ?? null,
         },
       };
     }
@@ -406,7 +410,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         traceId,
         userTurnId,
         round,
-        conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         assistantMode: executionProfile.mode,
@@ -418,7 +421,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         response,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: buildFailureState(currentConversationId, response.id),
+        state: buildFailureState(response.id),
         error,
       };
     }
@@ -435,7 +438,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         traceId,
         userTurnId,
         round,
-        conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         assistantMode: executionProfile.mode,
@@ -448,7 +450,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         response,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: buildFailureState(currentConversationId, response.id),
+        state: buildFailureState(response.id),
         error,
       };
     }
@@ -476,7 +478,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
           traceId,
           userTurnId,
           round,
-          conversationId: currentConversationId,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -495,7 +496,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
           response,
           toolCalls: toolCallsLog,
           reasoningDecision,
-          state: buildFailureState(currentConversationId, response.id),
+          state: buildFailureState(response.id),
           error,
         };
       }
@@ -524,7 +525,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
           traceId,
           userTurnId,
           round,
-          conversationId: currentConversationId,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -542,7 +542,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
           response,
           toolCalls: toolCallsLog,
           reasoningDecision,
-          state: buildFailureState(currentConversationId, response.id),
+          state: buildFailureState(response.id),
           error,
         };
       }
@@ -551,7 +551,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         name: call.name,
         normalizedArgs,
         timeoutMs: executionProfile.toolTimeoutMs,
-        execute: handleToolCall,
+        execute: (name, args) => handleToolCall(name, args, toolPolicyMode),
       });
       const toolLatencyMs = result.toolLatencyMs;
 
@@ -559,7 +559,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         ? null
         : (result as {
             ok: false;
-            code: 'tool_timeout' | 'tool_execution_failed';
+            code: 'tool_timeout' | 'tool_execution_failed' | 'tool_not_allowed';
             error?: string;
             toolLatencyMs: number;
           });
@@ -567,14 +567,17 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         lastFingerprint = fingerprint;
         toolCallsLog.push({ tool_call_id: call.call_id, name: call.name, ok: false, error: failedToolResult.code });
         const error = abort(
-          failedToolResult.code === 'tool_timeout' ? 'tool_timeout' : 'tool_execution_failed',
+          failedToolResult.code === 'tool_timeout'
+            ? 'tool_timeout'
+            : failedToolResult.code === 'tool_not_allowed'
+              ? 'tool_not_allowed'
+              : 'tool_execution_failed',
           response.id,
         );
         await logFatalStop('assistant_run_failed', {
           traceId,
           userTurnId,
           round,
-          conversationId: currentConversationId,
           responseId: response.id ?? null,
           previousResponseId: requestPreviousResponseId ?? null,
           toolName: call.name,
@@ -594,7 +597,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
           response,
           toolCalls: toolCallsLog,
           reasoningDecision,
-          state: buildFailureState(currentConversationId, response.id),
+          state: buildFailureState(response.id),
           error,
         };
       }
@@ -619,7 +622,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         traceId,
         userTurnId,
         round,
-        conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         totalToolCalls,
@@ -658,7 +660,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         traceId,
         userTurnId,
         round,
-        conversationId: currentConversationId,
         responseId: response.id ?? null,
         previousResponseId: requestPreviousResponseId ?? null,
         assistantMode: executionProfile.mode,
@@ -674,7 +675,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         response,
         toolCalls: toolCallsLog,
         reasoningDecision,
-        state: buildFailureState(currentConversationId, response.id),
+        state: buildFailureState(response.id),
         error,
       };
     }
@@ -686,7 +687,6 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
   await logFatalStop('assistant_run_failed', {
     traceId,
     userTurnId,
-    conversationId: currentConversationId,
     responseId: lastResponse?.id ?? null,
     previousResponseId: previousResponseId ?? null,
     assistantMode: executionProfile.mode,
@@ -700,7 +700,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
     response: lastResponse,
     toolCalls: toolCallsLog,
     reasoningDecision: lastReasoningDecision,
-    state: buildFailureState(currentConversationId, previousResponseId),
+    state: buildFailureState(previousResponseId),
     error,
   };
 }

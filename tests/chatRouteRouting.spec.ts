@@ -70,8 +70,7 @@ describe('chat route routing contract', () => {
         reasoningSuppressedReason: null,
       },
       state: {
-        conversationId: 'conv_1',
-        latestResponseId: 'resp_1',
+        previousResponseId: 'resp_1',
       },
     });
 
@@ -83,8 +82,7 @@ describe('chat route routing contract', () => {
       },
       body: JSON.stringify({
         messages: [{ role: 'user', content: 'analyze stack trace' }],
-        hints: { toolHeavy: true },
-        state: { conversationId: 'conv_prev', previousResponseId: 'resp_prev' },
+        state: { previousResponseId: 'resp_prev' },
       }),
     });
 
@@ -94,7 +92,6 @@ describe('chat route routing contract', () => {
     expect(res.status).toBe(200);
     expect(planAssistantTurn).toHaveBeenCalledWith({
       messages: [{ role: 'user', content: 'analyze stack trace' }],
-      hints: { toolHeavy: true },
     });
     expect(runAssistant).toHaveBeenCalledWith({
       instructions: 'CORE_INSTRUCTIONS',
@@ -106,7 +103,7 @@ describe('chat route routing contract', () => {
         text: { verbosity: 'medium' },
         maxOutputTokens: 8000,
       },
-      state: { conversationId: 'conv_prev', previousResponseId: 'resp_prev' },
+      state: { previousResponseId: 'resp_prev' },
     });
     expect(body).toEqual({
       ok: true,
@@ -119,7 +116,6 @@ describe('chat route routing contract', () => {
         reason: 'deep-code-debug-review',
         reasoningEffort: 'high',
         state: {
-          conversationId: 'conv_1',
           previousResponseId: 'resp_1',
         },
       },
@@ -134,8 +130,7 @@ describe('chat route routing contract', () => {
         reasoningEffort: 'high',
         ok: true,
         responseId: 'resp_1',
-        conversationId: 'conv_1',
-        latestResponseId: 'resp_1',
+        previousResponseId: 'resp_1',
         toolCalls: 0,
       }),
     );
@@ -183,8 +178,7 @@ describe('chat route routing contract', () => {
         reasoningSuppressedReason: null,
       },
       state: {
-        conversationId: null,
-        latestResponseId: 'resp_2',
+        previousResponseId: 'resp_2',
       },
     });
 
@@ -201,7 +195,6 @@ describe('chat route routing contract', () => {
     expect(body.sessionId).toEqual(expect.any(String));
     expect(body.sessionId.length).toBeGreaterThan(0);
     expect(body.response.state).toEqual({
-      conversationId: null,
       previousResponseId: 'resp_2',
     });
   });
@@ -248,8 +241,7 @@ describe('chat route routing contract', () => {
           reasoningSuppressedReason: null,
         },
         state: {
-          conversationId: null,
-          latestResponseId: null,
+          previousResponseId: null,
         },
         error: {
           publicCode: 'assistant_run_failed',
@@ -354,6 +346,33 @@ describe('chat route routing contract', () => {
     });
   });
 
+  test('rejects client-supplied routing hints', async () => {
+    const res = await POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: 'hello' }],
+          hints: { toolHeavy: true },
+        }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body).toEqual({
+      ok: false,
+      sessionId: expect.any(String),
+      response: null,
+      error: {
+        code: 'invalid_messages',
+        message: 'Invalid messages.',
+      },
+    });
+    expect(planAssistantTurn).not.toHaveBeenCalled();
+    expect(runAssistant).not.toHaveBeenCalled();
+  });
+
   test('rejects empty messages array', async () => {
     const res = await POST(
       new Request('http://localhost/api/chat', {
@@ -392,7 +411,7 @@ describe('chat route routing contract', () => {
     expect(body.error?.code).toBe('invalid_messages');
   });
 
-  test('rejects request without user message', async () => {
+  test('rejects request without single user message', async () => {
     const res = await POST(
       new Request('http://localhost/api/chat', {
         method: 'POST',

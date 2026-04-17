@@ -15,10 +15,17 @@ jest.mock('../../src/backend/diagnostics/actionsDiagnostics', () => ({
 }));
 
 describe('tool schema contract', () => {
-  it('keeps all function tools compatible with strict Responses API requirements', () => {
+  it('keeps default function tools compatible with strict Responses API requirements', () => {
     const { getToolsSchemas } = require('../../src/backend/tools');
     const { validateResponsesToolsContract } = require('../../src/backend/responses');
 
     expect(validateResponsesToolsContract(getToolsSchemas())).toEqual({ ok: true });
+  });
+
+  it('keeps repo audit read-only tool subset compatible with strict Responses API requirements', () => {
+    const { getToolsSchemas } = require('../../src/backend/tools');
+    const { validateResponsesToolsContract } = require('../../src/backend/responses');
+
+    expect(validateResponsesToolsContract(getToolsSchemas('repo_audit'))).toEqual({ ok: true });
   });
 });

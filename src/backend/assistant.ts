@@ -15,6 +15,7 @@ export type AssistantInternalCode =
   | 'invalid_tool_args_json'
   | 'invalid_tool_args_schema'
   | 'unknown_tool'
+  | 'tool_not_allowed'
   | 'tool_timeout'
   | 'tool_execution_failed'
   | 'repeated_tool_call'
@@ -36,7 +37,6 @@ export type AssistantRunOptions = {
 };
 
 export type ConversationStateRef = {
-  conversationId?: string;
   previousResponseId?: string;
 };
 
@@ -58,8 +58,7 @@ export type AssistantResult = {
   }>;
   reasoningDecision: ReasoningDecision;
   state: {
-    conversationId: string | null;
-    latestResponseId: string | null;
+    previousResponseId: string | null;
   };
   error?: {
     publicCode: 'assistant_run_failed';

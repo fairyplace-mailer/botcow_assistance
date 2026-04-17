@@ -9,6 +9,7 @@ describe('assistantExecutionProfile', () => {
     });
 
     expect(profile.mode).toBe('default');
+    expect(profile.readOnlyTools).toBe(false);
   });
 
   test('switches to repo audit mode only for explicit audit requests', () => {
@@ -19,5 +20,6 @@ describe('assistantExecutionProfile', () => {
     });
 
     expect(profile.mode).toBe('repo_audit');
+    expect(profile.readOnlyTools).toBe(true);
   });
 });

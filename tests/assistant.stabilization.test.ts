@@ -21,14 +21,12 @@ function makeResponse(params: {
   output: any[];
   model?: string;
   output_text?: string;
-  conversationId?: string;
 }) {
   return {
     id: params.id,
     model: params.model ?? 'gpt-5.4-mini',
     output: params.output,
     output_text: params.output_text,
-    conversation: params.conversationId ? { id: params.conversationId } : undefined,
     usage: {
       input_tokens: 10,
       output_tokens: 5,
@@ -65,7 +63,6 @@ describe('assistant stabilization', () => {
         create: jest.fn().mockResolvedValue(
           makeResponse({
             id: 'resp-success',
-            conversationId: 'conv-success',
             output: [
               {
                 type: 'message',
@@ -88,8 +85,7 @@ describe('assistant stabilization', () => {
 
     expect(result.error).toBeUndefined();
     expect(result.state).toEqual({
-      conversationId: 'conv-success',
-      latestResponseId: 'resp-success',
+      previousResponseId: 'resp-success',
     });
 
     const events = getRecentRunEvents();
@@ -139,11 +135,10 @@ describe('assistant stabilization', () => {
     expect(warnEvent?.payload.stopReason).toBe('invalid_tool_args_json');
   });
 
-  it('uses conversation mode as priority and never mixes previous_response_id in same request', async () => {
+  it('uses previous_response_id on the first request when state is provided', async () => {
     const create = jest.fn().mockResolvedValue(
       makeResponse({
         id: 'resp-conversation',
-        conversationId: 'conv-1',
         output: [
           {
             type: 'message',
@@ -163,13 +158,13 @@ describe('assistant stabilization', () => {
       instructions: 'sys',
       messages: [{ role: 'user', content: 'hello' }],
       routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
-      state: { conversationId: 'conv-1', previousResponseId: 'resp-old' },
+      state: { previousResponseId: 'resp-old' },
     });
 
     expect(result.error).toBeUndefined();
     expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0][0].conversation).toEqual({ id: 'conv-1' });
-    expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
+    expect(create.mock.calls[0][0].conversation).toBeUndefined();
+    expect(create.mock.calls[0][0].previous_response_id).toBe('resp-old');
   });
 
   it('passes previous_response_id only on follow-up loop request when no conversation state exists', async () => {
@@ -272,4 +267,141 @@ describe('assistant stabilization', () => {
     expect(warnEvent?.payload.finalStatus).toBe('failed');
     expect(warnEvent?.payload.stopReason).toBe('repeated_tool_call');
   });
+
+  it('repo audit exposes only read-only tools to the model', async () => {
+    mockedGetToolsSchemas.mockReturnValue([
+      {
+        type: 'function',
+        name: 'github_get_file',
+        description: 'read file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      },
+      {
+        type: 'function',
+        name: 'github_commit_file',
+        description: 'write file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            content: { type: 'string' },
+          },
+          required: ['path', 'content'],
+          additionalProperties: false,
+        },
+      },
+    ] as any);
+
+    const create = jest.fn().mockResolvedValue(
+      makeResponse({
+        id: 'resp-audit-readonly',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+      }),
+    );
+
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: { create },
+    } as any);
+
+    const result = await runAssistant({
+      instructions: 'Treat docs/strong_spec.md as the primary project spec.',
+      messages: [
+        {
+          role: 'user',
+          content: 'Make a full audit against docs/strong_spec.md. Check strict mode and do not change anything.',
+        },
+      ],
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
+
+    expect(result.error).toBeUndefined();
+
+    const sentTools = create.mock.calls[0][0].tools ?? [];
+    const sentToolNames = sentTools
+      .map((tool: any) => tool?.name ?? tool?.function?.name)
+      .filter(Boolean);
+
+    expect(sentToolNames).toEqual(['github_get_file']);
+  });
+
+  it('repo audit blocks forced mutating tool calls before execution', async () => {
+    mockedGetToolsSchemas.mockReturnValue([
+      {
+        type: 'function',
+        name: 'github_get_file',
+        description: 'read file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      },
+      {
+        type: 'function',
+        name: 'github_commit_file',
+        description: 'write file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            content: { type: 'string' },
+          },
+          required: ['path', 'content'],
+          additionalProperties: false,
+        },
+      },
+    ] as any);
+
+    const create = jest.fn().mockResolvedValue(
+      makeResponse({
+        id: 'resp-audit-write-attempt',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call-1',
+            name: 'github_commit_file',
+            arguments: JSON.stringify({ path: 'README.md', content: 'x' }),
+          },
+        ],
+      }),
+    );
+
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: { create },
+    } as any);
+
+    const result = await runAssistant({
+      instructions: 'Treat docs/strong_spec.md as the primary project spec.',
+      messages: [
+        {
+          role: 'user',
+          content: 'Make a full audit against docs/strong_spec.md. Check strict mode and do not change anything.',
+        },
+      ],
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
+
+    expect(result.error?.internalCode).toBe('unknown_tool');
+    expect(mockedHandleToolCall).not.toHaveBeenCalled();
+  });
+
 });

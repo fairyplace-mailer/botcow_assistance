@@ -12,7 +12,6 @@ const runBuffers = new Map<string, RunEvent[]>();
 const LOG_SCHEMA_DEFAULTS: LogPayload = {
   traceId: null,
   userTurnId: null,
-  conversationId: null,
   responseId: null,
   previousResponseId: null,
   round: null,

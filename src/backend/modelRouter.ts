@@ -1,4 +1,4 @@
-import type { ChatRoutingHints } from './contracts/chat';
+import type { ChatRoutingHints } from './orchestrator/routingHints';
 import { looksLikeRepoAuditRequest } from './guards/repoAuditIntent';
 import { hasGoldenCoreTouch } from './guards/goldenCore';
 import { shouldUseReasoningByPolicy } from './guards/strongModePolicy';

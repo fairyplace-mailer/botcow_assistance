@@ -6,7 +6,6 @@ import type { ModelRoutingDecision } from './modelRouter';
 
 export type ResponsesStateMode =
   | { kind: 'stateless' }
-  | { kind: 'conversation'; conversation: { id: string } }
   | { kind: 'previous_response'; previousResponseId: string };
 
 export type ExtractedFunctionCall = {
@@ -213,9 +212,7 @@ export async function createModelResponse(params: {
     payload.max_output_tokens = params.maxOutputTokens;
   }
 
-  if (params.state.kind === 'conversation') {
-    payload.conversation = params.state.conversation;
-  } else if (params.state.kind === 'previous_response') {
+  if (params.state.kind === 'previous_response') {
     payload.previous_response_id = params.state.previousResponseId;
   }
 
@@ -290,7 +287,6 @@ export function normalizePublicChatSuccess(params: {
   routing: ModelRoutingDecision;
   deliveredReasoningEffort?: string | null;
   state: {
-    conversationId: string | null;
     previousResponseId: string | null;
   };
 }): PublicChatSuccess {

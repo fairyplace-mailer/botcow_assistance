@@ -1,4 +1,4 @@
-export type ChatRole = 'system' | 'developer' | 'user' | 'assistant';
+export type ChatRole = 'user';
 
 export type ChatMessageContentPart = {
   text?: string;
@@ -12,25 +12,14 @@ export type ChatMessage = {
   content: ChatMessageContent;
 };
 
-export type ChatRoutingHints = {
-  touchedFiles?: string[];
-  previousAttemptFailed?: boolean;
-  ragSourceCount?: number;
-  hasSourceConflict?: boolean;
-  toolHeavy?: boolean;
-  multiFileIntent?: boolean;
-  longContextSize?: number;
-};
 
 export type ChatStateRef = {
-  conversationId?: string;
   previousResponseId?: string;
 };
 
 export type ChatRequestBody = {
   messages: ChatMessage[];
   state?: ChatStateRef;
-  hints?: ChatRoutingHints;
 };
 
 export type PublicResponsePhase = 'final_answer' | 'commentary' | 'unknown';
@@ -43,7 +32,6 @@ export type NormalizedChatResponse = {
   reason: string;
   reasoningEffort: string | null;
   state: {
-    conversationId: string | null;
     previousResponseId: string | null;
   };
 };

@@ -1,4 +1,5 @@
-import type { ChatMessage, ChatRoutingHints } from '../contracts/chat';
+import type { ChatMessage } from '../contracts/chat';
+import type { ChatRoutingHints } from './routingHints';
 import { chooseModel, type ModelRoutingDecision } from '../modelRouter';
 import { buildCoreInstructions } from '../prompt/buildCoreInstructions';
 import { normalizeContentToText } from '../prompt/normalizeContentToText';

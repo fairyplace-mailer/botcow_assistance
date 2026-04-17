@@ -1,5 +1,5 @@
 import { prisma } from '../db';
-import { createKnowledgeJob, finishKnowledgeJob } from '../knowledgeJobs';
+import { createOrReuseKnowledgeJob, finishKnowledgeJob, markKnowledgeJobRunning } from '../knowledgeJobs';
 import { embedText } from '../openai';
 import { applyDevWixIngestDegradation, computeDevWixBudgetSnapshot } from './budgetPolicy';
 import { hashText } from './hash';
@@ -107,6 +107,14 @@ function embeddingToSqlVectorLiteral(embedding: number[]): string {
 
 function nowMs(): number {
   return Date.now();
+}
+
+function resolveIngestJobFinalStatus(reason: IngestStopReason | undefined): 'done' | 'paused' {
+  return reason === 'time_budget_exhausted' ||
+    reason === 'embed_budget_exhausted' ||
+    reason === 'budget_aggressive_stop'
+    ? 'paused'
+    : 'done';
 }
 
 function isDefinitivelyGone(status: number): boolean {
@@ -345,13 +353,15 @@ export async function ingestDevWixArticles(
     });
   }
 
-  const job = await createKnowledgeJob({
-    sourceKey: DEV_WIX_SOURCE_KEY,
+  const { job: jobRecord, reused } = await createOrReuseKnowledgeJob({
+    sourceId: source.id,
     jobKind: 'ingest',
     batchLimit: limitPages,
     cursor: startUrl,
   });
-  jobId = job.id;
+  jobId = jobRecord.id;
+
+  await markKnowledgeJobRunning(jobId);
 
   await logDevWixInfo('dev_wix_ingest_started', {
     jobId,
@@ -364,6 +374,8 @@ export async function ingestDevWixArticles(
     maxChunksPerPage,
     chunkTokens,
     overlapTokens,
+    reusedJob: reused,
+    reusedFromStatus: reused ? (jobRecord.jobStatus ?? null) : 'queued',
   });
 
   try {
@@ -374,7 +386,7 @@ export async function ingestDevWixArticles(
       const currentJobId = jobId;
       if (currentJobId) {
         await finishKnowledgeJob(currentJobId, {
-          status: 'done',
+          status: resolveIngestJobFinalStatus(stoppedReason),
           processed: 0,
           inserted: 0,
           updated: 0,
@@ -837,7 +849,7 @@ export async function ingestDevWixArticles(
     const currentJobId = jobId;
     if (currentJobId) {
       await finishKnowledgeJob(currentJobId, {
-        status: 'done',
+        status: resolveIngestJobFinalStatus(result.stoppedReason),
         processed: fetched,
         inserted: stored,
         updated: chunksUpserted,

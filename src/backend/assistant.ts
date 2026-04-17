@@ -36,7 +36,6 @@ export type AssistantRunOptions = {
 };
 
 export type ConversationStateRef = {
-  conversationId?: string;
   previousResponseId?: string;
 };
 
@@ -58,8 +57,7 @@ export type AssistantResult = {
   }>;
   reasoningDecision: ReasoningDecision;
   state: {
-    conversationId: string | null;
-    latestResponseId: string | null;
+    previousResponseId: string | null;
   };
   error?: {
     publicCode: 'assistant_run_failed';

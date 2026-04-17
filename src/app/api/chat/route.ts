@@ -12,8 +12,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-const ALLOWED_ROLES = new Set<ChatRole>(['user', 'assistant', 'system', 'developer']);
-const MAX_MESSAGES_PER_REQUEST = 40;
+const ALLOWED_ROLES = new Set<ChatRole>(['user']);
 const MAX_MESSAGE_CHARS = 20000;
 
 function isChatRole(value: string): value is ChatRole {
@@ -53,48 +52,32 @@ function normalizeMessageContent(content: unknown): string | null {
 
 function normalizeMessages(input: unknown): ChatMessage[] | null {
   if (!Array.isArray(input)) return null;
-  if (input.length === 0 || input.length > MAX_MESSAGES_PER_REQUEST) return null;
+  if (input.length !== 1) return null;
 
-  const messages: ChatMessage[] = [];
+  const [item] = input;
+  if (!isPlainObject(item)) return null;
 
-  for (const item of input) {
-    if (!isPlainObject(item)) return null;
+  const role = typeof item.role === 'string' ? item.role.trim() : '';
+  if (!isChatRole(role)) return null;
 
-    const role = typeof item.role === 'string' ? item.role.trim() : '';
-    if (!isChatRole(role)) return null;
+  const content = normalizeMessageContent(item.content);
+  if (!content) return null;
+  if (content.length > MAX_MESSAGE_CHARS) return null;
 
-    const content = normalizeMessageContent(item.content);
-    if (!content) return null;
-    if (content.length > MAX_MESSAGE_CHARS) return null;
-
-    messages.push({ role, content });
-  }
-
-  const hasUserMessage = messages.some((message) => message.role === 'user');
-  if (!hasUserMessage) return null;
-
-  return messages;
+  return [{ role, content }];
 }
 
 function normalizeState(input: unknown): ChatRequestBody['state'] {
   if (!isPlainObject(input)) return undefined;
-
-  const conversationId =
-    typeof input.conversationId === 'string' && input.conversationId.trim()
-      ? input.conversationId.trim()
-      : undefined;
 
   const previousResponseId =
     typeof input.previousResponseId === 'string' && input.previousResponseId.trim()
       ? input.previousResponseId.trim()
       : undefined;
 
-  if (!conversationId && !previousResponseId) return undefined;
+  if (!previousResponseId) return undefined;
 
-  return {
-    ...(conversationId ? { conversationId } : {}),
-    ...(previousResponseId ? { previousResponseId } : {}),
-  };
+  return { previousResponseId };
 }
 
 function normalizeRequestBody(body: unknown): ChatRequestBody | null {
@@ -269,8 +252,7 @@ export async function POST(req: Request) {
       durationMs: Date.now() - startedAt,
       ok: !result.error,
       responseId: result.response?.id ?? null,
-      conversationId: result.state.conversationId,
-      latestResponseId: result.state.latestResponseId,
+      previousResponseId: result.state.previousResponseId,
       toolCalls: result.toolCalls.length,
       debugMode,
       stopReason: readInternalStopReason(result.error),
@@ -302,8 +284,7 @@ export async function POST(req: Request) {
         routing: plan.routing,
         deliveredReasoningEffort: result.reasoningDecision.sentReasoningEffort,
         state: {
-          conversationId: result.state.conversationId,
-          previousResponseId: result.state.latestResponseId,
+          previousResponseId: result.state.previousResponseId,
         },
       }),
     );

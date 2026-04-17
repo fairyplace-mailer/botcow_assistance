@@ -21,14 +21,12 @@ function makeResponse(params: {
   output: any[];
   model?: string;
   output_text?: string;
-  conversationId?: string;
 }) {
   return {
     id: params.id,
     model: params.model ?? 'gpt-5.4-mini',
     output: params.output,
     output_text: params.output_text,
-    conversation: params.conversationId ? { id: params.conversationId } : undefined,
     usage: {
       input_tokens: 10,
       output_tokens: 5,
@@ -65,7 +63,6 @@ describe('assistant stabilization', () => {
         create: jest.fn().mockResolvedValue(
           makeResponse({
             id: 'resp-success',
-            conversationId: 'conv-success',
             output: [
               {
                 type: 'message',
@@ -88,8 +85,7 @@ describe('assistant stabilization', () => {
 
     expect(result.error).toBeUndefined();
     expect(result.state).toEqual({
-      conversationId: 'conv-success',
-      latestResponseId: 'resp-success',
+      previousResponseId: 'resp-success',
     });
 
     const events = getRecentRunEvents();
@@ -139,11 +135,10 @@ describe('assistant stabilization', () => {
     expect(warnEvent?.payload.stopReason).toBe('invalid_tool_args_json');
   });
 
-  it('uses conversation mode as priority and never mixes previous_response_id in same request', async () => {
+  it('uses previous_response_id on the first request when state is provided', async () => {
     const create = jest.fn().mockResolvedValue(
       makeResponse({
         id: 'resp-conversation',
-        conversationId: 'conv-1',
         output: [
           {
             type: 'message',
@@ -163,13 +158,13 @@ describe('assistant stabilization', () => {
       instructions: 'sys',
       messages: [{ role: 'user', content: 'hello' }],
       routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
-      state: { conversationId: 'conv-1', previousResponseId: 'resp-old' },
+      state: { previousResponseId: 'resp-old' },
     });
 
     expect(result.error).toBeUndefined();
     expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0][0].conversation).toEqual({ id: 'conv-1' });
-    expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
+    expect(create.mock.calls[0][0].conversation).toBeUndefined();
+    expect(create.mock.calls[0][0].previous_response_id).toBe('resp-old');
   });
 
   it('passes previous_response_id only on follow-up loop request when no conversation state exists', async () => {

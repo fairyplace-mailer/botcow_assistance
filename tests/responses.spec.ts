@@ -1,7 +1,6 @@
 import {
   buildStrictFunctionTools,
   createModelResponse,
-  extractConversationId,
   extractFinalAssistantMessage,
   extractFunctionCalls,
   normalizePublicChatError,
@@ -133,28 +132,6 @@ describe('responses helpers', () => {
     });
   });
 
-  test('createModelResponse sends conversation state only when conversation mode selected', async () => {
-    const create = jest.fn().mockResolvedValue({ id: 'resp' });
-    const client = { responses: { create } } as any;
-
-    await createModelResponse({
-      client,
-      model: 'gpt-5.4',
-      instructions: 'DEV_INSTR',
-      state: { kind: 'conversation', conversation: { id: 'conv-1' } },
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }] as any,
-      tools: [],
-    });
-
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        instructions: 'DEV_INSTR',
-        conversation: { id: 'conv-1' },
-        parallel_tool_calls: false,
-      }),
-    );
-    expect(create.mock.calls[0][0].previous_response_id).toBeUndefined();
-  });
 
   test('createModelResponse sends previous_response_id only when previous_response mode selected', async () => {
     const create = jest.fn().mockResolvedValue({ id: 'resp' });
@@ -241,12 +218,6 @@ describe('responses helpers', () => {
     ]);
   });
 
-  test('extractConversationId prefers response conversation and falls back otherwise', () => {
-    expect(
-      extractConversationId({ conversation: { id: 'conv_1' } } as any, 'fallback'),
-    ).toBe('conv_1');
-    expect(extractConversationId({} as any, 'fallback')).toBe('fallback');
-  });
 
   test('normalizePublicChatSuccess maps canonical response payload', () => {
     expect(
@@ -263,7 +234,6 @@ describe('responses helpers', () => {
           reasoning: { effort: 'high' },
         } as any,
         state: {
-          conversationId: 'conv_1',
           previousResponseId: 'resp_1',
         },
       }),
@@ -278,7 +248,6 @@ describe('responses helpers', () => {
         reason: 'deep-code-debug-review',
         reasoningEffort: 'high',
         state: {
-          conversationId: 'conv_1',
           previousResponseId: 'resp_1',
         },
       },

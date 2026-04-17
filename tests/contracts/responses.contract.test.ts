@@ -21,7 +21,6 @@ describe('responses contract', () => {
       },
       deliveredReasoningEffort: null,
       state: {
-        conversationId: null,
         previousResponseId: 'resp_2',
       },
     });

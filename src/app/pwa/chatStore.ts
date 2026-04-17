@@ -70,15 +70,11 @@ function normalizeState(value: unknown): ChatStateRef {
     return {};
   }
 
-  const conversationId = typeof (value as { conversationId?: unknown }).conversationId === 'string'
-    ? (value as { conversationId: string }).conversationId
-    : undefined;
   const previousResponseId = typeof (value as { previousResponseId?: unknown }).previousResponseId === 'string'
     ? (value as { previousResponseId: string }).previousResponseId
     : undefined;
 
   return {
-    ...(conversationId ? { conversationId } : {}),
     ...(previousResponseId ? { previousResponseId } : {}),
   };
 }

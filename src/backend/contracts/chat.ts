@@ -1,4 +1,4 @@
-export type ChatRole = 'system' | 'developer' | 'user' | 'assistant';
+export type ChatRole = 'user';
 
 export type ChatMessageContentPart = {
   text?: string;
@@ -23,7 +23,6 @@ export type ChatRoutingHints = {
 };
 
 export type ChatStateRef = {
-  conversationId?: string;
   previousResponseId?: string;
 };
 
@@ -43,7 +42,6 @@ export type NormalizedChatResponse = {
   reason: string;
   reasoningEffort: string | null;
   state: {
-    conversationId: string | null;
     previousResponseId: string | null;
   };
 };

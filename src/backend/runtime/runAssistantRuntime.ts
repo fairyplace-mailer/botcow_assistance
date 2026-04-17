@@ -123,9 +123,21 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
   });
   const toolPolicyMode = executionProfile.readOnlyTools ? 'repo_audit' : 'default';
 
-  const effectiveInstructions = await buildContextAugmentedInstructions({
+  const contextAugmentation = await buildContextAugmentedInstructions({
     instructions: executionProfile.instructions,
     messages: requestMessages,
+  });
+  const effectiveInstructions = contextAugmentation.instructions;
+
+  await logInfo('assistant_context_retrieval_status', {
+    traceId,
+    userTurnId,
+    assistantMode: executionProfile.mode,
+    retrievalStatus: contextAugmentation.retrieval.status,
+    retrievalSource: contextAugmentation.retrieval.source,
+    retrievalQuery: contextAugmentation.retrieval.query,
+    finalStatus: 'in_progress',
+    duration: Date.now() - startedAt,
   });
 
   let pendingInput = normalizeMessagesToInput(requestMessages);

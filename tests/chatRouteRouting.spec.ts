@@ -82,7 +82,6 @@ describe('chat route routing contract', () => {
       },
       body: JSON.stringify({
         messages: [{ role: 'user', content: 'analyze stack trace' }],
-        hints: { toolHeavy: true },
         state: { previousResponseId: 'resp_prev' },
       }),
     });
@@ -93,7 +92,6 @@ describe('chat route routing contract', () => {
     expect(res.status).toBe(200);
     expect(planAssistantTurn).toHaveBeenCalledWith({
       messages: [{ role: 'user', content: 'analyze stack trace' }],
-      hints: { toolHeavy: true },
     });
     expect(runAssistant).toHaveBeenCalledWith({
       instructions: 'CORE_INSTRUCTIONS',
@@ -346,6 +344,33 @@ describe('chat route routing contract', () => {
         message: 'Не удалось завершить действие автоматически. [debug: Error]',
       },
     });
+  });
+
+  test('rejects client-supplied routing hints', async () => {
+    const res = await POST(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: 'hello' }],
+          hints: { toolHeavy: true },
+        }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body).toEqual({
+      ok: false,
+      sessionId: expect.any(String),
+      response: null,
+      error: {
+        code: 'invalid_messages',
+        message: 'Invalid messages.',
+      },
+    });
+    expect(planAssistantTurn).not.toHaveBeenCalled();
+    expect(runAssistant).not.toHaveBeenCalled();
   });
 
   test('rejects empty messages array', async () => {

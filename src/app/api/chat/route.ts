@@ -82,14 +82,16 @@ function normalizeState(input: unknown): ChatRequestBody['state'] {
 
 function normalizeRequestBody(body: unknown): ChatRequestBody | null {
   if (!isPlainObject(body)) return null;
+  if (body.hints !== undefined) return null;
 
   const messages = normalizeMessages(body.messages);
   if (!messages) return null;
 
+  const state = normalizeState(body.state);
+
   return {
     messages,
-    hints: isPlainObject(body.hints) ? body.hints : {},
-    ...(normalizeState(body.state) ? { state: normalizeState(body.state) } : {}),
+    ...(state ? { state } : {}),
   };
 }
 
@@ -234,7 +236,6 @@ export async function POST(req: Request) {
     const messages = body.messages;
     const plan = planAssistantTurn({
       messages,
-      hints: body.hints ?? {},
     });
 
     const result = await runAssistant({

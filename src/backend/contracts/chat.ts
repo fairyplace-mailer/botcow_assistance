@@ -29,7 +29,6 @@ export type ChatStateRef = {
 export type ChatRequestBody = {
   messages: ChatMessage[];
   state?: ChatStateRef;
-  hints?: ChatRoutingHints;
 };
 
 export type PublicResponsePhase = 'final_answer' | 'commentary' | 'unknown';

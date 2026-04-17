@@ -121,6 +121,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
     baseInstructions: params.instructions,
     detectionText: `${params.instructions}\n${allMessagesText(requestMessages)}`,
   });
+  const toolPolicyMode = executionProfile.readOnlyTools ? 'repo_audit' : 'default';
 
   const effectiveInstructions = await buildContextAugmentedInstructions({
     instructions: executionProfile.instructions,
@@ -137,7 +138,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
 
   const openai = getOpenAIClient();
   const tools = buildStrictFunctionTools(
-    filterToolsForMode(params.tools ?? getToolsSchemas(executionProfile.mode) ?? [], executionProfile.mode),
+    filterToolsForMode(params.tools ?? getToolsSchemas(toolPolicyMode) ?? [], toolPolicyMode),
   );
   const toolContract = validateResponsesToolsContract(tools);
   const invalidToolContract = toolContract.ok
@@ -538,7 +539,7 @@ export async function runAssistantRuntime(params: RunAssistantTurnParams): Promi
         name: call.name,
         normalizedArgs,
         timeoutMs: executionProfile.toolTimeoutMs,
-        execute: (name, args) => handleToolCall(name, args, executionProfile.mode),
+        execute: (name, args) => handleToolCall(name, args, toolPolicyMode),
       });
       const toolLatencyMs = result.toolLatencyMs;
 

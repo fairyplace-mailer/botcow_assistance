@@ -429,4 +429,141 @@ describe('runAssistant stabilization', () => {
     expect(warnEvent?.payload.schemaValid).toBe(false);
     expect(warnEvent?.payload.stopReason).toBe('invalid_tool_args_schema');
   });
+
+  it('repo audit exposes only read-only tools to the model', async () => {
+    mockedGetToolsSchemas.mockReturnValue([
+      {
+        type: 'function',
+        name: 'github_get_file',
+        description: 'read file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      },
+      {
+        type: 'function',
+        name: 'github_commit_file',
+        description: 'write file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            content: { type: 'string' },
+          },
+          required: ['path', 'content'],
+          additionalProperties: false,
+        },
+      },
+    ] as any);
+
+    const create = jest.fn().mockResolvedValue(
+      makeResponse({
+        id: 'resp-audit-readonly',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+      }),
+    );
+
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: { create },
+    } as any);
+
+    const result = await runAssistant({
+      instructions: 'Treat docs/strong_spec.md as the primary project spec.',
+      messages: [
+        {
+          role: 'user',
+          content: 'Make a full audit against docs/strong_spec.md. Check strict mode and do not change anything.',
+        },
+      ],
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
+
+    expect(result.error).toBeUndefined();
+
+    const sentTools = create.mock.calls[0][0].tools ?? [];
+    const sentToolNames = sentTools
+      .map((tool: any) => tool?.name ?? tool?.function?.name)
+      .filter(Boolean);
+
+    expect(sentToolNames).toEqual(['github_get_file']);
+  });
+
+  it('repo audit blocks forced mutating tool calls before execution', async () => {
+    mockedGetToolsSchemas.mockReturnValue([
+      {
+        type: 'function',
+        name: 'github_get_file',
+        description: 'read file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      },
+      {
+        type: 'function',
+        name: 'github_commit_file',
+        description: 'write file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            content: { type: 'string' },
+          },
+          required: ['path', 'content'],
+          additionalProperties: false,
+        },
+      },
+    ] as any);
+
+    const create = jest.fn().mockResolvedValue(
+      makeResponse({
+        id: 'resp-audit-write-attempt',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call-1',
+            name: 'github_commit_file',
+            arguments: JSON.stringify({ path: 'README.md', content: 'x' }),
+          },
+        ],
+      }),
+    );
+
+    mockedGetOpenAIClient.mockReturnValue({
+      responses: { create },
+    } as any);
+
+    const result = await runAssistant({
+      instructions: 'Treat docs/strong_spec.md as the primary project spec.',
+      messages: [
+        {
+          role: 'user',
+          content: 'Make a full audit against docs/strong_spec.md. Check strict mode and do not change anything.',
+        },
+      ],
+      routing: { model: 'gpt-5.4-mini', reasoning: { effort: 'low' }, reason: 'test' },
+      state: {},
+    });
+
+    expect(result.error?.internalCode).toBe('unknown_tool');
+    expect(mockedHandleToolCall).not.toHaveBeenCalled();
+  });
+
 });

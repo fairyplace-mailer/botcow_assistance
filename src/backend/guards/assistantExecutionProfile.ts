@@ -2,6 +2,7 @@ import { looksLikeRepoAuditRequest } from './repoAuditIntent';
 
 export type AssistantExecutionProfile = {
   mode: 'default' | 'repo_audit';
+  readOnlyTools: boolean;
   instructions: string;
   maxToolLoops: number;
   maxTotalToolCalls: number;
@@ -26,6 +27,7 @@ export function buildExecutionProfile(params: {
   if (!looksLikeRepoAuditRequest(params.detectionText)) {
     return {
       mode: 'default',
+      readOnlyTools: false,
       instructions: params.baseInstructions,
       maxToolLoops: DEFAULT_MAX_TOOL_LOOPS,
       maxTotalToolCalls: DEFAULT_MAX_TOTAL_TOOL_CALLS,
@@ -56,6 +58,7 @@ Repository audit mode:
 
   return {
     mode: 'repo_audit',
+    readOnlyTools: true,
     instructions: `${params.baseInstructions}\n\n${auditSuffix}`,
     maxToolLoops: AUDIT_MAX_TOOL_LOOPS,
     maxTotalToolCalls: AUDIT_MAX_TOTAL_TOOL_CALLS,

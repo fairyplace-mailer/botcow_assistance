@@ -1,3 +1,5 @@
+import type { ChatRoutingHints } from '../orchestrator/routingHints';
+
 export type ChatRole = 'user';
 
 export type ChatMessageContentPart = {
@@ -20,6 +22,7 @@ export type ChatStateRef = {
 export type ChatRequestBody = {
   messages: ChatMessage[];
   state?: ChatStateRef;
+  hints?: ChatRoutingHints;
 };
 
 export type PublicResponsePhase = 'final_answer' | 'commentary' | 'unknown';

@@ -1,7 +1,7 @@
 import { planAssistantTurn } from '../src/backend/orchestrator/planAssistantTurn';
 
 describe('routing hints boundary', () => {
-  test('internal routing hints still influence planning after removal from public chat contract', () => {
+  test('routing hints influence planning when passed into the orchestrator contract', () => {
     const plan = planAssistantTurn({
       messages: [{ role: 'user', content: 'Audit the repo against docs/strong_spec.md.' }],
       hints: {

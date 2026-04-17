@@ -1,7 +1,7 @@
 import { prisma } from './db';
 
 export type KnowledgeJobFinishInput = {
-  status: 'done' | 'failed';
+  status: 'done' | 'paused' | 'failed';
   processed?: number;
   inserted?: number;
   updated?: number;

@@ -30,7 +30,8 @@ type Chunk = {
 };
 
 const embedText = jest.fn();
-const createKnowledgeJob = jest.fn();
+const createOrReuseKnowledgeJob = jest.fn();
+const markKnowledgeJobRunning = jest.fn();
 const finishKnowledgeJob = jest.fn();
 const logInfo = jest.fn();
 const logWarn = jest.fn();
@@ -64,7 +65,8 @@ jest.mock('../src/backend/openai', () => ({
 }));
 
 jest.mock('../src/backend/knowledgeJobs', () => ({
-  createKnowledgeJob: (...args: any[]) => createKnowledgeJob(...args),
+  createOrReuseKnowledgeJob: (...args: any[]) => createOrReuseKnowledgeJob(...args),
+  markKnowledgeJobRunning: (...args: any[]) => markKnowledgeJobRunning(...args),
   finishKnowledgeJob: (...args: any[]) => finishKnowledgeJob(...args),
 }));
 
@@ -122,7 +124,11 @@ describe('ingestDevWixArticles knowledge contract', () => {
 
     logInfo.mockResolvedValue(undefined);
     logWarn.mockResolvedValue(undefined);
-    createKnowledgeJob.mockResolvedValue({ id: 'job-1' });
+    createOrReuseKnowledgeJob.mockResolvedValue({
+      job: { id: 'job-1', jobStatus: 'queued', cursor: 'https://dev.wix.com/docs/sdk' },
+      reused: false,
+    });
+    markKnowledgeJobRunning.mockResolvedValue({ id: 'job-1', jobStatus: 'running' });
     finishKnowledgeJob.mockResolvedValue({ id: 'job-1' });
 
     embedText.mockResolvedValue({ vector: [0.1, 0.2], dims: 2, model: 'text-embedding-3-small' });
@@ -416,6 +422,34 @@ describe('ingestDevWixArticles knowledge contract', () => {
     expect(result.budgetHit).toBe(true);
     expect(global.fetch).not.toHaveBeenCalled();
     expect(embedText).not.toHaveBeenCalled();
+    expect(markKnowledgeJobRunning).toHaveBeenCalledWith('job-1');
+    expect(finishKnowledgeJob).toHaveBeenLastCalledWith(
+      'job-1',
+      expect.objectContaining({
+        status: 'paused',
+        cursor: 'https://dev.wix.com/docs/sdk',
+      }),
+    );
+  });
+
+  test('embed budget exhaustion pauses ingest job instead of marking it done', async () => {
+    const { ingestDevWixArticles } = await import('../src/backend/devWixDocs/ingest');
+    const result = await ingestDevWixArticles({
+      startUrl: 'https://dev.wix.com/docs/sdk',
+      limitPages: 1,
+      force: true,
+      maxEmbeddings: 0,
+    });
+
+    expect(result.stoppedReason).toBe('embed_budget_exhausted');
+    expect(result.budgetHit).toBe(true);
+    expect(finishKnowledgeJob).toHaveBeenLastCalledWith(
+      'job-1',
+      expect.objectContaining({
+        status: 'paused',
+        cursor: 'https://dev.wix.com/docs/sdk',
+      }),
+    );
   });
 
   test('logs required ingest fields for processed document', async () => {
